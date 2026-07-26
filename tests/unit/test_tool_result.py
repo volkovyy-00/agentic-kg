@@ -20,19 +20,19 @@ from agentic_kg.common.tool_result import (
 def test_tool_success():
     """Test that tool_success creates a proper success result."""
     # Test with various data types
-    result_str = tool_success("hello")
+    result_str = tool_success("result", "hello")
     assert result_str["status"] == "success"
     assert result_str["result"] == "hello"
     
-    result_int = tool_success(42)
+    result_int = tool_success("result", 42)
     assert result_int["status"] == "success"
     assert result_int["result"] == 42
     
-    result_dict = tool_success({"key": "value"})
+    result_dict = tool_success("result", {"key": "value"})
     assert result_dict["status"] == "success"
     assert result_dict["result"] == {"key": "value"}
     
-    result_none = tool_success(None)
+    result_none = tool_success("result", None)
     assert result_none["status"] == "success"
     assert result_none["result"] is None
     
@@ -66,7 +66,7 @@ def test_tool_error():
 
 def test_is_success():
     """Test that is_success correctly identifies success results."""
-    success_result = tool_success("data")
+    success_result = tool_success("result", "data")
     error_result = tool_error("error")
     
     assert is_success(success_result) is True
@@ -84,7 +84,7 @@ def test_is_success():
 
 def test_is_error():
     """Test that is_error correctly identifies error results."""
-    success_result = tool_success("data")
+    success_result = tool_success("result", "data")
     error_result = tool_error("error")
     
     assert is_error(success_result) is False
@@ -103,7 +103,7 @@ def test_is_error():
 def test_map_result():
     """Test that map_result applies function to success results only."""
     # Test with success result
-    success_result = tool_success(10)
+    success_result = tool_success("result", 10)
     mapped_success = map_result(success_result, lambda x: x * 2)
     
     assert is_success(mapped_success)
@@ -118,7 +118,7 @@ def test_map_result():
     assert mapped_error is error_result  # Should be the same object
     
     # Test with more complex transformation
-    success_list = tool_success([1, 2, 3])
+    success_list = tool_success("result", [1, 2, 3])
     mapped_list = map_result(success_list, lambda x: [i * 2 for i in x])
     
     assert is_success(mapped_list)
@@ -137,7 +137,7 @@ def test_map_error():
     assert mapped_error["error_message"] == "Wrapped: original error"
     
     # Test with success result (should pass through unchanged)
-    success_result = tool_success("data")
+    success_result = tool_success("result", "data")
     mapped_success = map_error(success_result, lambda msg: f"Wrapped: {msg}")
     
     assert is_success(mapped_success)
@@ -157,7 +157,7 @@ def test_map_error():
 def test_get_or_else():
     """Test that get_or_else returns result on success, default on error."""
     # Test with success result
-    success_result = tool_success("success_value")
+    success_result = tool_success("result", "success_value")
     value = get_or_else(success_result, "default_value")
     assert value == "success_value"
     
@@ -181,18 +181,18 @@ def test_get_or_else():
 def test_get_or_raise():
     """Test that get_or_raise returns result on success, raises on error."""
     # Test with success result
-    success_result = tool_success("success_value")
+    success_result = tool_success("result", "success_value")
     value = get_or_raise(success_result)
     assert value == "success_value"
     
     # Test with success result containing None
-    success_none = tool_success(None)
+    success_none = tool_success("result", None)
     value_none = get_or_raise(success_none)
     assert value_none is None
     
     # Test with success result containing complex data
     complex_data = {"nested": {"value": 42}}
-    success_complex = tool_success(complex_data)
+    success_complex = tool_success("result", complex_data)
     value_complex = get_or_raise(success_complex)
     assert value_complex == complex_data
     
@@ -218,7 +218,7 @@ def test_get_or_raise():
 def test_chaining_operations():
     """Test chaining multiple operations together."""
     # Success chain
-    result = tool_success(5)
+    result = tool_success("result", 5)
     result = map_result(result, lambda x: x * 2)  # 10
     result = map_result(result, lambda x: x + 3)  # 13
     final_value = get_or_else(result, 0)
@@ -246,7 +246,7 @@ def test_chaining_operations():
 
 def test_type_guards():
     """Test that type guards work correctly for type checking."""
-    success_result = tool_success("test")
+    success_result = tool_success("result", "test")
     error_result = tool_error("test error")
     
     # Test that type guards narrow types correctly
@@ -266,22 +266,22 @@ def test_type_guards():
 def test_edge_cases():
     """Test various edge cases and boundary conditions."""
     # Test with empty string success
-    empty_success = tool_success("")
+    empty_success = tool_success("result", "")
     assert is_success(empty_success)
     assert empty_success["result"] == ""
     
     # Test with zero
-    zero_success = tool_success(0)
+    zero_success = tool_success("result", 0)
     assert is_success(zero_success)
     assert zero_success["result"] == 0
     
     # Test with False
-    false_success = tool_success(False)
+    false_success = tool_success("result", False)
     assert is_success(false_success)
     assert false_success["result"] is False
     
     # Test map_result with function that returns None
-    none_mapped = map_result(tool_success("input"), lambda x: None)
+    none_mapped = map_result(tool_success("result", "input"), lambda x: None)
     assert is_success(none_mapped)
     assert none_mapped["result"] is None
     
