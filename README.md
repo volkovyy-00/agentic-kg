@@ -78,6 +78,16 @@ uv run pytest -q
 uv run pytest -q -m integration
 ```
 
+- **If you use [colima](https://github.com/abiosoft/colima) instead of Docker Desktop**, the Python `docker` SDK doesn't
+  respect the active `docker context` and Testcontainers' cleanup ("Reaper") container can't bind-mount colima's socket.
+  Export these first:
+
+  ```
+  export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
+  export TESTCONTAINERS_RYUK_DISABLED=true
+  uv run pytest -q -m integration
+  ```
+
 ## Differences from the deeplearning course
 
 - many agents use a special `finished` tool to signal that they're done

@@ -70,13 +70,14 @@ def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
     Returns:
         dict: A dictionary containing metadata about the content.
                 Includes a 'status' key ('success' or 'error').
-                If 'success', includes a 'node_construction_removed' key with the label of the removed node construction
+                If 'success', includes a 'node_construction_removed' key with either the label of the
+                    removed node construction, or a message indicating no removal was needed
                 If 'error', includes an 'error_message' key.
                 The 'error_message' may have instructions about how to handle the error.
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if node_label not in construction_plan:
-       return tool_success("node construction rule not found. removal not needed.")
+        return tool_success("node_construction_removed", "node construction rule not found. removal not needed.")
 
     del construction_plan[node_label]
 

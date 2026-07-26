@@ -48,7 +48,8 @@ def test_neo4j_for_adk_roundtrip_with_testcontainers():
         try:
             auth = neo4j.get_auth()  # (username, password)
         except AttributeError:
-            auth = ("neo4j", os.getenv("NEO4J_PASSWORD", None))
+            # Default fallback; matches Neo4jContainer's own default password
+            auth = ("neo4j", os.getenv("NEO4J_PASSWORD", "password"))
 
         dsn = _compose_dsn(bolt_url, auth, database="neo4j")
         cfg = Neo4jConfig(dsn=dsn)
@@ -58,7 +59,7 @@ def test_neo4j_for_adk_roundtrip_with_testcontainers():
             # Simple read query to validate roundtrip and ADK result envelope
             result = client.send_query("RETURN 1 AS ok")
             assert result["status"] == "success"
-            rows = result["result"]
+            rows = result["records"]
             assert isinstance(rows, list)
             assert len(rows) == 1
             assert rows[0] == {"ok": 1}

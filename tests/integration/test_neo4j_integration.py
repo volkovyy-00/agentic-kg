@@ -36,8 +36,8 @@ def test_neo4j_container_and_driver_roundtrip():
         try:
             auth = neo4j.get_auth()  # (username, password)
         except AttributeError:
-            # Default fallback; many images use neo4j/<password>
-            auth = ("neo4j", os.getenv("NEO4J_PASSWORD", None))
+            # Default fallback; matches Neo4jContainer's own default password
+            auth = ("neo4j", os.getenv("NEO4J_PASSWORD", "password"))
 
         # Use the official Neo4j Python driver to validate connectivity
         from neo4j import GraphDatabase
