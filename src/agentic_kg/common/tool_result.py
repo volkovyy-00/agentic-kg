@@ -50,10 +50,24 @@ def is_error(result: ToolResult) -> TypeGuard[ResultError]:
     return result["status"] == "error"
 
 
+def _payload_key(result: ResultSuccess) -> str:
+    """Return the key holding the payload of a success result.
+
+    Prefers "result" when present; otherwise requires exactly one
+    non-"status" key, since that's the only key tool_success() sets.
+    """
+    if "result" in result:
+        return "result"
+    keys = [k for k in result if k != "status"]
+    if len(keys) != 1:
+        raise ValueError(f"Ambiguous or missing payload key in success result: {result!r}")
+    return keys[0]
+
+
 def map_result(result: ToolResult, f: Callable[[Any], Any]) -> ToolResult:
     if not is_success(result):
         return result
-    key = next(k for k in result if k != "status")
+    key = _payload_key(result)
     return tool_success(key, f(result[key]))
 
 
@@ -62,11 +76,11 @@ def map_error(result: ToolResult, f: Callable[[str], Any]) -> ToolResult:
 
 
 def get_or_else(result: ToolResult, default: Any) -> Any:
-    return result["result"] if is_success(result) else default
+    return result[_payload_key(result)] if is_success(result) else default
 
 
 def get_or_raise(result: ToolResult) -> Any:
     if is_success(result):
-        return result["result"]
+        return result[_payload_key(result)]
     elif is_error(result):
         raise Exception(result["error_message"])
