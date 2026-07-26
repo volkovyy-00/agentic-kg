@@ -51,7 +51,10 @@ def is_error(result: ToolResult) -> TypeGuard[ResultError]:
 
 
 def map_result(result: ToolResult, f: Callable[[Any], Any]) -> ToolResult:
-    return tool_success("result", f(result["result"])) if is_success(result) else result
+    if not is_success(result):
+        return result
+    key = next(k for k in result if k != "status")
+    return tool_success(key, f(result[key]))
 
 
 def map_error(result: ToolResult, f: Callable[[str], Any]) -> ToolResult:
