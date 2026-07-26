@@ -76,7 +76,7 @@ def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if node_label not in construction_plan:
-       return tool_success("node construction rule not found. removal not needed.")
+       return tool_success("node_construction_removed", "node construction rule not found. removal not needed.")
 
     del construction_plan[node_label]
 
