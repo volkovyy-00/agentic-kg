@@ -1,5 +1,5 @@
 
-from typing import Any, Callable, Literal, TypedDict, Union, TypeGuard
+from typing import Any, Callable, Literal, Mapping, TypedDict, Union, TypeGuard
 
 
 class ResultSuccess(TypedDict):
@@ -50,7 +50,7 @@ def is_error(result: ToolResult) -> TypeGuard[ResultError]:
     return result["status"] == "error"
 
 
-def _payload_key(result: ResultSuccess) -> str:
+def _payload_key(result: Mapping[str, Any]) -> str:
     """Return the key holding the payload of a success result.
 
     Prefers "result" when present; otherwise requires exactly one
