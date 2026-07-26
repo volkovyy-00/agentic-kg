@@ -120,10 +120,18 @@ def test_map_result():
     # Test with more complex transformation
     success_list = tool_success("result", [1, 2, 3])
     mapped_list = map_result(success_list, lambda x: [i * 2 for i in x])
-    
+
     assert is_success(mapped_list)
     assert mapped_list["result"] == [2, 4, 6]
-    
+
+    # Test with a non-"result" payload key (e.g. Neo4jForADK's "records")
+    success_records = tool_success("records", [{"a": 1}])
+    mapped_records = map_result(success_records, lambda x: x + [{"a": 2}])
+
+    assert is_success(mapped_records)
+    assert "records" in mapped_records
+    assert mapped_records["records"] == [{"a": 1}, {"a": 2}]
+
     print("✓ map_result correctly applies function to success results only")
 
 
@@ -174,7 +182,12 @@ def test_get_or_else():
     complex_default = {"fallback": True, "data": [1, 2, 3]}
     value_complex = get_or_else(error_result, complex_default)
     assert value_complex == complex_default
-    
+
+    # Test with a non-"result" payload key (e.g. Neo4jForADK's "records")
+    success_records = tool_success("records", [{"a": 1}])
+    value_records = get_or_else(success_records, "default_value")
+    assert value_records == [{"a": 1}]
+
     print("✓ get_or_else returns correct values for success and error cases")
 
 
@@ -195,7 +208,12 @@ def test_get_or_raise():
     success_complex = tool_success("result", complex_data)
     value_complex = get_or_raise(success_complex)
     assert value_complex == complex_data
-    
+
+    # Test with a non-"result" payload key (e.g. Neo4jForADK's "records")
+    success_records = tool_success("records", [{"a": 1}])
+    value_records = get_or_raise(success_records)
+    assert value_records == [{"a": 1}]
+
     # Test with error result (should raise)
     error_result = tool_error("something failed")
     try:
@@ -259,7 +277,13 @@ def test_type_guards():
         # In a real type checker, error_result would be typed as ResultError here
         assert "error_message" in error_result
         assert error_result["error_message"] == "test error"
-    
+
+    # Non-"result" payload key (e.g. Neo4jForADK's "records") should also narrow as success
+    records_result = tool_success("records", ["row"])
+    if is_success(records_result):
+        assert "records" in records_result
+        assert records_result["records"] == ["row"]
+
     print("✓ Type guards work correctly for type narrowing")
 
 
