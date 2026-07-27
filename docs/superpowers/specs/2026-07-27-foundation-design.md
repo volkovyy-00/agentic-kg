@@ -430,7 +430,8 @@ Two further constraints confirmed during this spec's verification, recorded here
 directly on sub-project 2's design and would be expensive to discover during implementation:
 
 - **`LongRunningFunctionTool` treats any falsy return as "no response."** The framework check is
-  `if not function_response` (`functions.py:287`), so `{}`, `""` and `0` all suppress the function
+  `if not function_response` (`functions.py:290`, and again at `:427` for the async path — the
+  contract is uniform, not branch-specific), so `{}`, `""` and `0` all suppress the function
   response event exactly as `None` does. The per-document progress payload must therefore always be
   a non-empty dict; returning an empty one on a no-op document would silently produce no progress
   at all.
