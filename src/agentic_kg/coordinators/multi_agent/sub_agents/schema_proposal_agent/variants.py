@@ -37,6 +37,24 @@ variants = {
             replace it using the 'remove_node_construction' or 'remove_relationship_construction' tool
             before proposing a corrected one — never layer a new construction on top of a stale one.
 
+            Revising an existing plan is an edit, not a fresh start:
+            - Always begin by calling 'get_proposed_construction_plan'. If it is not empty, that plan is
+              the starting point and every entry in it has already been reviewed — much of it by a human
+              who asked for it to look exactly that way.
+            - Change only what the request or feedback actually asks about. Do not re-derive the whole
+              schema from the approved files and re-propose entries that already exist: calling
+              'propose_node_construction' or 'propose_relationship_construction' for an existing label or
+              type silently overwrites that entry, so re-proposing an unrelated construction from scratch
+              destroys earlier corrections without any error being reported.
+            - Before calling a propose tool, check whether that label or type is already in the plan. If it
+              is, and the current request does not concern it, leave it alone. If it is and the request
+              does concern it, restate every field you intend to keep — a propose call replaces the whole
+              entry, it does not merge.
+            - If you change a node's 'unique_column_name', you must also update every relationship in the
+              plan that joins to that label, so its join column matches the new identifier. A plan whose
+              relationship joins on a column the referenced node does not carry will be rejected at
+              approval time and builds zero relationships.
+
             Every file in the approved files list will become either a node or a relationship.
             Determining whether a file likely represents a node or a relationship is based
             on a hint from the filename (is it a single thing or two things) and the
@@ -118,7 +136,10 @@ variants = {
             - get the current construction plan using the 'get_proposed_construction_plan' tool
 
             Think carefully, using tools to perform actions and reconsidering your actions when a tool returns an error:
-            1. For each approved file, consider whether it represents a node or relationship. Check the content for potential unique identifiers using the 'sample_file' tool.
+            1. For each approved file that does not yet have a construction in the plan, consider whether
+               it represents a node or relationship. Check the content for potential unique identifiers
+               using the 'sample_file' tool. Skip files whose constructions already exist and are not the
+               subject of the current request.
             2. For each identifier, verify that it is unique by using the 'search_file' tool.
             3. Use the node vs relationship guidance for deciding whether the file represents a node or a relationship.
             4. For a node file, propose a node construction using the 'propose_node_construction' tool. 
