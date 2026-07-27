@@ -75,3 +75,75 @@ def test_unset_source_uri_surfaces_as_tool_error(monkeypatch):
     result = file_tools.list_import_files(FakeToolContext())
     assert result["status"] == "error"
     assert "SOURCE_URI" in result["error_message"]
+
+
+@pytest.fixture
+def join_source(memory_source):
+    """Two extra CSVs: parts reference groups, only some of which exist."""
+    fs = memory_source
+    with fs.open("/src/groups.csv", "w") as handle:
+        handle.write("group_name,row_id\nAlpha,1\nAlpha,2\nBeta,3\n")
+    with fs.open("/src/parts.csv", "w") as handle:
+        handle.write("part_id,group_name\np1,Alpha\np2,Beta\np3,Gamma\n")
+    return fs
+
+
+def test_column_stats_reports_a_unique_identifier(join_source):
+    result = file_tools.column_stats("parts.csv", "part_id", FakeToolContext())
+    assert result["status"] == "success"
+    stats = result["column_stats"]
+    assert stats["row_count"] == 3
+    assert stats["distinct_count"] == 3
+    assert stats["is_unique"] is True
+
+
+def test_column_stats_reports_duplicates(join_source):
+    result = file_tools.column_stats("groups.csv", "group_name", FakeToolContext())
+    stats = result["column_stats"]
+    assert stats["row_count"] == 3
+    assert stats["distinct_count"] == 2
+    assert stats["is_unique"] is False
+
+
+def test_column_stats_missing_file_returns_error(memory_source):
+    result = file_tools.column_stats("nope.csv", "id", FakeToolContext())
+    assert result["status"] == "error"
+
+
+def test_column_stats_missing_column_returns_error(join_source):
+    result = file_tools.column_stats("parts.csv", "not_a_column", FakeToolContext())
+    assert result["status"] == "error"
+    assert "not_a_column" in result["error_message"]
+
+
+def test_join_preview_full_coverage(join_source):
+    result = file_tools.join_preview(
+        "groups.csv", "group_name", "parts.csv", "group_name", FakeToolContext())
+    assert result["status"] == "success"
+    preview = result["join_preview"]
+    assert preview["file_a_total"] == 2
+    assert preview["file_a_matched"] == 2
+    assert preview["file_a_match_fraction"] == 1.0
+
+
+def test_join_preview_partial_coverage(join_source):
+    """parts.csv references a group that groups.csv does not contain."""
+    result = file_tools.join_preview(
+        "parts.csv", "group_name", "groups.csv", "group_name", FakeToolContext())
+    preview = result["join_preview"]
+    assert preview["file_a_total"] == 3
+    assert preview["file_a_matched"] == 2
+    assert preview["file_a_match_fraction"] < 1.0
+    assert preview["file_b_match_fraction"] == 1.0
+
+
+def test_join_preview_missing_file_returns_error(join_source):
+    result = file_tools.join_preview(
+        "parts.csv", "group_name", "nope.csv", "group_name", FakeToolContext())
+    assert result["status"] == "error"
+
+
+def test_join_preview_missing_column_returns_error(join_source):
+    result = file_tools.join_preview(
+        "parts.csv", "nope", "groups.csv", "group_name", FakeToolContext())
+    assert result["status"] == "error"

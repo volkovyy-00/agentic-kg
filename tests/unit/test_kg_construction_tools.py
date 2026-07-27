@@ -200,3 +200,51 @@ def test_construct_domain_graph_reports_successes_alongside_failures(monkeypatch
     assert "Product (10 rows)" in result["error_message"]
     assert "KNOWS (5 rows)" in result["error_message"]
     assert "boom" in result["error_message"]
+
+
+REL_RULE = {
+    "source_file": "knows.csv",
+    "relationship_type": "KNOWS",
+    "from_node_label": "Person",
+    "from_node_column": "id",
+    "to_node_label": "Person",
+    "to_node_column": "name",
+    "properties": [],
+}
+
+
+def test_import_relationships_warns_when_no_relationships_created(monkeypatch, one_batch):
+    """A join that matches nothing raises no Cypher error -- it must not look
+    like a clean success."""
+    db = FakeGraphDb(responses=[{"status": "success", "records": [{"relationships_created": 0}]}])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["status"] == "success"
+    assert result["rows_loaded"]["relationships_created"] == 0
+    assert "warning" in result["rows_loaded"]
+    assert "knows.csv" in result["rows_loaded"]["warning"]
+
+
+def test_import_relationships_has_no_warning_when_every_row_matches(monkeypatch, one_batch):
+    db = FakeGraphDb(responses=[{"status": "success", "records": [{"relationships_created": 1}]}])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["relationships_created"] == 1
+    assert "warning" not in result["rows_loaded"]
+
+
+def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
+    monkeypatch.setattr(kg, "import_nodes", lambda rule: {
+        "status": "success", "rows_loaded": {"source_file": "people.csv", "rows": 3}})
+    monkeypatch.setattr(kg, "import_relationships", lambda rule: {
+        "status": "success",
+        "rows_loaded": {"source_file": "knows.csv", "rows": 88,
+                        "relationships_created": 0, "warning": "read 88 rows but created only 0"},
+    })
+    plan = {
+        "Person": {"construction_type": "node", "label": "Person"},
+        "KNOWS": {"construction_type": "relationship", "relationship_type": "KNOWS"},
+    }
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "success"
+    assert result["warnings"] == ["read 88 rows but created only 0"]

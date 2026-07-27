@@ -11,7 +11,7 @@ from agentic_kg.tools.user_goal_tools import (
     get_approved_user_goal
  )
 from agentic_kg.tools.file_tools import (
-    get_approved_files, sample_file, search_file,
+    get_approved_files, sample_file, search_file, column_stats, join_preview,
  )
 from agentic_kg.tools.construction_plan_tools import (
     propose_node_construction, propose_relationship_construction,
@@ -30,7 +30,11 @@ variants = {
             Consider feedback if it is available: 
             <feedback>
             {feedback}
-            </feedback> 
+            </feedback>
+
+            When feedback refers to an existing construction, identify that construction and remove or
+            replace it using the 'remove_node_construction' or 'remove_relationship_construction' tool
+            before proposing a corrected one — never layer a new construction on top of a stale one.
 
             Every file in the approved files list will become either a node or a relationship.
             Determining whether a file likely represents a node or a relationship is based
@@ -73,6 +77,19 @@ variants = {
             - References may be hierarchical container relationships, with terminology revealing parent-child, "has", "contains", membership, or similar relationship
             - References may be peer relationships, that is often a self-reference to a similar class of nodes. For example, "knows" or "see also"
 
+            Join keys for relationships (this is where plausible-looking schemas silently fail):
+            - A relationship's 'from_column' and 'to_column' must each be either the corresponding
+              node's declared unique identifier, or a property guaranteed to have exactly one distinct
+              value across every source row that collapses into that node instance.
+            - Why: node loading MERGEs on the unique identifier and then overwrites all other properties
+              from each row, so whichever row loads last wins. A column that varies across the rows
+              collapsing into one node survives with a single arbitrary value. Joining on such a column
+              matches only the rows that happened to survive — producing few or zero relationships, with
+              no error and no warning at construction time.
+            - Never use a collapsed per-row column as a join key. Do not even retain such per-row columns
+              as node properties: put per-row data on the relationship, or drop it.
+            - Use the 'column_stats' tool to check whether a column is really one value per node instance.
+
             The resulting schema should be a connected graph, with no isolated components.
 
             Naming convention for relationship types:
@@ -97,11 +114,17 @@ variants = {
             5. If the node contains a reference relationship, use the 'propose_relationship_construction' tool to propose a relationship construction. 
             6. For a relationship file, propose a relationship construction using the 'propose_relationship_construction' tool
             7. If you need to remove a construction, use the 'remove_node_construction' or 'remove_relationship_construction' tool
-            8. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
+            8. Before finalizing any relationship construction, verify the join actually matches: use the
+               'join_preview' tool with the two source files and the two join columns. If coverage is not
+               near 100% on both sides, either fix the join key (a collapsed per-row column is the usual
+               cause) or, if the source data simply does not overlap, keep the relationship and report the
+               approximate coverage when presenting the plan, so the human can decide whether partial
+               connectivity is acceptable. Never present a low-coverage relationship without saying so.
+            9. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
         """,
         "tools": [
             get_approved_user_goal, get_approved_files, get_proposed_construction_plan,
-            sample_file, search_file,
+            sample_file, search_file, column_stats, join_preview,
             propose_node_construction, propose_relationship_construction, remove_node_construction, remove_relationship_construction,
         ]
     },
@@ -112,7 +135,7 @@ variants = {
             Criticize the proposed schema for relevance to the user goal and approved files.
 
             Criticize the proposed schema for relevance and correctness:
-            - Are unique identifiers actually unique? Use the 'search_file' tool to validate. Composite identifier are not acceptable.
+            - Are unique identifiers actually unique? Use the 'column_stats' or 'search_file' tool to validate. Composite identifiers are not acceptable.
             - Could any nodes be relationships instead? Double-check that unique identifiers are unique and not references to other nodes. Use the 'search_file' tool to validate
             - For each node, does it represent one real-world thing, or one row of a link between two things?
               Check whether any of the node's non-identifier properties (especially names) repeat across
@@ -120,7 +143,17 @@ variants = {
               a strong signal that the ID is a per-row/line-item key, not a true entity identifier — the file
               should instead produce nodes keyed by the repeating value, with the current per-row columns
               moved onto the connecting relationship.
-            - Can you manually trace through the source data to find the necessary information for anwering a hypothetical question?
+            - For every relationship construction, check both join columns. Each must be either the
+              declared unique identifier of the node it refers to, or a property with exactly one distinct
+              value per node instance. Reject with 'retry' if a join column is a per-row property that gets
+              collapsed when its rows are merged into a single node: node loading overwrites non-key
+              properties row by row, so only one arbitrary value survives and the join silently matches
+              almost nothing. Check this with the 'column_stats' and 'search_file' tools rather than
+              reasoning about it abstractly.
+            - For every relationship construction, use the 'join_preview' tool to estimate what fraction of
+              values on each side find a match. A join that is technically correct but connects only a
+              small fraction of the data is a real problem — flag it.
+            - Can you manually trace through the source data to find the necessary information for answering a hypothetical question?
             - Is every node in the schema connected? What relationships could be missing? Every node should connect to at least one other node.
             - Are hierarchical container relationships missing?
             - Are any relationships redundant? A relationship between two nodes is redundant if it is semantically equivalent to or the inverse of another relationship between those two nodes.
@@ -138,13 +171,20 @@ variants = {
             Think carefully, using tools to perform actions and reconsidering your actions when a tool returns an error:
             1. Analyze each construction rule in the proposed construction plan.
             2. Use tools to validate the construction rules for relevance and correctness.
-            3. If the schema looks good, respond with a one word reply: 'valid'.
-            4. If the schema has problems, respond with 'retry' and provide feedback as a concise bullet list of problems.
+            3. If the schema looks good, begin your reply with the single word 'valid'. If there are
+               data-quality observations that no schema change can fix but the user should know about
+               (for example a join whose source data only partially overlaps), follow that word with a
+               line 'Warnings:' and a concise bullet list of those observations. Otherwise reply with
+               'valid' and nothing else.
+            4. If the schema has problems that a different schema would fix, begin your reply with the
+               word 'retry' and provide feedback as a concise bullet list of problems.
+            Your reply must always begin with 'valid' or 'retry' — that first word decides whether the
+            refinement loop stops.
         """,
         "tools": [
             get_approved_user_goal, get_approved_files,
             get_proposed_construction_plan,
-            sample_file, search_file,
+            sample_file, search_file, column_stats, join_preview,
         ]
     }
 }

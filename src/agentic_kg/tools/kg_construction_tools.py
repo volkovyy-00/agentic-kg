@@ -122,9 +122,11 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
           (to_node:{to_label} {{ {to_column} : row[$to_node_column] }})
     MERGE (from_node)-[r:{relationship_type}]->(to_node)
     FOREACH (k IN $properties | SET r[k] = row[k])
+    RETURN count(r) AS relationships_created
     """
 
     rows_committed = 0
+    relationships_created = 0
     try:
         for _header, batch in read_csv_batches(source_file):
             result = graphdb.send_query(query, {
@@ -138,11 +140,34 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                     f"{source_file}: load failed after {rows_committed} rows committed "
                     f"(the failing batch was rolled back): {result['error_message']}"
                 )
+            for record in result.get("records") or []:
+                relationships_created += record.get("relationships_created", 0) or 0
             rows_committed += len(batch)
     except (SourceError, FileNotFoundError) as exc:
         return tool_error(f"{source_file}: {exc}")
 
-    return tool_success("rows_loaded", {"source_file": source_file, "rows": rows_committed})
+    loaded = {
+        "source_file": source_file,
+        "rows": rows_committed,
+        "relationships_created": relationships_created,
+    }
+
+    # A row whose join columns match nothing produces no relationship, and the
+    # MERGE reports no error for it. Half the rows failing to match is already
+    # a design smell worth a human look; zero matches is almost certainly a
+    # wrong join key, so both are surfaced rather than silently succeeding.
+    if rows_committed and relationships_created < rows_committed / 2:
+        warning = (
+            f"{source_file}: read {rows_committed} rows but created only "
+            f"{relationships_created} relationships ({from_label}.{from_column} -> "
+            f"{to_label}.{to_column}) — check whether the join columns actually match. "
+            "A join column that is a per-row property collapsed during node loading "
+            "will match few or no rows."
+        )
+        loaded["warning"] = warning
+        logger.warning(warning)
+
+    return tool_success("rows_loaded", loaded)
 
 
 def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
@@ -187,6 +212,17 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
         if result["status"] == "error":
             failures.append(f"{key}: {result['error_message']}")
 
+    # Warnings (e.g. a relationship join that matched almost nothing) are not
+    # failures, but the agent has no reason to dig into per-rule payloads on a
+    # successful build, so they are lifted to the top level.
+    warnings = [
+        result["rows_loaded"]["warning"]
+        for result in outcomes.values()
+        if result.get("status") == "success"
+        and isinstance(result.get("rows_loaded"), dict)
+        and result["rows_loaded"].get("warning")
+    ]
+
     if failures:
         # Fold in what did load: on partial failure the caller (an LLM agent)
         # needs to know which rules already committed, both to report
@@ -199,10 +235,15 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
         message_parts = []
         if successes:
             message_parts.append("loaded: " + ", ".join(successes))
+        if warnings:
+            message_parts.append("warnings: " + "; ".join(warnings))
         message_parts.append("failed: " + "; ".join(failures))
         return tool_error("; ".join(message_parts))
 
-    return tool_success("domain_graph_constructed", outcomes)
+    success = tool_success("domain_graph_constructed", outcomes)
+    if warnings:
+        success["warnings"] = warnings
+    return success
 
 
 def build_graph_from_construction_rules(tool_context: ToolContext) -> Dict[str, Any]:

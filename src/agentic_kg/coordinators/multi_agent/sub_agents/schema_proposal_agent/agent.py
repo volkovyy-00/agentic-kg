@@ -50,7 +50,10 @@ schema_critic_agent = LlmAgent(
 class CheckStatusAndEscalate(BaseAgent):
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         feedback = ctx.session.state.get("feedback", "valid")
-        should_stop = (feedback == "valid")
+        # Only the leading word decides the route: the critic may append a
+        # "Warnings:" section to a 'valid' verdict for data-quality issues that
+        # no schema change can fix, and that must not restart the loop.
+        should_stop = str(feedback).strip().lower().startswith("valid")
         yield Event(author=self.name, actions=EventActions(escalate=should_stop))
 
 refinement_loop = LoopAgent(

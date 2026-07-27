@@ -6,6 +6,7 @@ from itertools import islice
 from google.adk.tools import ToolContext
 from typing import Dict, Any, List
 
+from agentic_kg.common.csv_reader import read_csv_batches
 from agentic_kg.common.tool_result import tool_success, tool_error
 from agentic_kg.common.file_source import (
     SourceError,
@@ -193,6 +194,131 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
         "matching_rows": matching_rows
     }
     return tool_success("search_results", result_data)
+
+def _collect_column_values(file_path: str, column: str):
+    """Read every value of one column from a source CSV.
+
+    Returns:
+        (values, error) where values is the list of raw string values (missing
+        cells omitted, matching read_csv_batches' behaviour) and error is a
+        tool_error dict when the file or column cannot be read.
+    """
+    try:
+        if not source_exists(file_path):
+            return None, tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return None, tool_error(str(exc))
+
+    values: List[str] = []
+    header: List[str] = []
+    saw_header = False
+    try:
+        for batch_header, rows in read_csv_batches(file_path):
+            if not saw_header:
+                header = batch_header
+                saw_header = True
+                if column not in header:
+                    return None, tool_error(
+                        f"Column '{column}' is not in {file_path}. Available columns: {header}"
+                    )
+            for row in rows:
+                values.append(row.get(column, ""))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    if not saw_header:
+        return None, tool_error(f"CSV file has no header row: {file_path}")
+
+    return values, None
+
+
+def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict:
+    """Reports how unique the values of one CSV column are.
+
+    Use this to decide whether a column can serve as a node's unique
+    identifier, and to detect per-row columns that would be collapsed (and
+    silently overwritten) when rows are merged into a single node.
+
+    Empty values are counted as rows but are not treated as usable identifier
+    values: 'is_unique' is only true when every row has a non-empty value and
+    all of those values are distinct.
+
+    Args:
+      file_path: Path to the CSV file, relative to the source location.
+      column: The column to analyze.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'column_stats'
+              key with 'path', 'column', 'row_count', 'distinct_count',
+              'empty_count' and 'is_unique'.
+    """
+    values, error = _collect_column_values(file_path, column)
+    if error is not None:
+        return error
+
+    empty_count = sum(1 for value in values if value is None or str(value).strip() == "")
+    non_empty = [value for value in values if value is not None and str(value).strip() != ""]
+    distinct_count = len(set(non_empty))
+
+    return tool_success("column_stats", {
+        "path": file_path,
+        "column": column,
+        "row_count": len(values),
+        "distinct_count": distinct_count,
+        "empty_count": empty_count,
+        "is_unique": empty_count == 0 and distinct_count == len(values),
+    })
+
+
+def join_preview(file_a: str, column_a: str, file_b: str, column_b: str,
+                 tool_context: ToolContext) -> dict:
+    """Estimates how well a join between two CSV columns would match.
+
+    Compares the distinct values of file_a's column against those of file_b's
+    column, so a relationship construction can be checked for coverage before
+    it is proposed. Empty values are ignored on both sides.
+
+    Args:
+      file_a: Path to the first CSV file, relative to the source location.
+      column_a: Column in file_a to join on.
+      file_b: Path to the second CSV file, relative to the source location.
+      column_b: Column in file_b to join on.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'join_preview'
+              key with, for each side, the number of distinct values, how many
+              of them have a match on the other side, and the matched fraction
+              (0.0 when a side has no usable values).
+    """
+    values_a, error = _collect_column_values(file_a, column_a)
+    if error is not None:
+        return error
+    values_b, error = _collect_column_values(file_b, column_b)
+    if error is not None:
+        return error
+
+    distinct_a = {str(v) for v in values_a if v is not None and str(v).strip() != ""}
+    distinct_b = {str(v) for v in values_b if v is not None and str(v).strip() != ""}
+    overlap = distinct_a & distinct_b
+
+    def fraction(matched: int, total: int) -> float:
+        return round(matched / total, 4) if total else 0.0
+
+    return tool_success("join_preview", {
+        "file_a": file_a,
+        "column_a": column_a,
+        "file_b": file_b,
+        "column_b": column_b,
+        "file_a_total": len(distinct_a),
+        "file_a_matched": len(overlap),
+        "file_a_match_fraction": fraction(len(overlap), len(distinct_a)),
+        "file_b_total": len(distinct_b),
+        "file_b_matched": len(overlap),
+        "file_b_match_fraction": fraction(len(overlap), len(distinct_b)),
+    })
+
 
 SEARCH_RESULTS = "search_results"
 
