@@ -230,6 +230,13 @@ LiteLLM requires is derived, not configured. Verified: LiteLLM's
 `get_llm_provider("openrouter/openai/gpt-4o")` returns `('openai/gpt-4o', 'openrouter')`, and it
 reads `OPENROUTER_API_KEY` from the environment.
 
+**The derived string must be wrapped in a `LiteLlm` instance, never passed to an agent as a bare
+model string.** ADK deliberately does not register `LiteLlm` in its `LLMRegistry` — only `Gemini`
+is registered — so `LLMRegistry.resolve("openrouter/openai/gpt-4o")` raises
+`ValueError: Model … not found`. `llm_catalog` already returns a `LiteLlm` instance and must
+continue to; the failure mode if someone "simplifies" this later is a startup error, not a silent
+fallback, but it is worth knowing why the wrapper exists.
+
 `llm_catalog.get_llm(kind)` has two independent bugs:
 
 - it hardcodes `MODEL_GPT_4O_MINI` (line 52) and ignores `settings.llm_model`, which appears only
@@ -418,6 +425,20 @@ Two things this spec's work hands forward, with caveats:
 Also relevant to sub-project 3: OpenRouter's rerank endpoint is Cohere-shaped, not OpenAI-shaped,
 so the `openai` client cannot call it. That does not affect the single-key decision — one bearer
 token covers chat, embeddings and rerank — but it does mean rerank needs a raw HTTP call.
+
+Two further constraints confirmed during this spec's verification, recorded here because they bear
+directly on sub-project 2's design and would be expensive to discover during implementation:
+
+- **`LongRunningFunctionTool` treats any falsy return as "no response."** The framework check is
+  `if not function_response` (`functions.py:287`), so `{}`, `""` and `0` all suppress the function
+  response event exactly as `None` does. The per-document progress payload must therefore always be
+  a non-empty dict; returning an empty one on a no-op document would silently produce no progress
+  at all.
+- **Aura ships APOC Core only.** `apoc.text.*` (44 functions) and `apoc.refactor.mergeNodes` — the
+  two families the entity-resolution design depends on — are confirmed present and pre-installed,
+  requiring no opt-in. But the extended library is absent, so nothing in `apoc.load.*` or
+  `apoc.periodic.*` is available. Any resolution or batching design that reaches for those needs a
+  different approach.
 
 ## Risks
 
