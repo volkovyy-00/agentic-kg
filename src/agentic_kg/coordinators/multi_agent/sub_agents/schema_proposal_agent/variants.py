@@ -75,6 +75,15 @@ variants = {
 
             The resulting schema should be a connected graph, with no isolated components.
 
+            Naming convention for relationship types:
+            - Name a relationship type after the connection it represents between the two node labels
+              it actually links — not after the source filename or a concept that has no node of its own.
+              If a candidate name refers to a label that doesn't exist anywhere else in the plan, that's a
+              sign the name (or the plan) is wrong — rename it to something that reads correctly as
+              "(FromLabel)-[:NAME]->(ToLabel)".
+            - Use SCREAMING_SNAKE_CASE for every relationship type, matching Cypher convention (e.g.
+              `SUPPLIES`, `PART_OF`, `HAS_COMPONENT`) — not PascalCase or camelCase.
+
             Prepare for the task:
             - get the user goal using the 'get_approved_user_goal' tool
             - get the list of approved files using the 'get_approved_files' tool
@@ -113,8 +122,12 @@ variants = {
               moved onto the connecting relationship.
             - Can you manually trace through the source data to find the necessary information for anwering a hypothetical question?
             - Is every node in the schema connected? What relationships could be missing? Every node should connect to at least one other node.
-            - Are hierarchical container relationships missing? 
+            - Are hierarchical container relationships missing?
             - Are any relationships redundant? A relationship between two nodes is redundant if it is semantically equivalent to or the inverse of another relationship between those two nodes.
+            - Does every relationship type's name make sense as "(FromLabel)-[:NAME]->(ToLabel)" using only
+              labels that exist in the plan? A name that references a concept with no corresponding node
+              (often borrowed from a source filename) is wrong even if the relationship itself is correct.
+              Is the type name SCREAMING_SNAKE_CASE, not PascalCase or camelCase?
 
             Prepare for the task:
             - get the user goal using the 'get_approved_user_goal' tool
