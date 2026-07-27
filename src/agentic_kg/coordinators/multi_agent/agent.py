@@ -1,7 +1,8 @@
 from google.adk.agents import LlmAgent
 
 from agentic_kg.common.llm_catalog import get_llm
-from agentic_kg.tools.cypher_tools import get_physical_schema, get_neo4j_import_dir, neo4j_is_ready
+from agentic_kg.tools.cypher_tools import get_physical_schema, neo4j_is_ready
+from agentic_kg.tools.file_tools import get_source_location
 
 from .sub_agents import user_intent_agent, file_suggestion_agent, schema_proposal_agent, graph_construction_agent, graphrag_agent
 
@@ -15,7 +16,7 @@ full_workflow_agent = LlmAgent(
 
         The user may want to check the setup befor proceeding. Use tools for:
         - checking that the Neo4j database is ready using the 'neo4j_is_ready' tool
-        - finding the import directory with the 'get_neo4j_import_dir' tool
+        - finding where source files are read from with the 'get_source_location' tool
         - checking whether the database is empty with 'get_physical_schema' tool
 
         Delegate to sub-agents to perform the work. Follow this sequence of agents:
@@ -34,7 +35,7 @@ full_workflow_agent = LlmAgent(
     ],
     tools=[
         get_physical_schema,
-        get_neo4j_import_dir, 
+        get_source_location,
         neo4j_is_ready
     ]
 )
