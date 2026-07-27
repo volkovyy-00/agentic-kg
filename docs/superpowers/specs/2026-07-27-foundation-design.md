@@ -519,3 +519,35 @@ Norrköping, and every `product_reviews/*.md` carries those plus ★ glyphs.)
 - **Stricter identifier validation was not hit.** The proposed `Supplies` relationship type and all
   column names are bare identifiers. A plan whose label or column contained a hyphen or leading digit
   would now return a `tool_error` where it previously reached the database.
+
+### Second run, 2026-07-27: through the browser UI, confirms the first
+
+The first run above used the HTTP API because the Chrome extension wasn't connecting yet. Once it
+was, the same acceptance was repeated through `adk web`'s actual browser UI, against the same Aura
+instance (cleared to 0 nodes and constraints dropped beforehand) — this is the closer approximation
+of how a real user drives the system, and it surfaced one defect the first run couldn't have: **the
+port-8080 server that was already running had been started before this session's final commits, so
+it was serving stale code** — its trace showed a call to `get_neo4j_import_dir`, a tool this branch
+deleted in Task 6. Confirmed via `grep` (zero matches in `src/`) and by the process's start time
+predating the branch's last commits. Killed and restarted from the current tree before proceeding;
+worth remembering whenever a long-lived dev server sits across a session boundary.
+
+On the restarted server, the full five-phase workflow ran again through the browser, this time
+proposing a richer schema — `Supplier`, `Component`, `Assembly` nodes with `SUPPLIES` and `PART_OF`
+relationships (`components.csv` and `assemblies.csv` used in addition to the pair from the first
+run) — which is expected variance from an LLM-proposed plan, not a regression. Resulting graph,
+verified independently of the agent:
+
+| | |
+|---|---|
+| Supplier nodes | 20 |
+| Component nodes | 88 |
+| Assembly nodes | 64 |
+| `SUPPLIES` relationships | 176 |
+| `PART_OF` relationships | 88 |
+| Constraints | all three, one per node label |
+
+Asking "which components have only a single supplier?" this time produced the *correct* answer (zero
+single-source components), verified independently with a direct Cypher count — the first run's
+backwards-relationship query was LLM variance, not a systematic defect, as its own write-up
+concluded.
