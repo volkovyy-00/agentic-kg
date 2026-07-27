@@ -8,6 +8,40 @@ Companion project to the deeplearning.ai short course "Agentic Knowledge Graph C
 system, built on Google ADK (Agent Development Kit) with LiteLLM, that interviews a user, picks source files, proposes
 a graph schema, and builds a knowledge graph in Neo4j. It is a reference/teaching implementation, not production code.
 
+## Current work: unstructured ingestion (3 sub-projects)
+
+Adding ingestion of unstructured documents (PDF/Markdown) alongside the existing CSV path, generic
+rather than hardcoded to the bundled furniture example. Split into three sub-projects, built in order.
+Each gets its own spec, plan and implementation cycle.
+
+| | Scope | Status |
+|---|---|---|
+| **1. Foundation** | File sources via `fsspec`, driver-side CSV loading, OpenRouter + per-job models, `finished()` fix | spec + plan written, **not implemented** |
+| **2. Unstructured ingestion** | Entity/fact-type agents, chunking, PDF+Markdown loaders, extraction executor, resumability, scoped resolution | design settled, **spec not written** |
+| **3. Linking** | `CORRESPONDS_TO` correlation to reference tables; cross-tier retrieval | design settled, **spec not written** |
+
+- Spec: `docs/superpowers/specs/2026-07-27-foundation-design.md`
+- Plan: `docs/superpowers/plans/2026-07-27-foundation.md` (12 TDD tasks — self-contained, assumes no prior context)
+- Branch: `foundation-file-sources-and-models`
+
+**All design decisions for sub-projects 2 and 3 are already settled** — chunking strategy, resumability,
+identity model, approval posture, model configuration, definition of done. They are recorded in sub-project 1's
+spec under *Scope*, *Follow-on work* and *Risks*. Read those sections when writing spec 2; do not re-derive them.
+
+Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Asset_Manager_Holdings.csv`.
+**Those files are not in this repo and must be sourced.** The bundled furniture example must keep working throughout.
+
+### This file goes stale when Foundation lands
+
+Foundation deliberately invalidates several statements below. Whoever implements it must also update:
+
+- the `data/bom` → Neo4j import-directory setup step (it disappears; `SOURCE_URI` replaces it)
+- `get_neo4j_import_dir` in *Neo4j access* (deleted)
+- *LLM selection* — the "first call's model choice wins" singleton is a bug Foundation fixes, not a design
+- `OPENAI_API_KEY` in *Commands* (becomes `OPENROUTER_API_KEY`)
+- the *variants* advice to "add the import rather than assuming the whole file is broken" — true in general, but
+  `agents/file_suggestion_agent/` is unreachable, references eight undefined names, and Foundation deletes it
+
 ## Commands
 
 ```bash
