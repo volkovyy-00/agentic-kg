@@ -8,7 +8,10 @@ from agentic_kg.tools.cypher_tools import (
     get_physical_schema, 
     read_neo4j_cypher,
 )
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 variants = {
 

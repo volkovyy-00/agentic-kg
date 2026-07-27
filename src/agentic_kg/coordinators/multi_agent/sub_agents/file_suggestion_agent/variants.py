@@ -12,7 +12,10 @@ from agentic_kg.tools.file_tools import (
     set_suggested_files, approve_suggested_files, get_suggested_files
 )
 
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 variants = {    
     "file_suggestion_agent_v1":

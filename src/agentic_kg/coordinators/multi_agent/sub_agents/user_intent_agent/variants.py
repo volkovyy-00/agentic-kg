@@ -9,7 +9,10 @@ from agentic_kg.tools.user_goal_tools import (
     set_user_goal, get_user_goal, 
     set_perceived_user_goal, approve_perceived_user_goal
 )
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 
 variants = {

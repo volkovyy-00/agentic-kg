@@ -1,5 +1,6 @@
 from google.adk.agents import LlmAgent
 
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.llm_catalog import get_llm, LlmKind
 from agentic_kg.tools.cypher_tools import get_physical_schema, neo4j_is_ready
 from agentic_kg.tools.file_tools import get_source_location
@@ -8,7 +9,7 @@ from .sub_agents import user_intent_agent, file_suggestion_agent, schema_proposa
 
 
 full_workflow_agent = LlmAgent(
-    name="kg_construction_agent_v1",
+    name=MULTI_AGENT_COORDINATOR,
     description="""Knowledge graph construction using Neo4j.""",
     model=get_llm(LlmKind.conversational),
     instruction="""You are an expert in knowledge graph construction using Neo4j.

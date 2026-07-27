@@ -17,7 +17,10 @@ from agentic_kg.tools.cypher_tools import (
 )
 from agentic_kg.tools.file_tools import get_approved_files
 from agentic_kg.tools.kg_construction_tools import build_graph_from_construction_rules
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 variants = {
     "graph_construction_agent_v1": {

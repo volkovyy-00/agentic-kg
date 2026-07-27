@@ -19,8 +19,6 @@ from agentic_kg.tools.construction_plan_tools import (
     get_proposed_construction_plan,
 )
 
-from agentic_kg.tools.adk_tools import finished
-
 variants = {
     "schema_proposal_agent_v1":
     {

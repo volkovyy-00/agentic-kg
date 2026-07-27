@@ -12,7 +12,10 @@ from agentic_kg.tools.construction_plan_tools import (
     get_proposed_construction_plan, 
     approve_proposed_construction_plan,
 )
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 from .variants import variants
 

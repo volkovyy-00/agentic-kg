@@ -13,7 +13,10 @@ from agentic_kg.tools.cypher_tools import (
     create_uniqueness_constraint,
     merge_node_into_graph
 )
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import SINGLE_AGENT_COORDINATOR
+
+finished = make_finished(SINGLE_AGENT_COORDINATOR)
 
 variants = {
 
