@@ -8,7 +8,7 @@ Features:
 - a multi-agent system for constructing knowledge graphs
 - meant as a reference implementation for learning and experimentation, not a production tool
 - built on top of [Google ADK](https://github.com/google/agent-driver-kit)
-- interacts with a local Neo4j database
+- interacts with a Neo4j database, local or hosted on Neo4j Aura
 - rich with opportunities for improvement :)
 
 ## Setup
@@ -30,7 +30,8 @@ uv sync
 
 - Copy `.env.example` to `.env` and adjust as needed
 - `OPENROUTER_API_KEY=sk-or-...` (required — one key covers every model)
-- `NEO4J_DSN=bolt://neo4j:secret@localhost:7687/neo4j`
+- `NEO4J_DSN=bolt://neo4j:secret@localhost:7687/neo4j` for a local instance, or
+  `NEO4J_DSN=neo4j+s://user:password@xxxxxxxx.databases.neo4j.io` for Neo4j Aura
 - `SOURCE_URI=./data/bom`
 
 ### 3) Point the system at your source files
@@ -108,7 +109,6 @@ uv run pytest -q -m integration
 - [ ] evals! evals! evals!
 - [ ] add multiple GraphRAG tools
 - [ ] add handling of field types
-- [ ] improve `llm_catalog` model selection
 - [ ] add hypothetical questions to user goal, which should be used to validate the constructed graph and guide GraphRAG retrievers
 
 

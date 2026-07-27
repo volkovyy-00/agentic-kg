@@ -16,7 +16,7 @@ Each gets its own spec, plan and implementation cycle.
 
 | | Scope | Status |
 |---|---|---|
-| **1. Foundation** | File sources via `fsspec`, driver-side CSV loading, OpenRouter + per-job models, `finished()` fix | spec + plan written, **not implemented** |
+| **1. Foundation** | File sources via `fsspec`, driver-side CSV loading, OpenRouter + per-job models, `finished()` fix | **implemented** |
 | **2. Unstructured ingestion** | Entity/fact-type agents, chunking, PDF+Markdown loaders, extraction executor, resumability, scoped resolution | design settled, **spec not written** |
 | **3. Linking** | `CORRESPONDS_TO` correlation to reference tables; cross-tier retrieval | design settled, **spec not written** |
 
@@ -37,24 +37,13 @@ Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Ass
 
 **Write specs 2 and 3 against the post-Foundation codebase**, not against descriptions written before it landed.
 
-### This file goes stale when Foundation lands
-
-Foundation deliberately invalidates several statements below. Whoever implements it must also update:
-
-- the `data/bom` → Neo4j import-directory setup step (it disappears; `SOURCE_URI` replaces it)
-- `get_neo4j_import_dir` in *Neo4j access* (deleted)
-- *LLM selection* — the "first call's model choice wins" singleton is a bug Foundation fixes, not a design
-- `OPENAI_API_KEY` in *Commands* (becomes `OPENROUTER_API_KEY`)
-- the *variants* advice to "add the import rather than assuming the whole file is broken" — true in general, but
-  `agents/file_suggestion_agent/` is unreachable, references eight undefined names, and Foundation deletes it
-
 ## Commands
 
 ```bash
 # Setup
 uv venv
 uv sync
-cp .env.example .env      # then set OPENAI_API_KEY (or other provider key) and NEO4J_DSN
+cp .env.example .env      # then set OPENROUTER_API_KEY and NEO4J_DSN
 
 # Run the agent system (ADK dev web UI)
 uv run adk web src/agentic_kg/coordinators/     # http://localhost:8000, add --port 8001 if busy
@@ -74,8 +63,10 @@ uv run pytest -q -m integration
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - No linter/formatter is configured in this project.
-- The local Neo4j instance needs the CSVs under `data/bom/` copied into its `import` directory before graph
-  construction tools can read them (ask the running agent "Where is the import directory?").
+- Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
+  nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
+  has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with
+  `SOURCE_URI=./data/bom` (ask the running agent "Where are my files?" to confirm what it resolved to).
 
 ## Architecture
 
@@ -94,10 +85,11 @@ uv run pytest -q -m integration
   5. `graphrag_agent` — only usable once `get_physical_schema` shows the graph exists; answers questions over it
 
 Note there are **two separate implementations of similarly-named agents**: `src/agentic_kg/agents/` (standalone
-versions used by `single_agent`, e.g. `cypher_agent`, `file_suggestion_agent`, `user_intent_agent`) vs.
-`src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired into the full workflow, with richer
-instructions/tools). They are not interchangeable — check which coordinator you're editing before reusing code
-between them.
+versions, e.g. `cypher_agent` — the one actually wired into `single_agent` — plus `user_intent_agent`, which is not
+currently used by either coordinator) vs. `src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired
+into the full workflow, with richer instructions/tools). They are not interchangeable — check which coordinator
+you're editing before reusing code between them. `agents/file_suggestion_agent/` used to be a third standalone
+implementation here; Foundation deleted it (see the *variants* section below).
 
 ### The `variants` pattern
 
@@ -115,7 +107,10 @@ When adding a new capability to an agent, prefer adding a new numbered variant (
 one) over restructuring this dict shape — it mirrors the course's progressive-exercise structure. Some
 `variants.py` files reference tools/names that aren't imported into that file (leftover from course scaffolding) —
 if you hit a `NameError` there, check whether the referenced symbol exists elsewhere in `tools/` and add the import
-rather than assuming the whole file is broken.
+rather than assuming the whole file is broken. That advice does not apply to the standalone
+`agents/file_suggestion_agent/`: it was unreachable and referenced eight undefined names, and Foundation removed the
+directory outright rather than patching it — if you're looking for it, only the `multi_agent` implementation at
+`coordinators/multi_agent/sub_agents/file_suggestion_agent/` exists now.
 
 ### State passing: ADK session state, not return values
 
@@ -139,16 +134,23 @@ shapes for new tools.
 
 All Cypher execution goes through the `Neo4jForADK` singleton (`common/neo4j_for_adk.get_graphdb()`), which wraps
 the driver and returns `ToolResult`s via `result_to_adk`. Config comes from `Neo4jDsn`/`Neo4jConfig`
-(`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var. `tools/cypher_tools.py` builds on this for
-higher-level operations like `get_physical_schema`, `get_neo4j_import_dir`, `neo4j_is_ready`.
+(`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var (local `bolt://` and Aura `neo4j+s://` DSNs both
+work — see `.env.example` for the full list of allowed schemes). `tools/cypher_tools.py` builds on this for
+higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no
+Neo4j import directory to manage: `tools/kg_construction_tools.py` reads CSVs client-side (via `common/file_source.py`
+and `common/csv_reader.py`) and loads rows with parameterised `UNWIND` batches, since Aura forbids
+`LOAD CSV FROM "file:///"`. Labels and relationship types, which Cypher cannot parameterise, are validated with
+`common/cypher_identifiers.checked()` and then interpolated into the query text — never passed as Cypher `$()`
+dynamic labels, which cannot use a uniqueness index.
 
 ### LLM selection
 
-`common/llm_catalog.get_llm(kind: LlmKind)` returns a lazily-constructed, process-wide singleton `LiteLlm` instance
-(`LlmKind.reasoning` / `LlmKind.conversational`) — note the singleton means the *first* call's model choice wins for
-the whole process, regardless of `kind` passed later. Model constants (GPT-4o, Gemini, Claude, local
-Ollama/LM Studio endpoints) are defined at the top of that file; swapping models means editing the
-`LiteLlm(model=...)` construction there, not passing config through call sites.
+`common/llm_catalog.get_llm(kind: LlmKind)` returns a lazily-constructed `LiteLlm` instance, cached per `LlmKind`
+(`LlmKind.reasoning` / `LlmKind.conversational`) in a `dict`, so each kind gets its own instance instead of one call
+site's model choice winning for the whole process. Every model runs through OpenRouter: settings hold the model name
+in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.g. `"openai/gpt-4o"`), and
+`_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
+Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
 
 ### Domain models
 
