@@ -69,14 +69,22 @@ def reset_settings() -> None:
     _settings = None
 
 
-def validate_env():
-    """Validate expected environmental variables."""
+def validate_env() -> None:
+    """Validate configuration required for the system to function.
+
+    Raises:
+        ValueError: if the OpenRouter key is missing or still a placeholder.
+    """
     settings = get_settings()
 
-    # Validate OpenAI settings
-    valid_openai_api_key = (settings.openai_api_key and
-                           settings.openai_api_key != 'YOUR_OPENAI_API_KEY')
-    logger.info(f"OpenAI API Key set: {'Yes' if valid_openai_api_key else 'No (REPLACE PLACEHOLDER!)'}")
+    key = settings.openrouter_api_key
+    if not key or key.startswith("YOUR_"):
+        raise ValueError(
+            "OPENROUTER_API_KEY is not set (or is still the placeholder). "
+            "One OpenRouter key covers chat, extraction and embeddings."
+        )
 
-    if not valid_openai_api_key:
-        raise ValueError("OpenAI API Key not set or placeholder not replaced.")
+    if not settings.source_uri:
+        logger.warning(
+            "SOURCE_URI is not set. File tools will report an error until it is."
+        )

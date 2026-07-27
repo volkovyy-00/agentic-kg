@@ -1,4 +1,6 @@
-from agentic_kg.common.config import get_settings, reset_settings
+import pytest
+
+from agentic_kg.common.config import get_settings, reset_settings, validate_env
 
 
 def test_source_uri_defaults_to_none(monkeypatch):
@@ -29,3 +31,23 @@ def test_reset_settings_forces_reload(monkeypatch):
     monkeypatch.setenv("SOURCE_URI", "memory://second")
     reset_settings()
     assert get_settings().source_uri == "memory://second"
+
+
+def test_validate_env_requires_openrouter_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    reset_settings()
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        validate_env()
+
+
+def test_validate_env_rejects_placeholder(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "YOUR_OPENROUTER_API_KEY")
+    reset_settings()
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        validate_env()
+
+
+def test_validate_env_passes_with_a_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-realish")
+    reset_settings()
+    validate_env()
