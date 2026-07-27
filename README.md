@@ -29,15 +29,25 @@ uv sync
 ### 2) Set up environment variables
 
 - Copy `.env.example` to `.env` and adjust as needed
-- `OPENAI_API_KEY=sk-...` (optional)
+- `OPENROUTER_API_KEY=sk-or-...` (required — one key covers every model)
 - `NEO4J_DSN=bolt://neo4j:secret@localhost:7687/neo4j`
+- `SOURCE_URI=./data/bom`
 
-### 3) Make CSV files available for import
+### 3) Point the system at your source files
 
-The local Neo4j database must have access to files in the `import` directory. If you're unsure where that is,
-you can run the `multi_agent` and ask it "Where is the import directory?" Copy the sample files there.
+Set `SOURCE_URI` in `.env` to wherever your files live. The bundled example
+data works out of the box:
 
-There are some example data files under `data`.
+```
+SOURCE_URI=./data/bom
+```
+
+Files are read by the application, not by the database, so nothing needs to be
+copied into Neo4j's import directory — and this works against Neo4j Aura,
+which has no such directory.
+
+Relative paths resolve against the repository root. Absolute paths, `s3://`
+URLs (requires `s3fs`) and `https://` URLs also work.
 
 ## Run the agentic system
 
@@ -51,7 +61,7 @@ This will discover the available "coordinators" or top-level agents. There are t
 
 1. `single_agent` - uses a single sub-agent that can interace with Neo4j directly
 2. `multi_agent` - has a hiearchy of specialized sub-agents to collaborate with a user through multiple phases
-  - this coordinator can answer basic questions about the environment, like "Is Neo4j ready?" and "Where is the import directory?"
+  - this coordinator can answer basic questions about the environment, like "Is Neo4j ready?" and "Where are my files?"
   - `user_intent_agent` - ideates on the kind of graph and purpose of the graph
   - `file_suggestion_agent` - recommends files to use as input
   - `schema_proposal_agent` - proposes a construction plan for making a graph from the files which supports the user goal
