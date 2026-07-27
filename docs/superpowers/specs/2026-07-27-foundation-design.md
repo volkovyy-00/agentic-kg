@@ -452,3 +452,70 @@ directly on sub-project 2's design and would be expensive to discover during imp
   than necessary — worth revisiting, not worth pre-empting.
 - **Batching performance for very large spreadsheets.** Rows now cross the network instead of being
   read by the database. Irrelevant at reference-table scale; would matter at millions of rows.
+
+## Acceptance
+
+**Run on 2026-07-27 against Neo4j Aura instance `641447dc` and OpenRouter. Passed.**
+
+Models: `openai/gpt-4o-mini` (conversational), `openai/gpt-4o` (reasoning). `SOURCE_URI=./data/bom`.
+Database was empty (0 nodes) beforehand.
+
+Driven through a fresh `adk web src/agentic_kg/coordinators/` on port 8081, via the server's own HTTP
+API rather than the browser UI — the Chrome extension would not connect. Same server, same
+coordinator, same sub-agents and tools; only the front end differed.
+
+What ran, in order:
+
+1. "Is Neo4j ready? And where are my files being read from?" → `neo4j_is_ready` returned "Neo4j is
+   Ready!" against Aura, and `get_source_location` returned the resolved source root. This is the
+   tool that replaced `get_neo4j_import_dir`, whose `dbms.listConfig()` call Aura forbids.
+2. Stated a supply-chain goal → `user_intent_agent` set and approved it.
+3. `file_suggestion_agent` listed all 15 source files through `fsspec`, sampled four through
+   `open_source`, and suggested `part_supplier_mapping.csv` + `suppliers.csv`. Approved.
+4. `schema_proposal_agent` proposed Supplier/Part nodes and a `Supplies` relationship. Approved.
+5. `graph_construction_agent` created both uniqueness constraints, then
+   `build_graph_from_construction_rules` loaded driver-side: Supplier 20 rows, Part 176 rows,
+   Supplies 176 rows, all reported per-rule.
+
+Resulting graph, verified independently of the agent:
+
+| | |
+|---|---|
+| Supplier nodes | 20 |
+| Part nodes | 88 (from 176 rows — `MERGE` deduplicated correctly) |
+| `Supplies` relationships | 176 |
+| Suppliers with `name` set | 20 |
+| Relationships with `lead_time_days` set | 176 |
+| Constraints | `Supplier_supplier_id_constraint`, `Part_part_id_constraint` |
+
+These match the container integration test's expectations exactly.
+
+**Handoffs behaved correctly and the coordinator never stalled.** The clearest evidence came from a
+failure path: the coordinator routed to `file_suggestion_agent` before a goal existed, that agent's
+`get_approved_user_goal` returned a `tool_error`, it called `finished()`, and control returned to the
+coordinator, which then routed to `user_intent_agent`. Every phase afterwards handed back the same
+way. Note `schema_proposal_agent` runs a `schema_refinement_loop` — a `LoopAgent`, the one context
+where `finished()`'s `escalate` flag is not inert.
+
+**Non-ASCII data survives the round trip.** `suppliers.csv` contains "São Paulo"; it is stored in
+Aura intact, with no mojibake markers in any city value. This exercises the `encoding="utf-8"`
+default in `open_source` end to end, not just in unit tests. (The bundled data is more non-ASCII than
+it first appears: `products.csv` and `assemblies.csv` carry Malmö/Västerås/Örebro/Linköping/
+Norrköping, and every `product_reviews/*.md` carries those plus ★ glyphs.)
+
+### Observations, none blocking
+
+- **This Aura instance uses its instance ID as both username and database name**, not `neo4j` for
+  either. `.env.example` shows `/neo4j` as the database, which is right for a default AuraDB instance
+  but not universal — worth knowing before assuming a connection failure is a code fault.
+- **A malformed DSN scheme surfaces clearly.** A typo'd `bneo4j+s://` produced a precise pydantic
+  error naming the allowed schemes, which is exactly what the restored "Allowed schemes" comment in
+  `.env.example` is for.
+- **The agent wrote one query with the relationship reversed** — `(:Part)<-[:Supplies]-(:Supplier)`
+  where the graph has `(:Part)-[:Supplies]->(:Supplier)` — got zero rows, and reported "no
+  single-source risks". A wrong conclusion from a wrong query, not a construction defect: the same
+  data queried in the correct direction is present and correct. This is ordinary LLM behaviour and
+  the sort of thing the graphrag phase will need guardrails for.
+- **Stricter identifier validation was not hit.** The proposed `Supplies` relationship type and all
+  column names are bare identifiers. A plan whose label or column contained a hyphen or leading digit
+  would now return a `tool_error` where it previously reached the database.
