@@ -31,8 +31,8 @@
 |---|---|
 | `src/agentic_kg/common/file_source.py` | Resolve `SOURCE_URI` → `(fs, root)`; list, open, exists, and native-path lookup by relative name. The only place that knows where files live. |
 | `src/agentic_kg/common/csv_reader.py` | Turn a source-relative CSV into `(header, batch)` pairs. No database, no knowledge of graphs. |
-| `src/agentic_kg/coordinators/multi_agent/names.py` | Holds the coordinator's agent name as a constant, breaking the import cycle that forced `finished()` to use private API. |
-| `tests/unit/test_imports.py` | Imports every module in the package. |
+| `src/agentic_kg/common/agent_names.py` | Holds coordinator agent names as constants, breaking the import cycle that forced `finished()` to use private API. Lives in `common/` rather than under `coordinators/multi_agent/` because **both** coordinator trees need it — `agents/cypher_agent` reports to `single_agent`, not to the multi-agent coordinator. |
+| `tests/unit/test_imports.py` | Imports every module in the package, discovered from the filesystem. |
 | `tests/unit/test_file_source.py` | `file_source` against `memory://`. |
 | `tests/unit/test_csv_reader.py` | Batching with no database. |
 | `tests/integration/test_csv_loading_integration.py` | Loads `data/bom` into a container Neo4j and asserts counts. |
@@ -86,22 +86,50 @@ Create `tests/unit/test_imports.py`:
 """Every module in the package must import cleanly.
 
 This guards against the class of defect where a module is broken for months
-because nothing imports it. Both coordinators import fine today; the damage
-was in modules nothing exercised.
+because nothing imports it.
+
+Modules are discovered from the filesystem, NOT via pkgutil.walk_packages.
+`src/agentic_kg/coordinators/` has no __init__.py, so pkgutil treats it as a
+namespace directory and never descends into it — walk_packages sees 28 of the
+52 modules here and skips the entire coordinators tree, which is precisely the
+code `adk web` loads. A test that cannot see the deliverable is worse than no
+test, because it reports success.
 """
 import importlib
-import pkgutil
+from pathlib import Path
 
 import agentic_kg
+
+PACKAGE_ROOT = Path(agentic_kg.__file__).parent
+SRC_ROOT = PACKAGE_ROOT.parent
+
+
+def _module_names():
+    """Every importable module name under the package, from the filesystem."""
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        parts = list(path.relative_to(SRC_ROOT).with_suffix("").parts)
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        yield ".".join(parts)
+
+
+def test_module_discovery_covers_the_coordinators():
+    """Guard the guard: if discovery silently stops finding coordinators,
+    the import test above would pass while checking nothing that matters."""
+    names = list(_module_names())
+    assert any(name.startswith("agentic_kg.coordinators.") for name in names)
+    assert len(names) > 40, f"only discovered {len(names)} modules"
 
 
 def test_every_module_imports():
     failures = []
-    for module_info in pkgutil.walk_packages(agentic_kg.__path__, "agentic_kg."):
+    for name in _module_names():
         try:
-            importlib.import_module(module_info.name)
+            importlib.import_module(name)
         except Exception as exc:  # noqa: BLE001 - we want to report every failure
-            failures.append(f"{module_info.name}: {type(exc).__name__}: {exc}")
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
     assert not failures, "modules failed to import:\n" + "\n".join(failures)
 ```
 
@@ -109,9 +137,22 @@ def test_every_module_imports():
 
 Run: `uv run pytest tests/unit/test_imports.py -v`
 
-Expected: FAIL, listing seven modules with `ModuleNotFoundError: No module named '_tkinter'` (on a Python built without Tk) plus `NameError: name 'file_toolset' is not defined`.
+Expected: `test_module_discovery_covers_the_coordinators` PASSES (52 modules discovered); `test_every_module_imports` FAILS listing exactly **eight** modules:
 
-> If your Python *does* have Tk, the `tkinter` line imports fine and you will see only the `file_toolset` failures. Delete the import anyway — it is unused, and the project must not depend on a GUI toolkit being present.
+```
+agentic_kg.agent                                  ModuleNotFoundError: _tkinter
+agentic_kg.agents.file_suggestion_agent.agent     ModuleNotFoundError: _tkinter
+agentic_kg.agents.file_suggestion_agent.variants  ModuleNotFoundError: _tkinter
+agentic_kg.agents.user_intent_agent.agent         ModuleNotFoundError: _tkinter
+agentic_kg.agents.user_intent_agent.variants      ModuleNotFoundError: _tkinter
+agentic_kg.coordinators.single_agent.sub_agents   ModuleNotFoundError: ...sub_agents.cypher_agent
+agentic_kg.tools.toolset                          ModuleNotFoundError: _tkinter
+agentic_kg.tools.user_intent_tools                ModuleNotFoundError: _tkinter
+```
+
+> If your Python *does* have Tk, the `tkinter` line imports fine and you will see only the `file_toolset` and `sub_agents` failures. Delete the import anyway — it is unused, and the project must not depend on a GUI toolkit being present.
+>
+> Note the `_tkinter` errors mask a second failure in two of those modules: once Tk is available, `agents/file_suggestion_agent/*` fails again with `NameError: name 'file_toolset' is not defined`. Both are fixed below.
 
 - [ ] **Step 3: Delete the stray tkinter import**
 
@@ -151,23 +192,55 @@ from agentic_kg.common.tool_result import tool_success, tool_error
 git rm -r src/agentic_kg/agents/file_suggestion_agent
 ```
 
-- [ ] **Step 6: Run the full suite**
+- [ ] **Step 6: Delete the dead single_agent sub_agents package**
+
+`src/agentic_kg/coordinators/single_agent/sub_agents/` contains only an `__init__.py` that does:
+
+```python
+from .cypher_agent.agent import cypher_agent
+```
+
+There is no `cypher_agent` subdirectory there — the real one is `agents/cypher_agent/`, which
+`coordinators/single_agent/agent.py:4` imports directly. The package is unused scaffolding that
+raises `ModuleNotFoundError` on import.
+
+```bash
+git rm -r src/agentic_kg/coordinators/single_agent/sub_agents
+```
+
+Verify nothing referenced it:
+
+```bash
+grep -rn "single_agent.sub_agents\|from .sub_agents" src/agentic_kg/coordinators/single_agent/
+```
+
+Expected: no output.
+
+- [ ] **Step 7: Run the full suite**
 
 Run: `uv run pytest -q`
 
-Expected: `16 passed` (15 baseline + the new smoke test).
+Expected: `17 passed` (15 baseline + 2 new tests in `test_imports.py`).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add tests/unit/test_imports.py src/agentic_kg/tools/toolset.py src/agentic_kg/tools/user_intent_tools.py
 git commit -m "fix: repair module import graph and guard it with a smoke test
 
-Three defects broke seven modules: an unused tkinter import, a relative
-import resolving to a non-existent tools/tool_result.py, and an
-unreachable agents/file_suggestion_agent package referencing eight
-undefined names. The first two are fixed; the third is deleted, being
-superseded by the multi_agent sub-agent of the same name."
+Four defects broke eight modules:
+- an unused 'from tkinter import Label' in tools/toolset.py
+- a relative import resolving to a non-existent tools/tool_result.py
+- agents/file_suggestion_agent, unreachable and referencing eight
+  undefined names, superseded by the multi_agent sub-agent of the
+  same name -- deleted rather than repaired
+- coordinators/single_agent/sub_agents, importing a cypher_agent
+  subpackage that does not exist -- deleted, unused
+
+The smoke test discovers modules from the filesystem rather than via
+pkgutil.walk_packages, which skips coordinators/ (no __init__.py) and
+would have covered only 28 of 52 modules -- missing the exact tree that
+adk web loads."
 ```
 
 ---
@@ -219,7 +292,7 @@ uv sync
 uv run pytest -q
 ```
 
-Expected: `16 passed`. If `uv lock` wants to change `google-adk` away from 1.10.0, stop — the constraint is wrong.
+Expected: `17 passed`. If `uv lock` wants to change `google-adk` away from 1.10.0, stop — the constraint is wrong.
 
 - [ ] **Step 4: Commit**
 
@@ -332,7 +405,7 @@ Expected: PASS (4 tests).
 
 Run: `uv run pytest -q`
 
-Expected: `20 passed`.
+Expected: `21 passed`.
 
 - [ ] **Step 6: Commit**
 
@@ -585,7 +658,7 @@ If `test_uninstalled_scheme_raises_source_error` fails because `s3fs` happens to
 
 Run: `uv run pytest -q`
 
-Expected: `29 passed`.
+Expected: `30 passed`.
 
 - [ ] **Step 6: Commit**
 
@@ -769,7 +842,7 @@ Expected: PASS (6 tests).
 
 Run: `uv run pytest -q`
 
-Expected: `35 passed`.
+Expected: `36 passed`.
 
 - [ ] **Step 6: Commit**
 
@@ -1077,7 +1150,7 @@ Expected: PASS (7 tests).
 
 Run: `uv run pytest -q`
 
-Expected: `42 passed`.
+Expected: `43 passed`.
 
 - [ ] **Step 11: Commit**
 
@@ -1421,7 +1494,7 @@ Expected: PASS (8 tests).
 
 Run: `uv run pytest -q`
 
-Expected: `50 passed`.
+Expected: `51 passed`.
 
 - [ ] **Step 6: Commit**
 
@@ -1602,7 +1675,7 @@ Expected: no output. Every call now passes an explicit kind.
 
 Run: `uv run pytest -q`
 
-Expected: `55 passed`.
+Expected: `56 passed`.
 
 - [ ] **Step 7: Commit**
 
@@ -1620,14 +1693,20 @@ remaining call sites now declare conversational or reasoning."
 ## Task 9: Remove the private-API dependency from finished()
 
 **Files:**
-- Create: `src/agentic_kg/coordinators/multi_agent/names.py`
+- Create: `src/agentic_kg/common/agent_names.py`
 - Modify: `src/agentic_kg/tools/adk_tools.py`
-- Modify: 5 sites that put `finished` in a tools list
+- Modify: **7** files that import `finished` (listed in Step 5)
 - Create: `tests/unit/test_adk_tools.py`
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `make_finished(parent_agent_name: str) -> Callable`; `COORDINATOR_AGENT_NAME: str`
+- Produces: `make_finished(parent_agent_name: str) -> Callable`; `MULTI_AGENT_COORDINATOR: str`; `SINGLE_AGENT_COORDINATOR: str`
+
+> **Two things here differ from the spec's components table, both driven by facts found while writing this task.**
+>
+> **Seven files import `finished`, not five.** `grep -rn "adk_tools import" src/` returns seven. Two were missed: `schema_proposal_agent/variants.py:22` imports it and never uses it (dead, but executed at import time — and `schema_proposal_agent/agent.py` imports that module, so removing the module-level `finished` would break the whole `multi_agent` coordinator), and `agents/cypher_agent/variants.py:16` imports and genuinely uses it at lines 42 and 86.
+>
+> **The constants module moves to `common/agent_names.py`.** `cypher_agent` is a sub-agent of `single_agent_agent_v1`, not of the multi-agent coordinator — `coordinators/single_agent/agent.py:16` puts it in `sub_agents=[cypher_agent]`. Binding it to `kg_construction_agent_v1` would transfer control to an agent that is not its parent. Two coordinators need two names, and putting them under `coordinators/multi_agent/` would also make `agents/` depend on `coordinators/`, inverting the layering.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1690,18 +1769,25 @@ Expected: FAIL — `ImportError: cannot import name 'make_finished'`.
 
 - [ ] **Step 3: Create the constants module**
 
-Create `src/agentic_kg/coordinators/multi_agent/names.py`:
+Create `src/agentic_kg/common/agent_names.py`:
 
 ```python
-"""Agent names shared between the coordinator and its sub-agents.
+"""Coordinator agent names, shared with the sub-agents that report to them.
 
-Sub-agents are constructed at import time, before the coordinator exists, so
+Sub-agents are constructed at import time, before their coordinator exists, so
 they cannot discover their parent's name at runtime without reaching into ADK
-private attributes. Holding the name here breaks that cycle. This module must
-import nothing from the package, or the cycle returns.
+private attributes. Holding the names here breaks that cycle.
+
+This module must import nothing from the package, or the cycle returns. It
+lives in common/ rather than under either coordinator because both trees need
+it and agents/ must not depend on coordinators/.
 """
 
-COORDINATOR_AGENT_NAME = "kg_construction_agent_v1"
+# coordinators/multi_agent/agent.py
+MULTI_AGENT_COORDINATOR = "kg_construction_agent_v1"
+
+# coordinators/single_agent/agent.py -- the parent of agents/cypher_agent
+SINGLE_AGENT_COORDINATOR = "single_agent_agent_v1"
 ```
 
 - [ ] **Step 4: Replace `finished` with a factory**
@@ -1735,18 +1821,17 @@ def make_finished(parent_agent_name: str) -> Callable[[ToolContext], Dict[str, A
 
 `escalate` is currently inert — ADK reads it for control flow only in `LoopAgent`, and no caller runs inside one — but it is retained so a future phase inside a loop behaves correctly.
 
-- [ ] **Step 5: Update the five call sites**
+- [ ] **Step 5: Update all seven importers**
 
-In each file below, replace the `finished` import with the factory and build the tool once at module level.
+First confirm the list yourself rather than trusting this one:
 
-Files:
-- `coordinators/multi_agent/sub_agents/user_intent_agent/variants.py`
-- `coordinators/multi_agent/sub_agents/file_suggestion_agent/variants.py`
-- `coordinators/multi_agent/sub_agents/graph_construction_agent/variants.py`
-- `coordinators/multi_agent/sub_agents/graphrag_agent/variants.py`
-- `coordinators/multi_agent/sub_agents/schema_proposal_agent/agent.py`
+```bash
+grep -rn "adk_tools import" src/
+```
 
-In each, change:
+Expected: seven hits. Five report to the multi-agent coordinator, one is dead, one reports to `single_agent`.
+
+**Five multi-agent sites** — in each, change:
 
 ```python
 from agentic_kg.tools.adk_tools import finished
@@ -1756,33 +1841,74 @@ to:
 
 ```python
 from agentic_kg.tools.adk_tools import make_finished
-from agentic_kg.coordinators.multi_agent.names import COORDINATOR_AGENT_NAME
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 
-finished = make_finished(COORDINATOR_AGENT_NAME)
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 ```
+
+- `coordinators/multi_agent/sub_agents/user_intent_agent/variants.py:12`
+- `coordinators/multi_agent/sub_agents/file_suggestion_agent/variants.py:15`
+- `coordinators/multi_agent/sub_agents/graph_construction_agent/variants.py:20`
+- `coordinators/multi_agent/sub_agents/graphrag_agent/variants.py:11`
+- `coordinators/multi_agent/sub_agents/schema_proposal_agent/agent.py:15`
 
 The tools lists themselves are unchanged — they still reference the name `finished`.
 
-- [ ] **Step 6: Point the coordinator at the shared constant**
+**One dead import** — `coordinators/multi_agent/sub_agents/schema_proposal_agent/variants.py:22`. This file imports `finished` and never uses it; neither `schema_proposal_agent_v1` nor `schema_critic_agent_v1` has it in a tools list. Confirm, then delete the line outright:
 
-In `coordinators/multi_agent/agent.py`, import the constant and use it as the agent name so the two cannot drift:
-
-```python
-from .names import COORDINATOR_AGENT_NAME
+```bash
+grep -n "finished" src/agentic_kg/coordinators/multi_agent/sub_agents/schema_proposal_agent/variants.py
 ```
 
-and change `name="kg_construction_agent_v1",` to `name=COORDINATOR_AGENT_NAME,`.
+Expected: one hit, the import on line 22. Delete that line. Do not replace it — the critic is deliberately read-only and must not be able to end the phase.
 
-- [ ] **Step 7: Run the tests**
+**One single-agent site** — `agents/cypher_agent/variants.py:16`, which genuinely uses `finished` at lines 42 and 86. Its parent is `single_agent_agent_v1`, so it takes the *other* constant:
+
+```python
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import SINGLE_AGENT_COORDINATOR
+
+finished = make_finished(SINGLE_AGENT_COORDINATOR)
+```
+
+- [ ] **Step 6: Point both coordinators at the shared constants**
+
+In `coordinators/multi_agent/agent.py`:
+
+```python
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+```
+
+and change `name="kg_construction_agent_v1",` to `name=MULTI_AGENT_COORDINATOR,`.
+
+In `coordinators/single_agent/agent.py`:
+
+```python
+from agentic_kg.common.agent_names import SINGLE_AGENT_COORDINATOR
+```
+
+and change `AGENT_NAME = "single_agent_agent_v1"` to `AGENT_NAME = SINGLE_AGENT_COORDINATOR`.
+
+This is what stops a rename of either coordinator from silently breaking its sub-agents' handoff.
+
+- [ ] **Step 7: Verify no importer was missed**
+
+```bash
+grep -rn "adk_tools import finished" src/
+```
+
+Expected: no output. Every remaining import is of `make_finished`.
+
+- [ ] **Step 8: Run the tests**
 
 Run: `uv run pytest -q`
 
-Expected: `60 passed`.
+Expected: `61 passed`. The import smoke test from Task 1 is the one that catches a missed site — if it fails here, an importer was overlooked in Step 5.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/agentic_kg/tools/adk_tools.py src/agentic_kg/coordinators tests/unit/test_adk_tools.py
+git add src/agentic_kg/tools/adk_tools.py src/agentic_kg/common/agent_names.py src/agentic_kg/coordinators src/agentic_kg/agents tests/unit/test_adk_tools.py
 git commit -m "refactor: bind finished() to its parent at construction
 
 Removes the tool_context._invocation_context.agent.parent_agent.name
@@ -1878,7 +2004,7 @@ from agentic_kg.common.llm_catalog import get_llm, LlmKind
 from agentic_kg.tools.cypher_tools import get_physical_schema, neo4j_is_ready
 from agentic_kg.tools.file_tools import get_source_location
 
-from .names import COORDINATOR_AGENT_NAME
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from .sub_agents import (
     user_intent_agent, file_suggestion_agent, schema_proposal_agent,
     graph_construction_agent, graphrag_agent,
@@ -1916,7 +2042,7 @@ Expected: `kg_construction_agent_v1 3 5`
 
 Run: `uv run pytest -q`
 
-Expected: `63 passed`.
+Expected: `64 passed`.
 
 > If `test_imports.py` now fails because importing the coordinator calls `validate_env()` without a key set, add `OPENROUTER_API_KEY` to the test environment via a `tests/conftest.py`:
 > ```python
@@ -2092,7 +2218,7 @@ uv run pytest -q
 uv run pytest -q -m integration
 ```
 
-Expected: unit `63 passed`; integration passes with Docker available.
+Expected: unit `64 passed`; integration passes with Docker available.
 
 - [ ] **Step 4: Commit**
 
@@ -2220,12 +2346,12 @@ git commit -m "docs: record Foundation acceptance run"
 | Delete `import_markdown_file` | 6 |
 | Delete `construct_node`/`construct_relationship` | 7 |
 | Fix `approve_suggested_files` | 6 |
-| Three import defects | 1 |
+| Import defects (four, see Task 1) | 1 |
 | `SOURCE_URI` + OpenRouter + model settings | 3 |
 | `llm_catalog` per-kind cache | 8 |
 | Kinds at every call site | 8 |
 | `validate_env` wired in | 10 |
-| `make_finished` + `names.py` | 9 |
+| `make_finished` + shared name constants | 9 |
 | Dependency bounds, `fsspec`, `aiohttp` | 2 |
 | `.env.example`, README | 12 |
 | Unit tests: file_source with `memory://` | 4 |
@@ -2238,6 +2364,14 @@ No gaps.
 
 **Placeholder scan:** No "TBD", "TODO", "add error handling", or "similar to Task N". Every code step contains runnable code.
 
-**Type consistency:** `read_csv_batches` yields `(header, rows)` in Task 5 and is consumed as `for _header, batch in ...` in Task 7. `get_source_fs()` returns `(fs, root)` in Task 4 and is destructured the same way throughout. `SourceError` is raised in Task 4 and caught in Tasks 6 and 7. `make_finished` is defined in Task 9 and called as `make_finished(COORDINATOR_AGENT_NAME)` in the same task. `reset_settings` is defined in Task 3 and used in Tasks 4, 5, 8, 10, 11.
+**Type consistency:** `read_csv_batches` yields `(header, rows)` in Task 5 and is consumed as `for _header, batch in ...` in Task 7. `get_source_fs()` returns `(fs, root)` in Task 4 and is destructured the same way throughout. `SourceError` is raised in Task 4 and caught in Tasks 6 and 7. `make_finished` is defined in Task 9 and called as `make_finished(MULTI_AGENT_COORDINATOR)` / `make_finished(SINGLE_AGENT_COORDINATOR)` in the same task, both imported from `common/agent_names.py`; Task 10's coordinator import block uses `MULTI_AGENT_COORDINATOR` from the same module. `reset_settings` is defined in Task 3 and used in Tasks 4, 5, 8, 10, 11.
 
-**Known deviation from the spec:** the spec's components table says "resolve undefined `file_toolset`" in `agents/file_suggestion_agent/variants.py`; this plan deletes the package instead, for the reasons documented in Task 1. This reduces the `get_llm()` call sites from twelve to eleven.
+**Known deviations from the spec**, all documented at the task that makes them:
+
+1. **`agents/file_suggestion_agent/` is deleted, not repaired** (Task 1). The spec says "resolve undefined `file_toolset`"; the package is unreachable, references eight undefined names, and its `agent.py` uses `LlmKind` without importing it. This reduces `get_llm()` call sites from twelve to eleven.
+2. **A fourth import defect exists** (Task 1). `coordinators/single_agent/sub_agents/__init__.py` imports a `cypher_agent` subpackage that does not exist. Deleted — nothing references it. Eight modules fail today, not seven.
+3. **The smoke test discovers modules from the filesystem, not `pkgutil`** (Task 1). `coordinators/` has no `__init__.py`, so `pkgutil.walk_packages` never descends into it — it sees 28 of 52 modules and skips the entire tree `adk web` loads. A second test guards the discovery itself.
+4. **Seven files import `finished`, not five** (Task 9). One is a dead import in `schema_proposal_agent/variants.py`; one is `agents/cypher_agent/variants.py`, which is live.
+5. **The name constants live in `common/agent_names.py`, not `coordinators/multi_agent/names.py`** (Task 9), and there are two of them. `cypher_agent` reports to `single_agent_agent_v1`; binding it to the multi-agent coordinator would transfer control to a non-parent, and placing the constants under `coordinators/` would make `agents/` depend on `coordinators/`.
+
+None of these change the spec's decisions — they correct facts the spec asserted about the codebase. Deviations 2–5 were found while writing the tasks and verified by execution.
