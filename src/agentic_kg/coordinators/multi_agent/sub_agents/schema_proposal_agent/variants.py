@@ -12,6 +12,7 @@ from agentic_kg.tools.user_goal_tools import (
  )
 from agentic_kg.tools.file_tools import (
     get_approved_files, sample_file, search_file, column_stats, join_preview,
+    collapse_check,
  )
 from agentic_kg.tools.construction_plan_tools import (
     propose_node_construction, propose_relationship_construction,
@@ -88,7 +89,17 @@ variants = {
               no error and no warning at construction time.
             - Never use a collapsed per-row column as a join key. Do not even retain such per-row columns
               as node properties: put per-row data on the relationship, or drop it.
-            - Use the 'column_stats' tool to check whether a column is really one value per node instance.
+            - Use the 'collapse_check' tool to decide this: call it with the node's source file, the
+              node's declared unique identifier as 'node_key_column', and the candidate join column as
+              'candidate_column'. The join key is safe only if 'survives_collapse' is true (that is,
+              'groups_with_conflicts' is 0). Any conflicting group listed in 'example_conflicts' is a
+              node whose join value would be silently overwritten.
+            - Do not use 'column_stats' or 'join_preview' for this check. 'column_stats' only reports
+              how unique a column is on its own, which answers "could this be a node identifier" — a
+              per-row ID looks perfectly unique there and is exactly the column that does *not* survive
+              collapsing. 'join_preview' only compares raw CSV values across two files, before any
+              collapsing has happened, so it reports full coverage for a join that will produce zero
+              relationships. Neither one can detect post-collapse breakage; only 'collapse_check' can.
 
             The resulting schema should be a connected graph, with no isolated components.
 
@@ -114,17 +125,23 @@ variants = {
             5. If the node contains a reference relationship, use the 'propose_relationship_construction' tool to propose a relationship construction. 
             6. For a relationship file, propose a relationship construction using the 'propose_relationship_construction' tool
             7. If you need to remove a construction, use the 'remove_node_construction' or 'remove_relationship_construction' tool
-            8. Before finalizing any relationship construction, verify the join actually matches: use the
-               'join_preview' tool with the two source files and the two join columns. If coverage is not
+            8. Before finalizing any relationship construction, check each join column that is not the
+               referenced node's declared unique identifier with the 'collapse_check' tool. If
+               'survives_collapse' is false, the join will silently match almost nothing once the nodes
+               are merged — fix the join key (usually by joining on the node's declared identifier and
+               moving the per-row column onto the relationship) rather than proposing it as-is.
+            9. Then check raw value overlap between the two files: use the
+               'join_preview' tool with the two source files and the two join columns. Remember this
+               only compares the CSVs as written, before any collapsing. If coverage is not
                near 100% on both sides, either fix the join key (a collapsed per-row column is the usual
                cause) or, if the source data simply does not overlap, keep the relationship and report the
                approximate coverage when presenting the plan, so the human can decide whether partial
                connectivity is acceptable. Never present a low-coverage relationship without saying so.
-            9. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
+            10. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
         """,
         "tools": [
             get_approved_user_goal, get_approved_files, get_proposed_construction_plan,
-            sample_file, search_file, column_stats, join_preview,
+            sample_file, search_file, column_stats, join_preview, collapse_check,
             propose_node_construction, propose_relationship_construction, remove_node_construction, remove_relationship_construction,
         ]
     },
@@ -148,11 +165,17 @@ variants = {
               value per node instance. Reject with 'retry' if a join column is a per-row property that gets
               collapsed when its rows are merged into a single node: node loading overwrites non-key
               properties row by row, so only one arbitrary value survives and the join silently matches
-              almost nothing. Check this with the 'column_stats' and 'search_file' tools rather than
-              reasoning about it abstractly.
+              almost nothing. Check this with the 'collapse_check' tool — call it with the node's source
+              file, the node's declared unique identifier as 'node_key_column', and the join column as
+              'candidate_column'; reject unless 'survives_collapse' is true. Do not substitute
+              'column_stats' or 'join_preview' here: 'column_stats' only says whether a column is unique
+              on its own (a per-row ID looks ideal there and is precisely the broken case), and
+              'join_preview' compares raw CSV values before any collapsing, so it reports full coverage
+              for a join that will produce zero relationships.
             - For every relationship construction, use the 'join_preview' tool to estimate what fraction of
-              values on each side find a match. A join that is technically correct but connects only a
-              small fraction of the data is a real problem — flag it.
+              raw CSV values on each side find a match in the other file. This is a pre-collapse check
+              only, and does not replace 'collapse_check'. A join that is technically correct but connects
+              only a small fraction of the data is a real problem — flag it.
             - Can you manually trace through the source data to find the necessary information for answering a hypothetical question?
             - Is every node in the schema connected? What relationships could be missing? Every node should connect to at least one other node.
             - Are hierarchical container relationships missing?
@@ -184,7 +207,7 @@ variants = {
         "tools": [
             get_approved_user_goal, get_approved_files,
             get_proposed_construction_plan,
-            sample_file, search_file, column_stats, join_preview,
+            sample_file, search_file, column_stats, join_preview, collapse_check,
         ]
     }
 }

@@ -147,3 +147,61 @@ def test_join_preview_missing_column_returns_error(join_source):
     result = file_tools.join_preview(
         "parts.csv", "nope", "groups.csv", "group_name", FakeToolContext())
     assert result["status"] == "error"
+
+
+@pytest.fixture
+def collapse_source(memory_source):
+    """One row per line-item: 'part_name' is the real node key and repeats,
+    'assembly_id' is unique per row, 'category' is constant per part."""
+    fs = memory_source
+    with fs.open("/src/line_items.csv", "w") as handle:
+        handle.write(
+            "part_name,assembly_id,category\n"
+            "Bolt,a1,fastener\n"
+            "Bolt,a2,fastener\n"
+            "Nut,a3,fastener\n"
+        )
+    return fs
+
+
+def test_collapse_check_reports_a_column_that_survives(collapse_source):
+    """'category' has one distinct value per part, so it survives the MERGE."""
+    result = file_tools.collapse_check(
+        "line_items.csv", "part_name", "category", FakeToolContext())
+    assert result["status"] == "success"
+    check = result["collapse_check"]
+    assert check["row_count"] == 3
+    assert check["group_count"] == 2
+    assert check["groups_with_conflicts"] == 0
+    assert check["survives_collapse"] is True
+    assert check["example_conflicts"] == []
+
+
+def test_collapse_check_flags_a_per_row_id_that_collapses(collapse_source):
+    """'assembly_id' is unique per row -- exactly what column_stats calls a
+    great key -- but two of its values collide onto the 'Bolt' node."""
+    result = file_tools.collapse_check(
+        "line_items.csv", "part_name", "assembly_id", FakeToolContext())
+    check = result["collapse_check"]
+    assert check["group_count"] == 2
+    assert check["groups_with_conflicts"] == 1
+    assert check["survives_collapse"] is False
+    assert check["example_conflicts"] == [{"node_key": "Bolt", "values": ["a1", "a2"]}]
+
+
+def test_collapse_check_of_the_node_key_itself_survives(collapse_source):
+    result = file_tools.collapse_check(
+        "line_items.csv", "part_name", "part_name", FakeToolContext())
+    assert result["collapse_check"]["survives_collapse"] is True
+
+
+def test_collapse_check_missing_file_returns_error(memory_source):
+    result = file_tools.collapse_check("nope.csv", "id", "name", FakeToolContext())
+    assert result["status"] == "error"
+
+
+def test_collapse_check_missing_column_returns_error(collapse_source):
+    result = file_tools.collapse_check(
+        "line_items.csv", "part_name", "not_a_column", FakeToolContext())
+    assert result["status"] == "error"
+    assert "not_a_column" in result["error_message"]

@@ -213,23 +213,71 @@ REL_RULE = {
 }
 
 
-def test_import_relationships_warns_when_no_relationships_created(monkeypatch, one_batch):
+def test_import_relationships_warns_when_no_rows_match(monkeypatch, one_batch):
     """A join that matches nothing raises no Cypher error -- it must not look
     like a clean success."""
-    db = FakeGraphDb(responses=[{"status": "success", "records": [{"relationships_created": 0}]}])
+    db = FakeGraphDb(responses=[{"status": "success", "records": [{"rows_matched": 0}]}])
     monkeypatch.setattr(kg, "graphdb", db)
     result = kg.import_relationships(dict(REL_RULE))
     assert result["status"] == "success"
-    assert result["rows_loaded"]["relationships_created"] == 0
+    assert result["rows_loaded"]["rows_matched"] == 0
     assert "warning" in result["rows_loaded"]
     assert "knows.csv" in result["rows_loaded"]["warning"]
 
 
 def test_import_relationships_has_no_warning_when_every_row_matches(monkeypatch, one_batch):
-    db = FakeGraphDb(responses=[{"status": "success", "records": [{"relationships_created": 1}]}])
+    db = FakeGraphDb(responses=[{"status": "success", "records": [{"rows_matched": 1}]}])
     monkeypatch.setattr(kg, "graphdb", db)
     result = kg.import_relationships(dict(REL_RULE))
-    assert result["rows_loaded"]["relationships_created"] == 1
+    assert result["rows_loaded"]["rows_matched"] == 1
+    assert "warning" not in result["rows_loaded"]
+
+
+@pytest.fixture
+def two_batches(monkeypatch):
+    """Two batches of two rows each, so the warning threshold and the
+    cross-batch summation of matched counts are both exercised."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "name"], [{"id": "1", "name": "Ada"}, {"id": "2", "name": "Grace"}]
+        yield ["id", "name"], [{"id": "3", "name": "Alan"}, {"id": "4", "name": "Edsger"}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+def test_import_relationships_sums_matches_across_batches_and_warns_at_half(
+        monkeypatch, two_batches):
+    """2 of 4 rows matched is not < 4/2, so the threshold must NOT warn --
+    and the two per-batch counts must be summed, not overwritten."""
+    db = FakeGraphDb(responses=[
+        {"status": "success", "records": [{"rows_matched": 1}]},
+        {"status": "success", "records": [{"rows_matched": 1}]},
+    ])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows"] == 4
+    assert result["rows_loaded"]["rows_matched"] == 2
+    assert "warning" not in result["rows_loaded"]
+
+
+def test_import_relationships_warns_below_half_across_batches(monkeypatch, two_batches):
+    db = FakeGraphDb(responses=[
+        {"status": "success", "records": [{"rows_matched": 1}]},
+        {"status": "success", "records": [{"rows_matched": 0}]},
+    ])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows_matched"] == 1
+    warning = result["rows_loaded"]["warning"]
+    assert "only 1 of 4 rows matched both endpoints" in warning
+
+
+def test_import_relationships_no_warning_when_most_rows_match(monkeypatch, two_batches):
+    db = FakeGraphDb(responses=[
+        {"status": "success", "records": [{"rows_matched": 2}]},
+        {"status": "success", "records": [{"rows_matched": 1}]},
+    ])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows_matched"] == 3
     assert "warning" not in result["rows_loaded"]
 
 
@@ -239,7 +287,8 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     monkeypatch.setattr(kg, "import_relationships", lambda rule: {
         "status": "success",
         "rows_loaded": {"source_file": "knows.csv", "rows": 88,
-                        "relationships_created": 0, "warning": "read 88 rows but created only 0"},
+                        "rows_matched": 0,
+                        "warning": "only 0 of 88 rows matched both endpoints"},
     })
     plan = {
         "Person": {"construction_type": "node", "label": "Person"},
@@ -247,4 +296,4 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     }
     result = kg.construct_domain_graph(plan)
     assert result["status"] == "success"
-    assert result["warnings"] == ["read 88 rows but created only 0"]
+    assert result["warnings"] == ["only 0 of 88 rows matched both endpoints"]

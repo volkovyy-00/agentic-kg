@@ -271,6 +271,107 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
     })
 
 
+def _collect_column_pairs(file_path: str, column_a: str, column_b: str):
+    """Read two columns of one source CSV, row by row.
+
+    Returns:
+        (pairs, error) where pairs is a list of (value_a, value_b) tuples and
+        error is a tool_error dict when the file or either column cannot be
+        read.
+    """
+    try:
+        if not source_exists(file_path):
+            return None, tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return None, tool_error(str(exc))
+
+    pairs = []
+    saw_header = False
+    try:
+        for batch_header, rows in read_csv_batches(file_path):
+            if not saw_header:
+                saw_header = True
+                missing = [c for c in (column_a, column_b) if c not in batch_header]
+                if missing:
+                    return None, tool_error(
+                        f"Column(s) {missing} are not in {file_path}. "
+                        f"Available columns: {batch_header}"
+                    )
+            for row in rows:
+                pairs.append((row.get(column_a, ""), row.get(column_b, "")))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    if not saw_header:
+        return None, tool_error(f"CSV file has no header row: {file_path}")
+
+    return pairs, None
+
+
+def collapse_check(file_path: str, node_key_column: str, candidate_column: str,
+                   tool_context: ToolContext) -> dict:
+    """Checks whether a column survives collapsing rows onto a node key.
+
+    This is the only tool that answers the post-MERGE question. Node loading
+    MERGEs one node per distinct 'node_key_column' value and then overwrites
+    the other properties from every row, so whichever row loads last wins. If
+    the rows sharing a node key disagree about 'candidate_column', only one
+    arbitrary value survives on the node, and any relationship joining on that
+    column will silently match almost nothing.
+
+    A candidate column is safe to use as a relationship join key only when
+    every group has exactly one distinct value for it, i.e.
+    'groups_with_conflicts' is 0 (which is trivially true when the candidate
+    column *is* the node key).
+
+    Note that 'column_stats' cannot answer this: a per-row ID is reported as
+    perfectly unique, which is exactly the column class that does *not*
+    survive collapsing. 'join_preview' cannot answer it either, because it
+    compares raw CSV values before any collapsing happens.
+
+    Args:
+      file_path: Path to the node file's CSV, relative to the source location.
+      node_key_column: The column the nodes will be MERGEd on.
+      candidate_column: The column being considered as a join key or property.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'collapse_check'
+              key with 'path', 'node_key_column', 'candidate_column',
+              'row_count', 'group_count' (distinct node keys),
+              'groups_with_conflicts' (groups holding more than one distinct
+              candidate value), 'survives_collapse' (True when there are no
+              conflicts) and 'example_conflicts' (up to 5 entries of
+              {'node_key', 'values'}).
+    """
+    pairs, error = _collect_column_pairs(file_path, node_key_column, candidate_column)
+    if error is not None:
+        return error
+
+    groups: Dict[str, set] = {}
+    for key, value in pairs:
+        key_text = "" if key is None else str(key)
+        value_text = "" if value is None else str(value)
+        groups.setdefault(key_text, set()).add(value_text)
+
+    conflicts = [(key, values) for key, values in groups.items() if len(values) > 1]
+    example_conflicts = [
+        {"node_key": key, "values": sorted(values)[:10]}
+        for key, values in conflicts[:5]
+    ]
+
+    return tool_success("collapse_check", {
+        "path": file_path,
+        "node_key_column": node_key_column,
+        "candidate_column": candidate_column,
+        "row_count": len(pairs),
+        "group_count": len(groups),
+        "groups_with_conflicts": len(conflicts),
+        "survives_collapse": len(conflicts) == 0,
+        "example_conflicts": example_conflicts,
+    })
+
+
 def join_preview(file_a: str, column_a: str, file_b: str, column_b: str,
                  tool_context: ToolContext) -> dict:
     """Estimates how well a join between two CSV columns would match.

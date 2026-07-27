@@ -50,10 +50,16 @@ schema_critic_agent = LlmAgent(
 class CheckStatusAndEscalate(BaseAgent):
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         feedback = ctx.session.state.get("feedback", "valid")
-        # Only the leading word decides the route: the critic may append a
+        # Only the leading *word* decides the route: the critic may append a
         # "Warnings:" section to a 'valid' verdict for data-quality issues that
-        # no schema change can fix, and that must not restart the loop.
-        should_stop = str(feedback).strip().lower().startswith("valid")
+        # no schema change can fix, and that must not restart the loop. A prefix
+        # match is not enough — "Validation failed: ..." and "Valid identifiers
+        # are missing on Part" both start with "valid" but mean retry, so the
+        # first whitespace-delimited token is compared exactly (minus trailing
+        # punctuation).
+        text = str(feedback).strip()
+        first_token = text.split(maxsplit=1)[0].strip(":.,").lower() if text else ""
+        should_stop = first_token == "valid"
         yield Event(author=self.name, actions=EventActions(escalate=should_stop))
 
 refinement_loop = LoopAgent(

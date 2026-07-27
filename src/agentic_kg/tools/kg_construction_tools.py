@@ -122,11 +122,15 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
           (to_node:{to_label} {{ {to_column} : row[$to_node_column] }})
     MERGE (from_node)-[r:{relationship_type}]->(to_node)
     FOREACH (k IN $properties | SET r[k] = row[k])
-    RETURN count(r) AS relationships_created
+    RETURN count(r) AS rows_matched
     """
 
+    # count(r) counts rows that matched *both* endpoints, not edges newly
+    # created: MERGE binds r on every matched row whether it created the
+    # relationship or found an existing one. That is deliberately what we want
+    # to report — a correct re-run then reports the same count instead of zero.
     rows_committed = 0
-    relationships_created = 0
+    rows_matched = 0
     try:
         for _header, batch in read_csv_batches(source_file):
             result = graphdb.send_query(query, {
@@ -141,7 +145,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                     f"(the failing batch was rolled back): {result['error_message']}"
                 )
             for record in result.get("records") or []:
-                relationships_created += record.get("relationships_created", 0) or 0
+                rows_matched += record.get("rows_matched", 0) or 0
             rows_committed += len(batch)
     except (SourceError, FileNotFoundError) as exc:
         return tool_error(f"{source_file}: {exc}")
@@ -149,17 +153,17 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     loaded = {
         "source_file": source_file,
         "rows": rows_committed,
-        "relationships_created": relationships_created,
+        "rows_matched": rows_matched,
     }
 
     # A row whose join columns match nothing produces no relationship, and the
     # MERGE reports no error for it. Half the rows failing to match is already
     # a design smell worth a human look; zero matches is almost certainly a
     # wrong join key, so both are surfaced rather than silently succeeding.
-    if rows_committed and relationships_created < rows_committed / 2:
+    if rows_committed and rows_matched < rows_committed / 2:
         warning = (
-            f"{source_file}: read {rows_committed} rows but created only "
-            f"{relationships_created} relationships ({from_label}.{from_column} -> "
+            f"{source_file}: only {rows_matched} of {rows_committed} rows matched both "
+            f"endpoints ({from_label}.{from_column} -> "
             f"{to_label}.{to_column}) — check whether the join columns actually match. "
             "A join column that is a per-row property collapsed during node loading "
             "will match few or no rows."
