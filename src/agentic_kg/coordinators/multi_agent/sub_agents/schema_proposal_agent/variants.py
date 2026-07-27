@@ -46,8 +46,17 @@ variants = {
             - If the file name sounds like a node, but there are multiple unique identifiers, that is likely a node with reference relationships
 
             Design rules for nodes:
-            - Nodes will have unique identifiers. 
+            - Nodes will have unique identifiers.
             - Nodes _may_ have identifiers that are used as reference relationships.
+            - A per-row identifier being unique is not enough: it can still be the wrong node identifier.
+              A file can have one row per *pairing* of two entities (e.g. one row per item that belongs
+              to a group), where every row gets its own unique ID even though the row is really describing
+              a link, not a new instance of the entity. The tell is a descriptive/name column that repeats
+              across multiple rows while the "unique identifier" column never does. When you see that
+              pattern, the repeating column is the real entity identifier, not the always-unique one — model
+              the file as nodes keyed by the repeating column, with the per-row details (quantities, roles,
+              the other column that looked like an ID) as properties of the relationship connecting them,
+              not as properties of the node.
 
             Design rules for relationships:
             - Relationships appear in two ways: full relationships and reference relationships.
@@ -96,6 +105,12 @@ variants = {
             Criticize the proposed schema for relevance and correctness:
             - Are unique identifiers actually unique? Use the 'search_file' tool to validate. Composite identifier are not acceptable.
             - Could any nodes be relationships instead? Double-check that unique identifiers are unique and not references to other nodes. Use the 'search_file' tool to validate
+            - For each node, does it represent one real-world thing, or one row of a link between two things?
+              Check whether any of the node's non-identifier properties (especially names) repeat across
+              multiple node instances using 'search_file'. A repeating name alongside an always-unique ID is
+              a strong signal that the ID is a per-row/line-item key, not a true entity identifier — the file
+              should instead produce nodes keyed by the repeating value, with the current per-row columns
+              moved onto the connecting relationship.
             - Can you manually trace through the source data to find the necessary information for anwering a hypothetical question?
             - Is every node in the schema connected? What relationships could be missing? Every node should connect to at least one other node.
             - Are hierarchical container relationships missing? 
