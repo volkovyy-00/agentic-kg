@@ -20,16 +20,22 @@ Each gets its own spec, plan and implementation cycle.
 | **2. Unstructured ingestion** | Entity/fact-type agents, chunking, PDF+Markdown loaders, extraction executor, resumability, scoped resolution | design settled, **spec not written** |
 | **3. Linking** | `CORRESPONDS_TO` correlation to reference tables; cross-tier retrieval | design settled, **spec not written** |
 
-- Spec: `docs/superpowers/specs/2026-07-27-foundation-design.md`
-- Plan: `docs/superpowers/plans/2026-07-27-foundation.md` (12 TDD tasks — self-contained, assumes no prior context)
+- Foundation spec: `docs/superpowers/specs/2026-07-27-foundation-design.md`
+- Foundation plan: `docs/superpowers/plans/2026-07-27-foundation.md` (12 TDD tasks — self-contained, assumes no prior context)
+- **Decisions for sub-projects 2 and 3: `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`**
 - Branch: `foundation-file-sources-and-models`
 
-**All design decisions for sub-projects 2 and 3 are already settled** — chunking strategy, resumability,
-identity model, approval posture, model configuration, definition of done. They are recorded in sub-project 1's
-spec under *Scope*, *Follow-on work* and *Risks*. Read those sections when writing spec 2; do not re-derive them.
+**All design decisions for sub-projects 2 and 3 are already settled** — chunking, extraction context,
+resumability, identity model, approval posture, models, and definition of done — and are recorded with their
+reasoning in the decisions document above. Read it before writing spec 2 or 3; do not re-derive them. Technical
+constraints found while fact-checking Foundation (PdfLoader's `fs`/path contract, missing
+`langchain-text-splitters`, `LongRunningFunctionTool`'s falsy-return behaviour, APOC Core-only on Aura) live in
+the Foundation spec's *Follow-on work* section.
 
 Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Asset_Manager_Holdings.csv`.
 **Those files are not in this repo and must be sourced.** The bundled furniture example must keep working throughout.
+
+**Write specs 2 and 3 against the post-Foundation codebase**, not against descriptions written before it landed.
 
 ### This file goes stale when Foundation lands
 
