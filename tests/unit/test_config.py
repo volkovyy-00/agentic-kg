@@ -1,6 +1,11 @@
 import pytest
 
-from agentic_kg.common.config import get_settings, reset_settings, validate_env
+from agentic_kg.common.config import (
+    agentic_kgSettings,
+    get_settings,
+    reset_settings,
+    validate_env,
+)
 
 
 def test_source_uri_defaults_to_none(monkeypatch):
@@ -66,3 +71,15 @@ def test_validate_env_warns_but_does_not_raise_without_source_uri(monkeypatch, c
         validate_env()
 
     assert any("SOURCE_URI" in record.message for record in caplog.records)
+
+
+def test_unit_suite_ignores_dotenv_file():
+    """Guards the tests/conftest.py `_unit_tests_ignore_dotenv` fixture.
+
+    If that fixture is ever removed or stops applying, settings would again
+    be read from a developer's real .env file instead of solely from
+    os.environ, and the delenv()-based tests in this module would start
+    silently depending on whatever the local .env happens to contain. Fail
+    loudly here rather than let that regress unnoticed on a clean machine.
+    """
+    assert agentic_kgSettings.model_config.get("env_file") is None
