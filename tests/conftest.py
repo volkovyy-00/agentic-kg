@@ -24,9 +24,9 @@ def _unit_tests_ignore_dotenv():
     tests/integration/test_csv_loading_integration.py).
 
     Disable .env loading for the whole test session so settings construction
-    # depends only on os.environ, which monkeypatch controls. This does not
-    # change production behaviour: application code never touches
-    # model_config, so a real run of the app still reads .env normally.
+    depends only on os.environ, which monkeypatch controls. This does not
+    change production behaviour: application code never touches model_config,
+    so a real run of the app still reads .env normally.
     """
     original_env_file = agentic_kgSettings.model_config.get("env_file")
     agentic_kgSettings.model_config["env_file"] = None
