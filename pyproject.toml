@@ -8,8 +8,10 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.9",
     "clevercsv[full]>=0.8.3",
-    "google-adk>=1.10.0",
+    "fsspec>=2024.9,<2025.0.0",
+    "google-adk>=1.10,<2",
     "litellm>=1.75.5.post1,<1.82.7",
     "neo4j>=5.28.2",
     "neo4j-graphrag>=1.9.1",
