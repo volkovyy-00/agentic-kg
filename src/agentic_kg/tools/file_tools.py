@@ -121,7 +121,7 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     Searches a CSV file for rows containing the given query string in any of its fields.
 
     Args:
-      file_path: Path to the CSV file, relative to the Neo4j import directory.
+      file_path: Path to the CSV file, relative to the source location.
       query: The string to search for.
       tool_context: The ToolContext object.
       case_sensitive: Whether the search should be case-sensitive (default: False).

@@ -156,26 +156,51 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
     outcomes = {}
     failures = []
 
+    # construction_plan is LLM-produced, so a rule can be missing keys this
+    # module otherwise indexes directly (import_nodes/import_relationships).
+    # .get() here, and catching KeyError per rule below, keeps a malformed
+    # rule from raising an unhandled KeyError into ADK instead of reporting
+    # a tool_error.
     node_rules = [rule for rule in construction_plan.values()
-                  if rule["construction_type"] == "node"]
+                  if rule.get("construction_type") == "node"]
     for rule in node_rules:
-        result = import_nodes(rule)
         key = rule.get("label", rule.get("source_file", "?"))
+        try:
+            result = import_nodes(rule)
+        except KeyError as exc:
+            result = tool_error(f"{key}: node construction rule is missing required key {exc}")
         outcomes[key] = result
         if result["status"] == "error":
             failures.append(f"{key}: {result['error_message']}")
 
     relationship_rules = [rule for rule in construction_plan.values()
-                          if rule["construction_type"] == "relationship"]
+                          if rule.get("construction_type") == "relationship"]
     for rule in relationship_rules:
-        result = import_relationships(rule)
         key = rule.get("relationship_type", rule.get("source_file", "?"))
+        try:
+            result = import_relationships(rule)
+        except KeyError as exc:
+            result = tool_error(
+                f"{key}: relationship construction rule is missing required key {exc}"
+            )
         outcomes[key] = result
         if result["status"] == "error":
             failures.append(f"{key}: {result['error_message']}")
 
     if failures:
-        return tool_error("Graph construction had failures:\n" + "\n".join(failures))
+        # Fold in what did load: on partial failure the caller (an LLM agent)
+        # needs to know which rules already committed, both to report
+        # accurately and to avoid re-running already-loaded rules on retry.
+        successes = [
+            f"{key} ({result['rows_loaded']['rows']} rows)"
+            for key, result in outcomes.items()
+            if result.get("status") == "success" and "rows_loaded" in result
+        ]
+        message_parts = []
+        if successes:
+            message_parts.append("loaded: " + ", ".join(successes))
+        message_parts.append("failed: " + "; ".join(failures))
+        return tool_error("; ".join(message_parts))
 
     return tool_success("domain_graph_constructed", outcomes)
 

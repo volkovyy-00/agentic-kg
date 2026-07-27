@@ -1,3 +1,5 @@
+import io
+
 import fsspec
 import pytest
 
@@ -68,6 +70,35 @@ def test_relative_path_anchors_to_repo_root_not_cwd(monkeypatch, tmp_path):
     _fs, root = file_source.get_source_fs()
     assert root.endswith("/data/bom")
     assert str(tmp_path) not in root
+
+
+def test_open_source_reads_non_ascii_content_as_utf8(memory_source, monkeypatch):
+    """open_source's text mode must not fall back to
+    locale.getpreferredencoding(): every bundled CSV under data/bom/ contains
+    non-ASCII (Swedish) characters, so on a non-UTF-8 locale that fallback is
+    silent mojibake in the constructed graph, not an exception. Faking the
+    process locale is not reliably observable by TextIOWrapper (its default
+    encoding is resolved once, not looked up live), so this pins the actual
+    encoding kwarg that reaches fsspec's TextIOWrapper instead.
+    """
+    payload = "Björk café".encode("utf-8")
+    with memory_source.open("/src/nonascii.csv", "wb") as handle:
+        handle.write(payload)
+
+    captured_kwargs = {}
+    real_text_io_wrapper = io.TextIOWrapper
+
+    class _SpyTextIOWrapper(real_text_io_wrapper):
+        def __init__(self, buffer, *args, **kwargs):
+            captured_kwargs.update(kwargs)
+            super().__init__(buffer, *args, **kwargs)
+
+    monkeypatch.setattr(io, "TextIOWrapper", _SpyTextIOWrapper)
+
+    with file_source.open_source("nonascii.csv") as handle:
+        assert handle.read() == "Björk café"
+
+    assert captured_kwargs.get("encoding") == "utf-8"
 
 
 def test_uninstalled_scheme_raises_source_error(monkeypatch):

@@ -157,3 +157,46 @@ def test_construct_domain_graph_loads_nodes_before_relationships(monkeypatch):
     }
     kg.construct_domain_graph(plan)
     assert order == ["node", "rel"]
+
+
+def test_construct_domain_graph_reports_tool_error_for_a_rule_missing_a_key(fake_db, one_batch):
+    """construction_plan is LLM-produced; a rule missing a required key must
+    surface as a tool_error, not an unhandled KeyError escaping into ADK."""
+    plan = {"Person": {"construction_type": "node", "label": "Person"}}  # no unique_column_name etc.
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
+    assert "Person" in result["error_message"]
+
+
+def test_construct_domain_graph_reports_tool_error_for_a_relationship_rule_missing_a_key(fake_db, one_batch):
+    plan = {"KNOWS": {"construction_type": "relationship", "relationship_type": "KNOWS"}}
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
+    assert "KNOWS" in result["error_message"]
+
+
+def test_construct_domain_graph_reports_successes_alongside_failures(monkeypatch):
+    """On partial failure the agent needs to know which rules already
+    committed, both to report accurately and to avoid redoing loaded work on
+    retry -- not just see the concatenated failure text."""
+    def fake_import_nodes(rule):
+        if rule["label"] == "Product":
+            return {"status": "success", "rows_loaded": {"source_file": "products.csv", "rows": 10}}
+        return {"status": "error", "error_message": "boom"}
+
+    monkeypatch.setattr(kg, "import_nodes", fake_import_nodes)
+    monkeypatch.setattr(
+        kg,
+        "import_relationships",
+        lambda rule: {"status": "success", "rows_loaded": {"source_file": "knows.csv", "rows": 5}},
+    )
+    plan = {
+        "Product": {"construction_type": "node", "label": "Product"},
+        "Supplier": {"construction_type": "node", "label": "Supplier"},
+        "KNOWS": {"construction_type": "relationship", "relationship_type": "KNOWS"},
+    }
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
+    assert "Product (10 rows)" in result["error_message"]
+    assert "KNOWS (5 rows)" in result["error_message"]
+    assert "boom" in result["error_message"]

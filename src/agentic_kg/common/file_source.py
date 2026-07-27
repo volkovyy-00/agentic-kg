@@ -113,4 +113,9 @@ def open_source(relative_path: str, mode: str = "r", **kwargs: Any):
         raise FileNotFoundError(f"No such source file: {relative_path}")
     if "b" not in mode:
         kwargs.setdefault("newline", "")
+        # Without an explicit encoding, TextIOWrapper falls back to
+        # locale.getpreferredencoding(False). On a non-UTF-8 locale that is
+        # silent mojibake, not an exception, and every bundled CSV under
+        # data/bom/ contains non-ASCII characters.
+        kwargs.setdefault("encoding", "utf-8")
     return fs.open(full_path, mode, **kwargs)
