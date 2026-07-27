@@ -1,6 +1,5 @@
 import logging
 
-from pathlib import Path
 import clevercsv
 from itertools import islice
 
@@ -8,8 +7,13 @@ from google.adk.tools import ToolContext
 from typing import Dict, Any, List
 
 from agentic_kg.common.tool_result import tool_success, tool_error
-
-from .cypher_tools import get_neo4j_import_dir
+from agentic_kg.common.file_source import (
+    SourceError,
+    get_source_root,
+    list_source_files,
+    open_source,
+    source_exists,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,32 +21,21 @@ ALL_AVAILABLE_FILES = "all_available_files"
 SUGGESTED_FILES = "suggested_file_list"
 APPROVED_FILES = "approved_file_list"
 
-def list_import_files(tool_context:ToolContext) -> dict:
-    f"""Lists files available for knowledge graph construction.
-    All files are relative to the import directory.
+def list_import_files(tool_context: ToolContext) -> dict:
+    """Lists files available for knowledge graph construction.
+
+    All names are relative to the configured source location.
 
     Returns:
-        dict: A dictionary containing metadata about the content.
-                Includes a 'status' key ('success' or 'error').
-                If 'success', includes a {ALL_AVAILABLE_FILES} key with list of file names.
-                If 'error', includes an 'error_message' key.
-                The 'error_message' may have instructions about how to handle the error.
+        dict: 'status' of 'success' or 'error'. On success, an
+              'all_available_files' key with a list of relative file names.
     """
-    # get the import dir using the helper function
-    result = get_neo4j_import_dir()
+    try:
+        file_names = list_source_files()
+    except SourceError as exc:
+        return tool_error(str(exc))
 
-    if result["status"] == "error":
-        return result
-    import_dir = Path(result["neo4j_import_dir"])
-
-    # get a list of relative file names, so files must be rooted at the import dir
-    file_names = [str(x.relative_to(import_dir)) 
-                 for x in import_dir.rglob("*") 
-                 if x.is_file()]
-
-    # save the list to state so we can inspect it later
     tool_context.state[ALL_AVAILABLE_FILES] = file_names
-
     return tool_success(ALL_AVAILABLE_FILES, file_names)
 
 
@@ -66,13 +59,21 @@ def get_suggested_files(tool_context:ToolContext) -> Dict[str, Any]:
         return tool_error("Suggested files have not been set. Take no action other than to inform user.")
     return tool_success(SUGGESTED_FILES, tool_context.state[SUGGESTED_FILES])
 
-def approve_suggested_files(tool_context:ToolContext) -> Dict[str, Any]:
-    f"""Approves the {SUGGESTED_FILES} in state for further processing as {APPROVED_FILES}."""
-    
+def get_source_location(tool_context: ToolContext) -> Dict[str, Any]:
+    """Reports where the system is reading source files from."""
+    try:
+        return tool_success("source_location", get_source_root())
+    except SourceError as exc:
+        return tool_error(str(exc))
+
+
+def approve_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
+    """Approves the suggested files for further processing."""
     if SUGGESTED_FILES not in tool_context.state:
         return tool_error("Current files have not been set. Take no action other than to inform user.")
 
     tool_context.state[APPROVED_FILES] = tool_context.state[SUGGESTED_FILES]
+    return tool_success(APPROVED_FILES, tool_context.state[APPROVED_FILES])
 
 
 def get_approved_files(tool_context:ToolContext) -> Dict[str, Any]:
@@ -84,57 +85,34 @@ def get_approved_files(tool_context:ToolContext) -> Dict[str, Any]:
     return tool_success(APPROVED_FILES, tool_context.state[APPROVED_FILES])
 
 def sample_file(file_path: str, tool_context: ToolContext) -> dict:
-    """Samples a file by reading its content as text.
-    
-    Treats any file as text and reads up to a maximum of 100 lines.
-    
+    """Samples a file by reading up to 100 lines as text.
+
     Args:
-      file_path: file to sample, relative to the import directory
+      file_path: file to sample, relative to the source location
       tool_context: ToolContext object
-      
+
     Returns:
-        dict: A dictionary containing metadata about the content,
-              along with a sampling of the file.
-              Includes a 'status' key ('success' or 'error').
-              If 'success', includes a 'metadata' key with content details.
-              If 'error', includes an 'error_message' key.
+        dict: 'status' of 'success' or 'error'. On success, a 'sample' key with
+              metadata and content.
     """
-    import_dir_result = get_neo4j_import_dir() # chain tool call
-    if import_dir_result["status"] == "error": return import_dir_result
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    p = import_dir / file_path
-    
-    if not p.exists():
-        return tool_error(f"Path does not exist: {file_path}")
-    
-    # Set basic metadata
+    suffix = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+    mimetype = {"csv": "text/csv", "md": "text/markdown"}.get(suffix, "text/plain")
+
     result = {
-        "metadata": {
-            "path": file_path,
-        },
-        "annotations": []
+        "metadata": {"path": file_path, "mimetype": mimetype},
+        "annotations": [],
     }
-    
-    # Set mimetype based on extension
-    file_extension = p.suffix.lower()
-    if file_extension == '.csv':
-        result["metadata"]["mimetype"] = "text/csv"
-    elif file_extension == '.md':
-        result["metadata"]["mimetype"] = "text/markdown"
-    else:
-        result["metadata"]["mimetype"] = "text/plain"
-    
+
     try:
-        # Treat all files as text
-        with open(p, 'r', encoding='utf-8') as file:
-            # Read up to 100 lines
-            lines = list(islice(file, 100))
-            content = ''.join(lines)
-            result["content"] = content
-    
-    except Exception as e:
-        return tool_error(f"Error reading or processing file {file_path}: {e}")
-    
+        with open_source(file_path, "r") as handle:
+            result["content"] = "".join(islice(handle, 100))
+    except SourceError as exc:
+        return tool_error(str(exc))
+    except FileNotFoundError:
+        return tool_error(f"Path does not exist: {file_path}")
+    except Exception as exc:  # noqa: BLE001 - report decoding failures to the agent
+        return tool_error(f"Error reading or processing file {file_path}: {exc}")
+
     return tool_success("sample", result)
 
 
@@ -155,19 +133,11 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
               and 'metadata' (path, mimetype, query, case_sensitive, rows_found).
               If 'error', includes an 'error_message'.
     """
-    import_dir_result = get_neo4j_import_dir()
-    if import_dir_result["status"] == "error":
-        return import_dir_result
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    p = import_dir / file_path
-
-    if not p.exists():
-        return tool_error(f"CSV file does not exist: {file_path}")
-    if not p.is_file():
-        return tool_error(f"Path is not a file: {file_path}")
-    if not (p.suffix.lower() == ".csv"):
-        # Basic check, could be enhanced with mimetypes for more accuracy
-        logger.warning(f"File {file_path} does not have a .csv extension, but attempting to process as CSV.")
+    try:
+        if not source_exists(file_path):
+            return tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return tool_error(str(exc))
 
     matching_rows = []
     search_query = query if case_sensitive else query.lower()
@@ -176,7 +146,7 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     try:
         # Handle empty query - return no results
         if not query:
-            with open(p, 'r', newline='', encoding='utf-8') as csvfile:
+            with open_source(file_path, "r") as csvfile:
                 try:
                     # Just read enough to get the header
                     dialect = clevercsv.Sniffer().sniff(csvfile.read(2048))
@@ -188,7 +158,7 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
                 header_row = next(reader, [])
                 # Empty query returns no matches, but we still read the header
         else:
-            with open(p, 'r', newline='', encoding='utf-8') as csvfile:
+            with open_source(file_path, "r") as csvfile:
                 try:
                     # Read a chunk to sniff dialect, then rewind
                     dialect = clevercsv.Sniffer().sniff(csvfile.read(2048))
@@ -227,126 +197,46 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
 SEARCH_RESULTS = "search_results"
 
 def search_file(file_path: str, query: str) -> dict:
-    """
-    Searches any text file (markdown, csv, txt)for lines containing the given query string.
-    Simple grep-like functionality that works with any text file.
-    Search is always case insensitive.
+    """Searches any text file for lines containing the query string, case-insensitively.
 
     Args:
-      file_path: Path to the file, relative to the Neo4j import directory.
-      query: The string to search for.
-      tool_context: The ToolContext object.
+      file_path: path relative to the source location
+      query: the string to search for
 
     Returns:
-        dict: A dictionary with 'status' ('success' or 'error').
-              If 'success', includes 'search_results' containing 'matching_lines'
-              (a list of dictionaries with 'line_number' and 'content' keys)
-              and basic metadata about the search.
-              If 'error', includes an 'error_message'.
+        dict: 'status' of 'success' or 'error'. On success, a 'search_results'
+              key with 'matching_lines' and metadata.
     """
-    import_dir_result = get_neo4j_import_dir()
-    if import_dir_result["status"] == "error":
-        return import_dir_result
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    p = import_dir / file_path
+    try:
+        if not source_exists(file_path):
+            return tool_error(f"File does not exist: {file_path}")
+    except SourceError as exc:
+        return tool_error(str(exc))
 
-    if not p.exists():
-        return tool_error(f"File does not exist: {file_path}")
-    if not p.is_file():
-        return tool_error(f"Path is not a file: {file_path}")
-
-    # Check if file has an acceptable extension
-    file_ext = p.suffix.lower()
-    supported_extensions = {".csv", ".md", ".txt"}
-    if file_ext not in supported_extensions:
-        logger.warning(f"File {file_path} has an unsupported extension {file_ext}, but attempting to search anyway.")
-
-    # Handle empty query - return no results
     if not query:
         return tool_success(SEARCH_RESULTS, {
-            "metadata": {
-                "path": file_path,
-                "query": query,
-                "lines_found": 0
-            },
-            "matching_lines": []
+            "metadata": {"path": file_path, "query": query, "lines_found": 0},
+            "matching_lines": [],
         })
 
     matching_lines = []
     search_query = query.lower()
-    
     try:
-        with open(p, 'r', encoding='utf-8') as file:
-            # Process the file line by line
-            for i, line in enumerate(file, 1):
-                line_to_check = line.lower()
-                if search_query in line_to_check:
+        with open_source(file_path, "r") as handle:
+            for line_number, line in enumerate(handle, 1):
+                if search_query in line.lower():
                     matching_lines.append({
-                        "line_number": i,
-                        "content": line.strip()  # Remove trailing newlines
+                        "line_number": line_number,
+                        "content": line.strip(),
                     })
-                        
-    except Exception as e:
-        return tool_error(f"Error reading or searching file {file_path}: {e}")
+    except Exception as exc:  # noqa: BLE001
+        return tool_error(f"Error reading or searching file {file_path}: {exc}")
 
-    # Prepare basic metadata
-    metadata = {
-        "path": file_path,
-        "query": query,
-        "lines_found": len(matching_lines)
-    }
-    
-    result_data = {
-        "metadata": metadata,
-        "matching_lines": matching_lines
-    }
-    return tool_success("search_results", result_data)
-
-async def import_markdown_file(source_file: str, label_name: str, tool_context: ToolContext):
-    """Reads the content of a markdown file then creates a text node in Neo4j.
-    The node will only have two properties:
-    - content: the entire content of the markdown file
-
-    Args:
-      source_file: path to the markdown file, relative to the import directory
-      label_name: the label applied to the created node
-      tool_context: ToolContext object.
-
-    Returns:
-        dict: A dictionary indicating success or failure.
-              Includes a 'status' key ('success' or 'error').
-              If 'error', includes an 'error_message' key.
-    """
-    from agentic_kg.sub_agents.cypher_agent.tools import create_uniqueness_constraint, write_neo4j_cypher
-    
-    # 1. Ensure that a property constraint has been created for label/source_file
-    constraint_result = await create_uniqueness_constraint(label_name, "source_file")
-    if constraint_result["status"] == "error":
-        return constraint_result
-    
-    # 2. Read the content of the markdown
-    import_dir_result = get_neo4j_import_dir()
-    if import_dir_result["status"] == "error":
-        return import_dir_result
-    
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    file_path = import_dir / source_file
-    
-    if not file_path.exists():
-        return tool_error(f"Markdown file does not exist: {source_file}")
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as mdfile:
-            content = mdfile.read()
-    except Exception as e:
-        return tool_error(f"Error reading markdown file {source_file}: {e}")
-    
-    # 3. Create a node for the markdown using a parameterized cypher query
-    query = "MERGE (t:$($label_name) {source_file: $source_file}) SET t.content = $content"
-    properties = {
-        "label_name": label_name,
-        "source_file": source_file,
-        "content": content
-    }
-    return await write_neo4j_cypher(query, properties)
-    
+    return tool_success(SEARCH_RESULTS, {
+        "metadata": {
+            "path": file_path,
+            "query": query,
+            "lines_found": len(matching_lines),
+        },
+        "matching_lines": matching_lines,
+    })

@@ -200,17 +200,3 @@ def merge_singleton_node_into_graph(label_name:str, properties: Dict[str, Any], 
         "props": properties
     }
     return write_neo4j_cypher(query, properties)
-
-
-def get_neo4j_import_dir():
-    graphdb = get_graphdb() # grab the singleton instance
-    results = graphdb.send_query("""
-        Call dbms.listConfig() YIELD name, value
-        WHERE name CONTAINS 'directories.import'
-        RETURN value as import_dir
-        """)
-    if results["status"] == "success":
-        # results["records"] is a list of rows, take the first row's value for the import_dir field
-        return tool_success("neo4j_import_dir", results["records"][0]["import_dir"])
-    else:
-        return tool_error(results["error_message"])
