@@ -10,16 +10,6 @@ class agentic_kgSettings(BaseSettings):
     # Logging configuration
     loglevel: str = Field(default="INFO")
 
-    # LLM Provider configuration
-    openai_api_key: Optional[str] = Field(default=None)
-    google_api_key: Optional[str] = Field(default=None)
-    gemini_api_key: Optional[str] = Field(default=None)
-    anthropic_api_key: Optional[str] = Field(default=None)
-
-    # LLM Model configuration
-    llm_model: Optional[str] = Field(default="openai/gpt-4o")
-    llm_base_url: Optional[str] = Field(default=None)
-
     # Source file location (local path, bucket URL, or http(s) URL).
     # Relative local paths are anchored to the repository root, not the CWD.
     source_uri: Optional[str] = Field(default=None)

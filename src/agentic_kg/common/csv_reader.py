@@ -30,6 +30,10 @@ def _make_reader(handle, relative_path: str):
     # trivial samples rather than raising, so the except clause above does not
     # fire for those. Check the delimiter explicitly.
     if dialect is None or not getattr(dialect, "delimiter", ""):
+        logger.warning(
+            "Could not determine a CSV delimiter for %s (degenerate dialect); using default",
+            relative_path,
+        )
         return clevercsv.reader(handle)
     return clevercsv.reader(handle, dialect)
 

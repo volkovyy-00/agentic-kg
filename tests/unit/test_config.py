@@ -51,3 +51,18 @@ def test_validate_env_passes_with_a_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-realish")
     reset_settings()
     validate_env()
+
+
+def test_validate_env_warns_but_does_not_raise_without_source_uri(monkeypatch, caplog):
+    """A missing SOURCE_URI is a warning, not a ValueError: the OpenRouter key
+    is the one setting validate_env() must enforce hard, since file tools can
+    still report their own tool_error later and the coordinator may only want
+    to check readiness, not import files, in a given turn."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-realish")
+    monkeypatch.delenv("SOURCE_URI", raising=False)
+    reset_settings()
+
+    with caplog.at_level("WARNING"):
+        validate_env()
+
+    assert any("SOURCE_URI" in record.message for record in caplog.records)
