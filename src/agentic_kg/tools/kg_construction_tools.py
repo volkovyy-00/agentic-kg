@@ -10,6 +10,7 @@ labels plan as Merge instead of MergeUniqueNode, so they cannot use the
 uniqueness index and every row triggers an all-nodes scan.
 """
 import logging
+import re
 
 from google.adk.tools import ToolContext
 from typing import Any, Dict, List
@@ -31,11 +32,21 @@ class InvalidIdentifier(ValueError):
     """A label, relationship type or column name failed validation."""
 
 
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def _checked(kind: str, value: str) -> str:
-    """Validate an identifier destined for interpolation into Cypher."""
-    if not value or not is_symbol(value):
+    """Validate an identifier destined for interpolation into Cypher.
+
+    is_symbol() alone is not sufficient: it rejects only literal spaces and
+    exact keyword matches, so newlines, tabs, parentheses and braces pass it
+    and can escape the identifier position. Requiring a bare identifier is
+    what makes the interpolation safe.
+    """
+    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value) or not is_symbol(value):
         raise InvalidIdentifier(
-            f"Invalid {kind}: '{value}'. It cannot contain spaces or be a Cypher keyword."
+            f"Invalid {kind}: '{value}'. It must be a letter or underscore followed by "
+            f"letters, digits or underscores, and cannot be a Cypher keyword."
         )
     return value
 
@@ -80,6 +91,12 @@ def load_nodes_from_csv(
 
 def import_nodes(node_construction: dict) -> Dict[str, Any]:
     """Import nodes as defined by a node construction rule."""
+    try:
+        _checked("label", node_construction["label"])
+        _checked("column name", node_construction["unique_column_name"])
+    except InvalidIdentifier as exc:
+        return tool_error(str(exc))
+
     uniqueness_result = create_uniqueness_constraint(
         node_construction["label"],
         node_construction["unique_column_name"],

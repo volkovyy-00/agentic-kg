@@ -77,6 +77,59 @@ def test_relationship_columns_are_validated(fake_db, one_batch):
     assert fake_db.queries == []
 
 
+INJECTION_PAYLOAD = "Person)\nDETACH\nDELETE\nn\n//"
+
+
+def test_node_label_injection_payload_is_rejected_before_any_query(fake_db, one_batch):
+    """is_symbol() alone lets newline/paren payloads through; the identifier
+    regex in _checked() must catch what is_symbol() misses."""
+    result = kg.load_nodes_from_csv("people.csv", INJECTION_PAYLOAD, "id", ["name"])
+    assert result["status"] == "error"
+    assert fake_db.queries == []
+
+
+def test_node_column_injection_payload_is_rejected_before_any_query(fake_db, one_batch):
+    result = kg.load_nodes_from_csv("people.csv", "Person", INJECTION_PAYLOAD, ["name"])
+    assert result["status"] == "error"
+    assert fake_db.queries == []
+
+
+def test_relationship_type_injection_payload_is_rejected_before_any_query(fake_db, one_batch):
+    rule = {
+        "source_file": "knows.csv",
+        "relationship_type": INJECTION_PAYLOAD,
+        "from_node_label": "Person",
+        "from_node_column": "from_id",
+        "to_node_label": "Person",
+        "to_node_column": "to_id",
+        "properties": [],
+    }
+    result = kg.import_relationships(rule)
+    assert result["status"] == "error"
+    assert fake_db.queries == []
+
+
+def test_import_nodes_rejects_injection_payload_before_creating_constraint(fake_db, monkeypatch):
+    """import_nodes must validate before calling create_uniqueness_constraint,
+    which interpolates the same identifiers itself."""
+    constraint_calls = []
+    monkeypatch.setattr(
+        kg,
+        "create_uniqueness_constraint",
+        lambda label, column: constraint_calls.append((label, column)) or {"status": "success"},
+    )
+    rule = {
+        "label": INJECTION_PAYLOAD,
+        "unique_column_name": "id",
+        "source_file": "people.csv",
+        "properties": ["name"],
+    }
+    result = kg.import_nodes(rule)
+    assert result["status"] == "error"
+    assert constraint_calls == [], "create_uniqueness_constraint must not be reached"
+    assert fake_db.queries == []
+
+
 def test_batch_failure_reports_rows_committed(monkeypatch, one_batch):
     db = FakeGraphDb(responses=[{"status": "error", "error_message": "boom"}])
     monkeypatch.setattr(kg, "graphdb", db)
