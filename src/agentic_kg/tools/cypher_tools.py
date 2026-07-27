@@ -4,6 +4,7 @@ from google.adk.tools import ToolContext
 
 from neo4j_graphrag.schema import get_structured_schema
 
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
 from agentic_kg.common.neo4j_for_adk import get_graphdb, is_write_query, close_graphdb
 from agentic_kg.common.tool_result import tool_success, tool_error
 
@@ -136,14 +137,14 @@ def create_uniqueness_constraint(
         A dictionary with a status key ('success' or 'error').
         On error, includes an 'error_message' key.
     """
-    from agentic_kg.common.neo4j_for_adk import is_symbol
-
-    # Validate input to prevent injection attacks
-    if not is_symbol(label):
-        return tool_error(f"Invalid label: '{label}'. Labels cannot contain spaces or be Cypher keywords.")
-
-    if not is_symbol(unique_property_key):
-        return tool_error(f"Invalid property key: '{unique_property_key}'. Property keys cannot contain spaces or be Cypher keywords.")
+    # Validate input to prevent injection attacks. is_symbol() alone is not
+    # enough here: it only rejects literal spaces and exact keyword matches,
+    # so newlines/parens/braces would otherwise reach the f-string below.
+    try:
+        label = checked("label", label)
+        unique_property_key = checked("property key", unique_property_key)
+    except InvalidIdentifier as exc:
+        return tool_error(str(exc))
 
     # Use string formatting since Neo4j doesn't support parameterization of labels and property keys when creating a constraint
     constraint_name = f"{label}_{unique_property_key}_constraint"

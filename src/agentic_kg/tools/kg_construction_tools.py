@@ -5,19 +5,20 @@ asking Neo4j to read files itself. Aura forbids LOAD CSV FROM "file:///", and
 client-side reading works identically against a local instance.
 
 Labels and relationship types are interpolated into the query text after
-is_symbol() validation rather than passed as Cypher dynamic labels: dynamic
-labels plan as Merge instead of MergeUniqueNode, so they cannot use the
-uniqueness index and every row triggers an all-nodes scan.
+checked() validation (common/cypher_identifiers.py) rather than passed as
+Cypher dynamic labels: dynamic labels plan as Merge instead of
+MergeUniqueNode, so they cannot use the uniqueness index and every row
+triggers an all-nodes scan.
 """
 import logging
-import re
 
 from google.adk.tools import ToolContext
 from typing import Any, Dict, List
 
 from agentic_kg.common.csv_reader import read_csv_batches
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked as _checked
 from agentic_kg.common.file_source import SourceError
-from agentic_kg.common.neo4j_for_adk import get_graphdb, is_symbol
+from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
 
@@ -27,28 +28,17 @@ graphdb = get_graphdb()
 
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 
-
-class InvalidIdentifier(ValueError):
-    """A label, relationship type or column name failed validation."""
-
-
-_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-
-def _checked(kind: str, value: str) -> str:
-    """Validate an identifier destined for interpolation into Cypher.
-
-    is_symbol() alone is not sufficient: it rejects only literal spaces and
-    exact keyword matches, so newlines, tabs, parentheses and braces pass it
-    and can escape the identifier position. Requiring a bare identifier is
-    what makes the interpolation safe.
-    """
-    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value) or not is_symbol(value):
-        raise InvalidIdentifier(
-            f"Invalid {kind}: '{value}'. It must be a letter or underscore followed by "
-            f"letters, digits or underscores, and cannot be a Cypher keyword."
-        )
-    return value
+# Re-exported for backward compatibility: this module used to define its own
+# InvalidIdentifier/_checked; both now live in common/cypher_identifiers so
+# cypher_tools.create_uniqueness_constraint can share the same validation.
+__all__ = [
+    "InvalidIdentifier",
+    "load_nodes_from_csv",
+    "import_nodes",
+    "import_relationships",
+    "construct_domain_graph",
+    "build_graph_from_construction_rules",
+]
 
 
 def load_nodes_from_csv(
