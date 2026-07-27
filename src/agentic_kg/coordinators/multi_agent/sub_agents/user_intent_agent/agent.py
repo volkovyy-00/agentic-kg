@@ -1,6 +1,6 @@
 from google.adk.agents import Agent
 
-from agentic_kg.common.llm_catalog import get_llm
+from agentic_kg.common.llm_catalog import get_llm, LlmKind
 
 # variants are pairs of instructions with tools
 from .variants import variants
@@ -8,7 +8,7 @@ from .variants import variants
 AGENT_NAME = "user_intent_agent_v2"
 user_intent_agent = Agent(
         name=AGENT_NAME,
-        model=get_llm(),
+        model=get_llm(LlmKind.conversational),
         description="Knowledge graph use case ideation.", 
         instruction=variants[AGENT_NAME]["instruction"],
         tools=variants[AGENT_NAME]["tools"]

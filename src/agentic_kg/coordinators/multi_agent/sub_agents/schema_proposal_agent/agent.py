@@ -7,7 +7,7 @@ from google.adk.tools import agent_tool
 from typing import AsyncGenerator
 from google.adk.events import Event, EventActions
 
-from agentic_kg.common.llm_catalog import get_llm
+from agentic_kg.common.llm_catalog import get_llm, LlmKind
 from agentic_kg.tools.construction_plan_tools import (
     get_proposed_construction_plan, 
     approve_proposed_construction_plan,
@@ -28,7 +28,7 @@ AGENT_NAME = "schema_proposal_agent_v1"
 schema_proposal_agent = LlmAgent(
     name=AGENT_NAME,
     description="Proposes a knowledge graph schema based on the user goal and approved file list",
-    model=get_llm(),
+    model=get_llm(LlmKind.reasoning),
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"], 
     before_agent_callback=initialize_feedback
@@ -38,7 +38,7 @@ CRITIC_NAME = "schema_critic_agent_v1"
 schema_critic_agent = LlmAgent(
     name=CRITIC_NAME,
     description="Criticizes the proposed construction plan for relevance and correctness.",
-    model=get_llm(),
+    model=get_llm(LlmKind.reasoning),
     instruction=variants[CRITIC_NAME]["instruction"],
     tools=variants[CRITIC_NAME]["tools"], 
     output_key="feedback"
@@ -60,7 +60,7 @@ refinement_loop = LoopAgent(
 
 root_agent = LlmAgent(
     name="schema_proposal_agent_coordinator",
-    model=get_llm(),
+    model=get_llm(LlmKind.reasoning),
     instruction="""
     You are a coordinator for the graph construction plan process. Use tools to propose a schema to the user.
     If the user disapproves, use the tools to refine the schema and ask the user to approve again.
