@@ -59,6 +59,40 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(NODE_CONSTRUCTION, node_construction_rule)
 
+def propose_node_constructions(node_constructions: list[dict], tool_context:ToolContext) -> dict:
+    """Propose several node constructions at once, instead of one call per node.
+
+    Each entry is proposed with the same rules and the same validation as
+    'propose_node_construction'. Proposing stops at the first entry that fails, so
+    earlier entries stay in the plan and the error names the entry to correct.
+
+    Args:
+        node_constructions: a list of dictionaries, each with the keys
+            'approved_file', 'proposed_label', 'unique_column_name' and 'proposed_properties',
+            matching the arguments of 'propose_node_construction'
+
+    Returns:
+        dict: Includes a 'status' key ('success' or 'error').
+                If 'success', includes a "node_construction" key with the list of construction rules.
+                If 'error', includes an 'error_message' key naming the entry that failed.
+    """
+    proposed = []
+    for index, node_construction in enumerate(node_constructions):
+        result = propose_node_construction(
+            node_construction.get("approved_file"),
+            node_construction.get("proposed_label"),
+            node_construction.get("unique_column_name"),
+            node_construction.get("proposed_properties", []),
+            tool_context,
+        )
+        if result["status"] == "error":
+            return tool_error(
+                f"node construction {index} ({node_construction.get('proposed_label')}) failed: "
+                f"{result['error_message']}"
+            )
+        proposed.append(result[NODE_CONSTRUCTION])
+    return tool_success(NODE_CONSTRUCTION, proposed)
+
 # Tool: Remove Node Construction
 def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
     """Remove a node construction from the proposed construction plan based on label.
@@ -138,6 +172,45 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
     construction_plan[proposed_relationship_type] = relationship_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(RELATIONSHIP_CONSTRUCTION, relationship_construction_rule)
+
+def propose_relationship_constructions(relationship_constructions: list[dict], tool_context:ToolContext) -> dict:
+    """Propose several relationship constructions at once, instead of one call per relationship.
+
+    Each entry is proposed with the same rules and the same validation as
+    'propose_relationship_construction'. Proposing stops at the first entry that fails, so
+    earlier entries stay in the plan and the error names the entry to correct.
+
+    Args:
+        relationship_constructions: a list of dictionaries, each with the keys
+            'approved_file', 'proposed_relationship_type', 'from_node_label', 'from_node_column',
+            'to_node_label', 'to_node_column' and 'proposed_properties', matching the arguments
+            of 'propose_relationship_construction'
+
+    Returns:
+        dict: Includes a 'status' key ('success' or 'error').
+                If 'success', includes a "relationship_construction" key with the list of construction rules.
+                If 'error', includes an 'error_message' key naming the entry that failed.
+    """
+    proposed = []
+    for index, relationship_construction in enumerate(relationship_constructions):
+        result = propose_relationship_construction(
+            relationship_construction.get("approved_file"),
+            relationship_construction.get("proposed_relationship_type"),
+            relationship_construction.get("from_node_label"),
+            relationship_construction.get("from_node_column"),
+            relationship_construction.get("to_node_label"),
+            relationship_construction.get("to_node_column"),
+            relationship_construction.get("proposed_properties", []),
+            tool_context,
+        )
+        if result["status"] == "error":
+            return tool_error(
+                f"relationship construction {index} "
+                f"({relationship_construction.get('proposed_relationship_type')}) failed: "
+                f"{result['error_message']}"
+            )
+        proposed.append(result[RELATIONSHIP_CONSTRUCTION])
+    return tool_success(RELATIONSHIP_CONSTRUCTION, proposed)
 
 # Tool: Remove Relationship Construction
 def remove_relationship_construction(relationship_type: str, tool_context:ToolContext) -> dict:
@@ -226,8 +299,9 @@ def approve_proposed_construction_plan(tool_context:ToolContext) -> dict:
     """Approve the proposed construction plan, if it is internally consistent.
 
     Approval is refused when a relationship construction joins on a column the
-    referenced node does not carry, since such a plan cannot build the graph that
-    was described to the user no matter what was said in conversation.
+    referenced node does not carry, or names an endpoint label that has no node
+    construction in the plan, since such a plan cannot build the graph that was
+    described to the user no matter what was said in conversation.
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
     if not construction_plan:

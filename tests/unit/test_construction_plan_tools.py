@@ -169,6 +169,25 @@ def test_approve_records_a_consistent_plan(ctx):
     assert ctx.state[APPROVED_CONSTRUCTION_PLAN] == _consistent_plan()
 
 
+def test_approve_refuses_a_plan_whose_relationship_endpoint_has_no_node(ctx, any_column_exists):
+    """A dangling endpoint is refused, not just detected.
+
+    A live session showed a revision presenting a node list that omitted a label a
+    relationship still pointed at. Removing a node construction without removing the
+    relationships that reference it produces exactly that plan; it must never be
+    approvable, since the relationship would build zero edges.
+    """
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+    remove_node_construction("Assembly", ctx)
+
+    result = approve_proposed_construction_plan(ctx)
+
+    assert result["status"] == "error"
+    assert "Assembly" in result["error_message"]
+    assert "no node construction" in result["error_message"]
+    assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
 def test_approve_refuses_when_there_is_no_proposed_plan(ctx):
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "error"

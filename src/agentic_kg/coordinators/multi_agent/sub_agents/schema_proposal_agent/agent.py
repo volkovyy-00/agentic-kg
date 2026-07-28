@@ -6,6 +6,7 @@ from google.adk.tools import agent_tool
 
 from typing import AsyncGenerator
 from google.adk.events import Event, EventActions
+from google.genai import types
 
 from agentic_kg.common.llm_catalog import get_llm, LlmKind
 from agentic_kg.tools.construction_plan_tools import (
@@ -60,7 +61,23 @@ class CheckStatusAndEscalate(BaseAgent):
         text = str(feedback).strip()
         first_token = text.split(maxsplit=1)[0].strip(":.,").lower() if text else ""
         should_stop = first_token == "valid"
-        yield Event(author=self.name, actions=EventActions(escalate=should_stop))
+        # This event's text is what the coordinator's AgentTool call returns:
+        # AgentTool takes the text of the *last* event of the wrapped agent's
+        # run, and StopChecker always runs last in the loop. When this event
+        # carried no content the tool returned "", which coordinator models
+        # read as "the tool failed / returned no results" and invented
+        # fallbacks instead of reading the plan. Always surface the critic's
+        # verdict here so the tool result is never empty.
+        summary = (
+            f"Refinement loop finished. Critic verdict: {text}"
+            if text
+            else "Refinement loop finished with no critic feedback."
+        )
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=summary)]),
+            actions=EventActions(escalate=should_stop),
+        )
 
 refinement_loop = LoopAgent(
     name="schema_refinement_loop",
@@ -92,11 +109,16 @@ root_agent = LlmAgent(
       unique_column_name, from/to node labels and columns, and properties. If your description and the
       tool result differ on any field, the tool result is correct and yours is wrong.
     - After calling 'schema_refinement_loop', do not assume the requested change was made, and do not
-      report it as made. The loop returns no summary. Call 'get_proposed_construction_plan' and compare
+      report it as made. The loop returns only the critic's final verdict ('valid' or 'retry' plus
+      feedback), never the plan itself and never raw tool output such as column statistics — a verdict
+      is not evidence of what the plan says. Call 'get_proposed_construction_plan' and compare
       the result against what the user asked for. If the change is missing, or if something the user
       previously approved has changed back or otherwise drifted, say so plainly and run the loop again
       with feedback naming both the requested change and the regression — do not present the plan as if
       it were correct.
+    - If the verdict the loop returns begins with 'retry', the critic found problems that are still in
+      the plan: call 'schema_refinement_loop' again, passing that retry feedback, instead of presenting a
+      plan with known problems for approval.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.
@@ -105,7 +127,8 @@ root_agent = LlmAgent(
     - Present the proposed construction plan to the user for approval, following the rules above
     - If they disapprove, pass their feedback to the 'schema_refinement_loop' tool and go back to step 1
     - If the user approves, use the 'approve_proposed_construction_plan' tool to record the approval.
-      This tool refuses plans whose relationships join on columns their nodes do not carry. If it returns
+      This tool refuses plans whose relationships join on columns their nodes do not carry, or whose
+      relationships reference a node label that has no node construction in the plan. If it returns
       an error, the schema is NOT approved: report the error to the user verbatim, run
       'schema_refinement_loop' with that error as feedback, and present the corrected plan for approval
       again. Never tell the user the schema is approved unless that tool returned success.
