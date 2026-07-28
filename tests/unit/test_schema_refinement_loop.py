@@ -65,3 +65,22 @@ def test_event_carries_the_critic_verdict_as_text():
 def test_event_text_is_non_empty_even_without_feedback():
     events = _run("")
     assert _event_text(events[0])
+
+
+@pytest.mark.parametrize("feedback", [
+    "retry\n- Component identifier is not unique",
+    "Validation failed: bad join key",
+])
+def test_a_retry_result_begins_with_its_verdict(feedback):
+    """The coordinator is instructed to re-run the loop when the result begins
+    with 'retry'. Any preamble ahead of the verdict makes that test false for
+    every result the loop can return, so a retry reads as a finished plan."""
+    text = _event_text(_run(feedback)[0])
+    assert text.split(maxsplit=1)[0].strip(":.,").lower() in ("retry", "validation")
+    assert not text.lower().startswith("refinement loop")
+
+
+def test_a_missing_verdict_reads_as_retry_not_as_valid():
+    """should_stop is False in that case; the text must not say otherwise."""
+    text = _event_text(_run("")[0])
+    assert text.lower().startswith("retry")

@@ -68,11 +68,13 @@ class CheckStatusAndEscalate(BaseAgent):
         # read as "the tool failed / returned no results" and invented
         # fallbacks instead of reading the plan. Always surface the critic's
         # verdict here so the tool result is never empty.
-        summary = (
-            f"Refinement loop finished. Critic verdict: {text}"
-            if text
-            else "Refinement loop finished with no critic feedback."
-        )
+        # The coordinator's instructions route on whether this result *begins*
+        # with 'retry', so the verdict has to be the first thing in it. Any
+        # preamble ("Refinement loop finished. Critic verdict: ...") would make
+        # that test false for every result the loop can return. When there is
+        # no verdict at all, should_stop is already False, so say retry rather
+        # than leaving the text and the escalate flag disagreeing.
+        summary = text if text else "retry: the critic produced no verdict."
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=summary)]),
