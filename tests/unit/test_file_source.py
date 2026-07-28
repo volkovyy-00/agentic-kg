@@ -106,3 +106,38 @@ def test_uninstalled_scheme_raises_source_error(monkeypatch):
     reset_settings()
     with pytest.raises(file_source.SourceError, match="s3"):
         file_source.get_source_fs()
+
+
+# Source names outside the root
+
+def test_parent_traversal_is_rejected(memory_source):
+    """A construction plan is LLM-produced, so a name like "../.env" would
+    otherwise read the developer's OpenRouter key and Neo4j password straight
+    back into the model's context."""
+    with pytest.raises(file_source.SourceError, match="leave the source root"):
+        file_source.source_path("../secret.env")
+
+
+def test_traversal_in_the_middle_of_a_name_is_rejected(memory_source):
+    with pytest.raises(file_source.SourceError, match="leave the source root"):
+        file_source.source_path("nested/../../secret.env")
+
+
+def test_absolute_names_are_rejected(memory_source):
+    with pytest.raises(file_source.SourceError, match="relative to the source root"):
+        file_source.source_path("/etc/passwd")
+
+
+def test_names_with_a_scheme_are_rejected(memory_source):
+    with pytest.raises(file_source.SourceError, match="cannot name a location"):
+        file_source.source_path("file:///etc/passwd")
+
+
+def test_a_dot_in_a_name_is_still_allowed(memory_source):
+    """Only a whole ".." segment escapes; ordinary dotted names must still work."""
+    assert file_source.source_path("nested/deep.md") == "/src/nested/deep.md"
+
+
+def test_source_exists_reports_traversal_as_an_error_not_a_hit(memory_source):
+    with pytest.raises(file_source.SourceError):
+        file_source.source_exists("../top.csv")

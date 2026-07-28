@@ -17,7 +17,7 @@ DEFAULT_BATCH_SIZE = 1000
 _SNIFF_BYTES = 2048
 
 
-def _make_reader(handle, relative_path: str):
+def make_csv_reader(handle, relative_path: str):
     """Build a clevercsv reader, sniffing the dialect where possible."""
     sample = handle.read(_SNIFF_BYTES)
     handle.seek(0)
@@ -55,7 +55,7 @@ def read_csv_batches(
         (header, rows) where rows is a list of dicts of column name to string
     """
     with open_source(relative_path, "r") as handle:
-        reader = _make_reader(handle, relative_path)
+        reader = make_csv_reader(handle, relative_path)
         header = next(reader, [])
         if not header:
             return

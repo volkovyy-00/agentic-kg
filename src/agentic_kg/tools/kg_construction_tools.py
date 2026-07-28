@@ -59,9 +59,21 @@ def load_nodes_from_csv(
     FOREACH (k IN $properties | SET n[k] = row[k])
     """
 
+    # A key column missing from the header is not caught by the database:
+    # row[$unique_column_name] is then null for every row, and MERGE happily
+    # collapses the whole file onto a single null-keyed node. That reports
+    # success, so check the header before sending anything.
     rows_committed = 0
+    header_checked = False
     try:
-        for _header, batch in read_csv_batches(source_file):
+        for header, batch in read_csv_batches(source_file):
+            if not header_checked:
+                if unique_column_name not in header:
+                    return tool_error(
+                        f"{source_file} has no column '{unique_column_name}' to key {label} "
+                        f"nodes by, so nothing was loaded. Available columns: {header}"
+                    )
+                header_checked = True
             result = graphdb.send_query(query, {
                 "rows": batch,
                 "unique_column_name": unique_column_name,
@@ -129,10 +141,26 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # created: MERGE binds r on every matched row whether it created the
     # relationship or found an existing one. That is deliberately what we want
     # to report — a correct re-run then reports the same count instead of zero.
+    #
+    # A join column missing from the header makes row[$..._node_column] null,
+    # which matches no node and silently produces zero relationships rather
+    # than an error. Check the header before sending anything.
     rows_committed = 0
     rows_matched = 0
+    header_checked = False
     try:
-        for _header, batch in read_csv_batches(source_file):
+        for header, batch in read_csv_batches(source_file):
+            if not header_checked:
+                missing = [
+                    column for column in (from_column, to_column) if column not in header
+                ]
+                if missing:
+                    return tool_error(
+                        f"{source_file} has no column {' or '.join(repr(c) for c in missing)} "
+                        f"to join {relationship_type} on, so nothing was loaded. "
+                        f"Available columns: {header}"
+                    )
+                header_checked = True
             result = graphdb.send_query(query, {
                 "rows": batch,
                 "from_node_column": from_column,

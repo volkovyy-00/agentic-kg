@@ -297,3 +297,51 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     result = kg.construct_domain_graph(plan)
     assert result["status"] == "success"
     assert result["warnings"] == ["only 0 of 88 rows matched both endpoints"]
+
+
+# Header validation before any query is sent
+
+def test_missing_key_column_is_rejected_before_any_query(fake_db, one_batch):
+    """row[$unique_column_name] is null when the column is absent, and MERGE
+    then collapses the whole file onto one null-keyed node and reports success.
+    Nothing may be sent in that case."""
+    result = kg.load_nodes_from_csv("people.csv", "Person", "employee_id", ["name"])
+    assert result["status"] == "error"
+    assert "employee_id" in result["error_message"]
+    assert "id" in result["error_message"]  # lists what is actually available
+    assert fake_db.queries == []
+
+
+def test_missing_join_column_is_rejected_before_any_query(fake_db, one_batch):
+    """A null join value matches no node, so the load silently builds zero
+    relationships instead of failing."""
+    rule = {
+        "source_file": "knows.csv",
+        "relationship_type": "KNOWS",
+        "from_node_label": "Person",
+        "from_node_column": "id",
+        "to_node_label": "Person",
+        "to_node_column": "friend_id",
+        "properties": [],
+    }
+    result = kg.import_relationships(rule)
+    assert result["status"] == "error"
+    assert "friend_id" in result["error_message"]
+    assert fake_db.queries == []
+
+
+def test_present_columns_still_load(fake_db, one_batch):
+    result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
+    assert result["status"] == "success"
+    assert len(fake_db.queries) == 1
+
+
+def test_header_is_only_checked_once(fake_db, monkeypatch):
+    """The check must not re-run per batch, and must not stop a valid load."""
+    def two_batches(relative_path, batch_size=1000):
+        yield ["id", "name"], [{"id": "1", "name": "Ada"}]
+        yield ["id", "name"], [{"id": "2", "name": "Grace"}]
+    monkeypatch.setattr(kg, "read_csv_batches", two_batches)
+    result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
+    assert result["status"] == "success"
+    assert len(fake_db.queries) == 2

@@ -10,7 +10,7 @@ folder still works when the same files move elsewhere. This module is the one
 place that knows the difference.
 """
 import logging
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Tuple
 
 from fsspec import AbstractFileSystem
@@ -73,10 +73,46 @@ def get_source_root() -> str:
     return root
 
 
+def _checked_relative(relative_path: str) -> str:
+    """Reject any name that would resolve outside the source root.
+
+    Source names reach here from an LLM-proposed construction plan or from a
+    tool argument the model chose, not only from list_source_files(). Joining
+    such a name unchecked means "../.env" reads the developer's OpenRouter key
+    and Neo4j password on the local filesystem and returns them into the
+    model's context.
+
+    Raises:
+        SourceError: if the name is absolute, carries a scheme, or contains a
+            ".." segment.
+    """
+    if not isinstance(relative_path, str) or not relative_path:
+        raise SourceError(f"Not a usable source file name: {relative_path!r}")
+    if "://" in relative_path:
+        raise SourceError(
+            f"Source file names are relative to the source root, so '{relative_path}' "
+            "cannot name a location of its own."
+        )
+    normalised = relative_path.replace("\\", "/")
+    if normalised.startswith("/") or PureWindowsPath(relative_path).is_absolute():
+        raise SourceError(
+            f"Source file names must be relative to the source root: '{relative_path}'"
+        )
+    if any(part == ".." for part in normalised.split("/")):
+        raise SourceError(
+            f"Source file names cannot leave the source root: '{relative_path}'"
+        )
+    return normalised
+
+
 def source_path(relative_path: str) -> str:
-    """Return the filesystem-native absolute path for a relative name."""
+    """Return the filesystem-native absolute path for a relative name.
+
+    Raises:
+        SourceError: if the name would resolve outside the source root.
+    """
     _fs, root = get_source_fs()
-    return f"{root}/{relative_path}"
+    return f"{root}/{_checked_relative(relative_path)}"
 
 
 def list_source_files() -> list[str]:

@@ -1,12 +1,11 @@
 import logging
 
-import clevercsv
 from itertools import islice
 
 from google.adk.tools import ToolContext
 from typing import Dict, Any, List
 
-from agentic_kg.common.csv_reader import read_csv_batches
+from agentic_kg.common.csv_reader import make_csv_reader, read_csv_batches
 from agentic_kg.common.tool_result import tool_success, tool_error
 from agentic_kg.common.file_source import (
     SourceError,
@@ -148,31 +147,15 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
         # Handle empty query - return no results
         if not query:
             with open_source(file_path, "r") as csvfile:
-                try:
-                    # Just read enough to get the header
-                    dialect = clevercsv.Sniffer().sniff(csvfile.read(2048))
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile, dialect)
-                except clevercsv.Error:
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile)
+                reader = make_csv_reader(csvfile, file_path)
                 header_row = next(reader, [])
                 # Empty query returns no matches, but we still read the header
         else:
             with open_source(file_path, "r") as csvfile:
-                try:
-                    # Read a chunk to sniff dialect, then rewind
-                    dialect = clevercsv.Sniffer().sniff(csvfile.read(2048))
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile, dialect)
-                except clevercsv.Error:
-                    # Fallback if sniffing fails (e.g., empty or very small file, or not CSV)
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile) # Use default dialect
-                    logger.warning(f"Could not sniff CSV dialect for {file_path}. Using default dialect.")
-                
+                reader = make_csv_reader(csvfile, file_path)
+
                 header_row = next(reader, []) # Store header, or empty list if file is empty
-                
+
                 for row in reader:
                     for field in row:
                         field_to_check = str(field) if case_sensitive else str(field).lower()
@@ -199,9 +182,12 @@ def _collect_column_values(file_path: str, column: str):
     """Read every value of one column from a source CSV.
 
     Returns:
-        (values, error) where values is the list of raw string values (missing
-        cells omitted, matching read_csv_batches' behaviour) and error is a
+        (values, error) where values holds one entry per data row and error is a
         tool_error dict when the file or column cannot be read.
+
+    read_csv_batches omits the key entirely for a row shorter than the header, so
+    a ragged row contributes "" here rather than being skipped. That keeps one
+    value per row, which is what column_stats' row_count and empty_count report.
     """
     try:
         if not source_exists(file_path):
