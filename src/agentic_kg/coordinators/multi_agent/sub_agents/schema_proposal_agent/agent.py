@@ -68,13 +68,16 @@ class CheckStatusAndEscalate(BaseAgent):
         # read as "the tool failed / returned no results" and invented
         # fallbacks instead of reading the plan. Always surface the critic's
         # verdict here so the tool result is never empty.
-        # The coordinator's instructions route on whether this result *begins*
-        # with 'retry', so the verdict has to be the first thing in it. Any
-        # preamble ("Refinement loop finished. Critic verdict: ...") would make
-        # that test false for every result the loop can return. When there is
-        # no verdict at all, should_stop is already False, so say retry rather
-        # than leaving the text and the escalate flag disagreeing.
-        summary = text if text else "retry: the critic produced no verdict."
+        # The coordinator routes on whether this result *begins* with 'retry',
+        # so the verdict has to come first: any preamble would make that test
+        # false for every result the loop can return. An absent verdict means
+        # the critic did not answer, not that it found problems, so point the
+        # coordinator at the plan rather than at another blind re-run.
+        summary = text if text else (
+            "retry: the critic produced no verdict. Call "
+            "'get_proposed_construction_plan' and judge the plan yourself rather "
+            "than running the loop again on no feedback."
+        )
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=summary)]),
@@ -120,7 +123,11 @@ root_agent = LlmAgent(
       it were correct.
     - If the verdict the loop returns begins with 'retry', the critic found problems that are still in
       the plan: call 'schema_refinement_loop' again, passing that retry feedback, instead of presenting a
-      plan with known problems for approval.
+      plan with known problems for approval. Do this at most once for a given problem. If the loop
+      returns 'retry' a second time, stop calling it: some objections cannot be fixed by changing the
+      schema, because they are properties of the data. Call 'get_proposed_construction_plan', show the
+      user that plan together with the critic's remaining objections, and let them decide whether to
+      approve it as it stands.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.
