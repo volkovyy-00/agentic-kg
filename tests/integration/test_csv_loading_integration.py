@@ -129,3 +129,48 @@ def test_loading_twice_is_idempotent(neo4j_graph, monkeypatch):
     second = neo4j_graph.send_query("MATCH (n) RETURN count(n) AS c")["records"][0]["c"]
 
     assert first == second, "MERGE should update rather than duplicate"
+
+
+def test_a_row_without_a_column_does_not_erase_what_an_earlier_row_loaded(
+        neo4j_graph, monkeypatch):
+    """SET n[k] = null removes a property rather than skipping it.
+
+    read_csv_batches omits the key for a row shorter than the header, so before
+    the properties list was filtered, a ragged row -- or a re-run against a file
+    that had lost a column -- silently erased values an earlier row had loaded,
+    and which value survived depended on row order.
+    """
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def two_rows(relative_path, batch_size=1000):
+        # Second row is ragged: same entity, "city" absent entirely.
+        yield ["id", "name", "city"], [
+            {"id": "1", "name": "Ada", "city": "London"},
+            {"id": "1", "name": "Ada"},
+        ]
+
+    monkeypatch.setattr(kg, "read_csv_batches", two_rows)
+    result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name", "city"])
+    assert result["status"] == "success", result.get("error_message")
+
+    kept = neo4j_graph.send_query(
+        "MATCH (n:Person {id:'1'}) RETURN n.city AS city")["records"][0]["city"]
+    assert kept == "London"
+
+
+def test_an_empty_cell_is_still_stored(neo4j_graph, monkeypatch):
+    """Only an absent key is skipped. An empty string is a value the CSV
+    actually carried, so it must still reach the graph."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def one_row(relative_path, batch_size=1000):
+        yield ["id", "city"], [{"id": "2", "city": ""}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", one_row)
+    assert kg.load_nodes_from_csv("people.csv", "Person", "id", ["city"])["status"] == "success"
+
+    city = neo4j_graph.send_query(
+        "MATCH (n:Person {id:'2'}) RETURN n.city AS city")["records"][0]["city"]
+    assert city == ""

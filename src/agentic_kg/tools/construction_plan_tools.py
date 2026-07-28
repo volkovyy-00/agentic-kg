@@ -76,8 +76,11 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
         "source_file": approved_file,
         "label": proposed_label,
         "unique_column_name": unique_column_name,
-        "properties": proposed_properties
-    }   
+        # A model may send a JSON null here rather than omitting the field. That
+        # reaches Cypher as FOREACH (k IN null | ...), which is a silent no-op:
+        # the nodes load with no properties at all and nothing reports a problem.
+        "properties": proposed_properties or []
+    }
     construction_plan[proposed_label] = node_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(NODE_CONSTRUCTION, node_construction_rule)
@@ -204,8 +207,9 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
         "from_node_column": from_node_column,
         "to_node_label": to_node_label,
         "to_node_column": to_node_column,
-        "properties": proposed_properties
-    }   
+        # See propose_node_construction: a null reaches Cypher as a silent no-op.
+        "properties": proposed_properties or []
+    }
     construction_plan[proposed_relationship_type] = relationship_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(RELATIONSHIP_CONSTRUCTION, relationship_construction_rule)

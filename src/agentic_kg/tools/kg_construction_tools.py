@@ -54,9 +54,14 @@ def load_nodes_from_csv(
     except InvalidIdentifier as exc:
         return tool_error(str(exc))
 
+    # Only set properties the row actually carries. read_csv_batches omits the
+    # key for a row shorter than the header, and SET n[k] = null *removes* the
+    # property rather than skipping it -- so a ragged row, or a re-run against a
+    # file that lost a column, silently erased values an earlier row had loaded,
+    # with the result depending on which row came last.
     query = f"""UNWIND $rows AS row
     MERGE (n:{label} {{ {unique_column_name} : row[$unique_column_name] }})
-    FOREACH (k IN $properties | SET n[k] = row[k])
+    FOREACH (k IN [p IN $properties WHERE row[p] IS NOT NULL] | SET n[k] = row[k])
     """
 
     # The database does catch a key column missing from the header: MERGE on a
@@ -135,7 +140,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     MATCH (from_node:{from_label} {{ {from_column} : row[$from_node_column] }}),
           (to_node:{to_label} {{ {to_column} : row[$to_node_column] }})
     MERGE (from_node)-[r:{relationship_type}]->(to_node)
-    FOREACH (k IN $properties | SET r[k] = row[k])
+    FOREACH (k IN [p IN $properties WHERE row[p] IS NOT NULL] | SET r[k] = row[k])
     RETURN count(r) AS rows_matched
     """
 

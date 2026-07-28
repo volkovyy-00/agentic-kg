@@ -339,3 +339,15 @@ def test_relationship_construction_without_endpoints_is_refused(ctx, any_column_
     for field in ("from_node_column", "to_node_label", "to_node_column"):
         assert field in result["error_message"]
     assert ctx.state.get(PROPOSED_CONSTRUCTION_PLAN, {}) == {}
+
+
+def test_null_properties_are_stored_as_an_empty_list(ctx, any_column_exists):
+    """A model may send JSON null rather than omitting the field. That reaches
+    Cypher as FOREACH (k IN null | ...), a silent no-op that loads the nodes
+    with no properties at all and reports success."""
+    propose_node_construction("products.csv", "Product", "product_id", None, ctx)
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["properties"] == []
+
+    propose_relationship_construction(
+        "products.csv", "HAS_PART", "Product", "product_id", "Part", "part_id", None, ctx)
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["HAS_PART"]["properties"] == []
