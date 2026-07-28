@@ -123,6 +123,14 @@ def test_traversal_in_the_middle_of_a_name_is_rejected(memory_source):
         file_source.source_path("nested/../../secret.env")
 
 
+def test_windows_style_traversal_is_rejected(memory_source):
+    """Backslashes are normalised before the checks precisely so these are
+    caught. Only the returned name keeps its original form."""
+    for name in ("..\\secret.env", "nested\\..\\..\\secret.env"):
+        with pytest.raises(file_source.SourceError, match="leave the source root"):
+            file_source.source_path(name)
+
+
 def test_absolute_names_are_rejected(memory_source):
     with pytest.raises(file_source.SourceError, match="relative to the source root"):
         file_source.source_path("/etc/passwd")

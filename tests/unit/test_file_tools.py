@@ -231,3 +231,28 @@ def test_suggesting_real_files_still_works(memory_source):
     result = file_tools.set_suggested_files(["people.csv", "notes/readme.md"], context)
     assert result["status"] == "success"
     assert context.state[file_tools.SUGGESTED_FILES] == ["people.csv", "notes/readme.md"]
+
+
+def test_a_leading_dot_slash_is_accepted_and_normalised(memory_source):
+    """source_exists() treats "./people.csv" and "people.csv" as the same file,
+    so refusing it here would make two stages disagree. What is stored must
+    match what list_import_files returns."""
+    context = FakeToolContext()
+    result = file_tools.set_suggested_files(["./people.csv"], context)
+    assert result["status"] == "success"
+    assert context.state[file_tools.SUGGESTED_FILES] == ["people.csv"]
+
+
+def test_a_non_string_entry_is_reported_not_raised(memory_source):
+    """An ADK tool must return a tool_error rather than raise into the runner."""
+    context = FakeToolContext()
+    result = file_tools.set_suggested_files([None], context)
+    assert result["status"] == "error"
+    assert file_tools.SUGGESTED_FILES not in context.state
+
+
+def test_a_bare_string_is_not_treated_as_a_list_of_characters(memory_source):
+    context = FakeToolContext()
+    result = file_tools.set_suggested_files("people.csv", context)
+    assert result["status"] == "error"
+    assert file_tools.SUGGESTED_FILES not in context.state

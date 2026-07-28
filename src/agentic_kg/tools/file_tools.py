@@ -42,15 +42,25 @@ def list_import_files(tool_context: ToolContext) -> dict:
 def set_suggested_files(suggest_files:List[str], tool_context:ToolContext) -> Dict[str, Any]:
     """Set the files to be used for data import.
 
-    Every name must be one the source location actually holds. The list is
-    chosen by an LLM, so a plausible-looking name that is not there would
-    otherwise be stored and approved, and only fail later when the schema
-    agent tried to read it -- an agent hop away from the mistake.
+    Args:
+        suggest_files: a list of file names, exactly as 'list_import_files' returned them
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'suggested_file_list'
+              key with the names that were set. On error, an 'error_message' key.
     """
-    if not suggest_files:
+    # The list is chosen by a model, so a plausible name the source does not
+    # hold would otherwise be stored, approved, and fail only when the schema
+    # agent tried to read it -- an agent hop away from the mistake.
+    if not isinstance(suggest_files, list) or not suggest_files:
         return tool_error(
-            "No files were suggested. Call 'list_import_files' and choose from the "
-            "names it returns."
+            "No files were suggested. Call 'list_import_files' and pass a list of "
+            "the names it returns."
+        )
+
+    if not all(isinstance(name, str) for name in suggest_files):
+        return tool_error(
+            "Every suggested file must be a name returned by 'list_import_files'."
         )
 
     try:
