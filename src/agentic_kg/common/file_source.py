@@ -105,6 +105,11 @@ def _checked_relative(relative_path: str) -> str:
     return normalised
 
 
+def _full_path(root: str, relative_path: str) -> str:
+    """Join a checked relative name onto an already-resolved root."""
+    return f"{root}/{_checked_relative(relative_path)}"
+
+
 def source_path(relative_path: str) -> str:
     """Return the filesystem-native absolute path for a relative name.
 
@@ -112,7 +117,7 @@ def source_path(relative_path: str) -> str:
         SourceError: if the name would resolve outside the source root.
     """
     _fs, root = get_source_fs()
-    return f"{root}/{_checked_relative(relative_path)}"
+    return _full_path(root, relative_path)
 
 
 def list_source_files() -> list[str]:
@@ -130,8 +135,8 @@ def list_source_files() -> list[str]:
 
 def source_exists(relative_path: str) -> bool:
     """Whether a file exists at the given relative name."""
-    fs, _root = get_source_fs()
-    return bool(fs.exists(source_path(relative_path)))
+    fs, root = get_source_fs()
+    return bool(fs.exists(_full_path(root, relative_path)))
 
 
 def open_source(relative_path: str, mode: str = "r", **kwargs: Any):
@@ -143,8 +148,8 @@ def open_source(relative_path: str, mode: str = "r", **kwargs: Any):
         FileNotFoundError: if the file does not exist.
         SourceError: if the source location is misconfigured.
     """
-    fs, _root = get_source_fs()
-    full_path = source_path(relative_path)
+    fs, root = get_source_fs()
+    full_path = _full_path(root, relative_path)
     if not fs.exists(full_path):
         raise FileNotFoundError(f"No such source file: {relative_path}")
     if "b" not in mode:

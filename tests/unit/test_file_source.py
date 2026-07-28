@@ -141,3 +141,28 @@ def test_a_dot_in_a_name_is_still_allowed(memory_source):
 def test_source_exists_reports_traversal_as_an_error_not_a_hit(memory_source):
     with pytest.raises(file_source.SourceError):
         file_source.source_exists("../top.csv")
+
+
+def test_existence_check_resolves_the_filesystem_once(memory_source, monkeypatch):
+    """source_exists() and open_source() build the path from the root they
+    already hold, rather than calling source_path() and resolving again."""
+    calls = []
+    real = file_source.get_source_fs
+
+    def counting():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(file_source, "get_source_fs", counting)
+    file_source.source_exists("top.csv")
+    assert len(calls) == 1
+    calls.clear()
+    with file_source.open_source("top.csv"):
+        pass
+    assert len(calls) == 1
+
+
+def test_traversal_is_still_rejected_through_open_source(memory_source):
+    """The single-resolution path must keep the confinement check."""
+    with pytest.raises(file_source.SourceError, match="leave the source root"):
+        file_source.open_source("../top.csv")

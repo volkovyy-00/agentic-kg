@@ -15,6 +15,18 @@ APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 
 NODE_CONSTRUCTION = "node_construction"
 
+
+def _missing_values(**fields) -> list[str]:
+    """Names of the given fields that are absent or empty.
+
+    A construction is assembled from an LLM-produced argument list, so a field
+    can simply not arrive. Without this, an absent label is stored as a plan
+    entry keyed None with "label": None, which check_construction_plan_consistency
+    accepts and which only fails much later at import time.
+    """
+    return [name for name, value in fields.items() if not value]
+
+
 def propose_node_construction(approved_file: str, proposed_label: str, unique_column_name: str, proposed_properties: list[str], tool_context:ToolContext) -> dict:
     """Propose a node construction for an approved file that supports the user goal.
 
@@ -39,6 +51,17 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
                 If 'error', includes an 'error_message' key.
                 The 'error_message' may have instructions about how to handle the error.
     """
+    missing = _missing_values(
+        approved_file=approved_file,
+        proposed_label=proposed_label,
+        unique_column_name=unique_column_name,
+    )
+    if missing:
+        return tool_error(
+            f"missing required values: {', '.join(missing)}. "
+            "Supply every one of them and propose the node again."
+        )
+
     # quick sanity check -- does the approved file have the unique column?
     search_results = search_file(approved_file, unique_column_name)
     if search_results["status"] == "error":
@@ -146,6 +169,20 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
                 If 'error', includes an 'error_message' key.
                 The 'error_message' may have instructions about how to handle the error.
     """
+    missing = _missing_values(
+        approved_file=approved_file,
+        proposed_relationship_type=proposed_relationship_type,
+        from_node_label=from_node_label,
+        from_node_column=from_node_column,
+        to_node_label=to_node_label,
+        to_node_column=to_node_column,
+    )
+    if missing:
+        return tool_error(
+            f"missing required values: {', '.join(missing)}. "
+            "Supply every one of them and propose the relationship again."
+        )
+
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
     if search_results["status"] == "error": 

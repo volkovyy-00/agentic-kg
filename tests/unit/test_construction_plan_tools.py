@@ -307,3 +307,35 @@ def test_approve_refuses_when_there_is_no_proposed_plan(ctx):
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "error"
     assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+# Required values must be present
+
+def test_node_construction_without_a_label_is_refused(ctx, any_column_exists):
+    """An absent label used to be stored as a plan entry keyed None with
+    "label": None, which check_construction_plan_consistency accepts and which
+    only surfaces much later at import time."""
+    result = propose_node_constructions(
+        [{"approved_file": "products.csv", "unique_column_name": "product_id"}], ctx)
+    assert result["status"] == "error"
+    assert "proposed_label" in result["error_message"]
+    assert ctx.state.get(PROPOSED_CONSTRUCTION_PLAN, {}) == {}
+
+
+def test_node_construction_names_every_missing_value(ctx, any_column_exists):
+    result = propose_node_constructions([{"proposed_properties": []}], ctx)
+    assert result["status"] == "error"
+    for field in ("approved_file", "proposed_label", "unique_column_name"):
+        assert field in result["error_message"]
+
+
+def test_relationship_construction_without_endpoints_is_refused(ctx, any_column_exists):
+    result = propose_relationship_constructions([{
+        "approved_file": "products.csv",
+        "proposed_relationship_type": "HAS_PART",
+        "from_node_label": "Product",
+    }], ctx)
+    assert result["status"] == "error"
+    for field in ("from_node_column", "to_node_label", "to_node_column"):
+        assert field in result["error_message"]
+    assert ctx.state.get(PROPOSED_CONSTRUCTION_PLAN, {}) == {}
