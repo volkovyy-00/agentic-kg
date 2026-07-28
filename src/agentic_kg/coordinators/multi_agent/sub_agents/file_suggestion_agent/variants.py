@@ -37,7 +37,7 @@ variants = {
                 - if the get_approved_user_goal tool returns an error, delegate to another agent using the 'finished' tool
 
                 Think carefully, repeating these steps until finished:
-                1. list available files using the 'list_available_files' tool
+                1. list available files using the 'list_import_files' tool
                 2. evaluate the relevance of each file, then record the list of suggested files using the 'set_suggested_files' tool
                 3. use the 'get_suggested_files' tool to get the list of suggested files
                 4. ask the user to approve the set of suggested files

@@ -302,9 +302,10 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
 # Header validation before any query is sent
 
 def test_missing_key_column_is_rejected_before_any_query(fake_db, one_batch):
-    """row[$unique_column_name] is null when the column is absent, and MERGE
-    then collapses the whole file onto one null-keyed node and reports success.
-    Nothing may be sent in that case."""
+    """Neo4j does reject a null MERGE key, but only once the batch has been
+    sent, and its message names the property alone. Failing here instead names
+    the file and the columns it has, which is what an agent needs to correct
+    the plan."""
     result = kg.load_nodes_from_csv("people.csv", "Person", "employee_id", ["name"])
     assert result["status"] == "error"
     assert "employee_id" in result["error_message"]

@@ -59,10 +59,12 @@ def load_nodes_from_csv(
     FOREACH (k IN $properties | SET n[k] = row[k])
     """
 
-    # A key column missing from the header is not caught by the database:
-    # row[$unique_column_name] is then null for every row, and MERGE happily
-    # collapses the whole file onto a single null-keyed node. That reports
-    # success, so check the header before sending anything.
+    # The database does catch a key column missing from the header: MERGE on a
+    # null property raises Neo.ClientError.Statement.SemanticError and commits
+    # nothing. But it does so only after the batch has crossed the wire, and it
+    # names the property alone -- not the file, and not the columns that file
+    # actually has, which is what tells an agent how to correct the plan.
+    # (The relationship loader below is the case that genuinely fails silently.)
     rows_committed = 0
     header_checked = False
     try:

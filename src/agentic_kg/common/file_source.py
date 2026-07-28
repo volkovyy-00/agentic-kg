@@ -82,6 +82,10 @@ def _checked_relative(relative_path: str) -> str:
     and Neo4j password on the local filesystem and returns them into the
     model's context.
 
+    Confinement is by name only. A symlink inside the root that points outside
+    it is still followed, so a source location must be a directory whose
+    contents are trusted.
+
     Raises:
         SourceError: if the name is absolute, carries a scheme, or contains a
             ".." segment.
@@ -102,7 +106,11 @@ def _checked_relative(relative_path: str) -> str:
         raise SourceError(
             f"Source file names cannot leave the source root: '{relative_path}'"
         )
-    return normalised
+    # The backslash form is normalised for the checks above only. A backslash is
+    # an ordinary character in a POSIX file name, so returning the rewritten
+    # version would make a file that list_source_files() just reported
+    # unopenable.
+    return relative_path
 
 
 def _full_path(root: str, relative_path: str) -> str:

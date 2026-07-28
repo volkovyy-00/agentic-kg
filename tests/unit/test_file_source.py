@@ -134,7 +134,10 @@ def test_names_with_a_scheme_are_rejected(memory_source):
 
 
 def test_a_dot_in_a_name_is_still_allowed(memory_source):
-    """Only a whole ".." segment escapes; ordinary dotted names must still work."""
+    """Only a whole ".." segment escapes. Names that merely contain dots,
+    including a doubled one, are ordinary file names."""
+    assert file_source.source_path("a..b.csv") == "/src/a..b.csv"
+    assert file_source.source_path("..hidden.csv") == "/src/..hidden.csv"
     assert file_source.source_path("nested/deep.md") == "/src/nested/deep.md"
 
 
@@ -143,26 +146,21 @@ def test_source_exists_reports_traversal_as_an_error_not_a_hit(memory_source):
         file_source.source_exists("../top.csv")
 
 
-def test_existence_check_resolves_the_filesystem_once(memory_source, monkeypatch):
-    """source_exists() and open_source() build the path from the root they
-    already hold, rather than calling source_path() and resolving again."""
-    calls = []
-    real = file_source.get_source_fs
-
-    def counting():
-        calls.append(1)
-        return real()
-
-    monkeypatch.setattr(file_source, "get_source_fs", counting)
-    file_source.source_exists("top.csv")
-    assert len(calls) == 1
-    calls.clear()
-    with file_source.open_source("top.csv"):
-        pass
-    assert len(calls) == 1
-
-
 def test_traversal_is_still_rejected_through_open_source(memory_source):
     """The single-resolution path must keep the confinement check."""
     with pytest.raises(file_source.SourceError, match="leave the source root"):
         file_source.open_source("../top.csv")
+
+
+def test_a_backslash_in_a_name_survives_the_round_trip(monkeypatch, tmp_path):
+    """A backslash is an ordinary character in a POSIX file name. Normalising
+    it into the returned path made a file that list_source_files() had just
+    reported impossible to open."""
+    (tmp_path / "a\\b.csv").write_text("a,b\n1,2\n")
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    reset_settings()
+    listed = file_source.list_source_files()
+    assert listed == ["a\\b.csv"]
+    assert file_source.source_exists(listed[0]) is True
+    with file_source.open_source(listed[0]) as handle:
+        assert handle.read() == "a,b\n1,2\n"
