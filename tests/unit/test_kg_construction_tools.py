@@ -388,12 +388,31 @@ def test_a_non_utf8_source_is_reported_by_the_relationship_loader(
 
 def test_a_read_failure_does_not_escape_the_agent_facing_tool(
         fake_db, monkeypatch, tmp_path):
-    """build_graph_from_construction_rules is what the agent actually calls."""
+    """build_graph_from_construction_rules is the tool the agent actually calls,
+    so it is the one that must not raise into ADK."""
     _undecodable_csv(monkeypatch, tmp_path)
     import agentic_kg.tools.cypher_tools as cypher_tools
     monkeypatch.setattr(cypher_tools, "graphdb", fake_db)
-    plan = {"Person": {
+
+    class FakeToolContext:
+        def __init__(self, state):
+            self.state = state
+
+    context = FakeToolContext({kg.APPROVED_CONSTRUCTION_PLAN: {"Person": {
         "construction_type": "node", "source_file": "latin1.csv", "label": "Person",
-        "unique_column_name": "id", "properties": ["name"]}}
-    result = kg.construct_domain_graph(plan)
+        "unique_column_name": "id", "properties": ["name"]}}})
+
+    result = kg.build_graph_from_construction_rules(context)
     assert result["status"] == "error"
+    assert "UnicodeDecodeError" in result["error_message"]
+
+
+def test_a_missing_source_file_names_itself_once(fake_db, monkeypatch, tmp_path):
+    """The dedicated FileNotFoundError clause keeps the message from reading
+    "ghost.csv: FileNotFoundError: No such source file: ghost.csv"."""
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    from agentic_kg.common.config import reset_settings
+    reset_settings()
+    result = kg.load_nodes_from_csv("ghost.csv", "Person", "id", ["name"])
+    assert result["status"] == "error"
+    assert result["error_message"].lower().count("ghost.csv") == 1

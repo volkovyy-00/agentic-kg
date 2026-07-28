@@ -91,12 +91,14 @@ def load_nodes_from_csv(
                     f"(the failing batch was rolled back): {result['error_message']}"
                 )
             rows_committed += len(batch)
+    except FileNotFoundError:
+        return tool_error(f"{source_file}: no such source file")
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        # Not just SourceError/FileNotFoundError: a source CSV that is not UTF-8
-        # raises UnicodeDecodeError out of read_csv_batches, and clevercsv can
-        # raise its own parse errors. Escaping into ADK breaks the contract that
-        # every tool returns a ToolResult, and the agent sees a crashed run
-        # rather than a file it could ask the user about.
+        # Not only SourceError: a non-UTF-8 CSV raises UnicodeDecodeError out of
+        # read_csv_batches, and clevercsv raises parse errors of its own.
+        # Log it: returning the text alone leaves a genuine bug in this module
+        # showing up as an LLM politely reporting "TypeError", traceback gone.
+        logger.exception("%s: read failed", source_file)
         return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
 
     return tool_success("rows_loaded", {"source_file": source_file, "rows": rows_committed})
@@ -186,12 +188,14 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             for record in result.get("records") or []:
                 rows_matched += record.get("rows_matched", 0) or 0
             rows_committed += len(batch)
+    except FileNotFoundError:
+        return tool_error(f"{source_file}: no such source file")
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        # Not just SourceError/FileNotFoundError: a source CSV that is not UTF-8
-        # raises UnicodeDecodeError out of read_csv_batches, and clevercsv can
-        # raise its own parse errors. Escaping into ADK breaks the contract that
-        # every tool returns a ToolResult, and the agent sees a crashed run
-        # rather than a file it could ask the user about.
+        # Not only SourceError: a non-UTF-8 CSV raises UnicodeDecodeError out of
+        # read_csv_batches, and clevercsv raises parse errors of its own.
+        # Log it: returning the text alone leaves a genuine bug in this module
+        # showing up as an LLM politely reporting "TypeError", traceback gone.
+        logger.exception("%s: read failed", source_file)
         return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
 
     loaded = {
