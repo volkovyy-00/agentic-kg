@@ -172,3 +172,16 @@ def test_a_backslash_in_a_name_survives_the_round_trip(monkeypatch, tmp_path):
     assert file_source.source_exists(listed[0]) is True
     with file_source.open_source(listed[0]) as handle:
         assert handle.read() == "a,b\n1,2\n"
+
+
+def test_listing_does_not_depend_on_the_root_lacking_a_separator(memory_source, monkeypatch):
+    """The relative names must come out the same whether or not the resolved
+    root keeps a trailing separator. Slicing at len(root) + 1 was correct only
+    for the stripped form, so a change to that stripping would have silently
+    cut a character off every name rather than failing."""
+    baseline = file_source.list_source_files()
+    assert baseline == ["nested/deep.md", "top.csv"]
+
+    real = file_source.get_source_fs
+    monkeypatch.setattr(file_source, "get_source_fs", lambda: (real()[0], real()[1] + "/"))
+    assert file_source.list_source_files() == baseline

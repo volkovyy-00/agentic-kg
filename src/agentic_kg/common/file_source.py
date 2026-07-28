@@ -137,8 +137,12 @@ def list_source_files() -> list[str]:
     fs, root = get_source_fs()
     if not fs.exists(root):
         raise SourceError(f"Source location does not exist: {root}")
-    prefix_length = len(root) + 1
-    return sorted(found[prefix_length:] for found in fs.find(root))
+    # Strip the root and then any separator, rather than slicing at
+    # len(root) + 1. The slice is only correct while get_source_fs() returns a
+    # root with no trailing separator, so it silently depended on that rstrip:
+    # anyone who made the root keep its trailing "/" would have cut a character
+    # off every name here instead of getting an error.
+    return sorted(found[len(root):].lstrip("/") for found in fs.find(root))
 
 
 def source_exists(relative_path: str) -> bool:

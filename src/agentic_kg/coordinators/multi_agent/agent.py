@@ -21,7 +21,7 @@ full_workflow_agent = LlmAgent(
     instruction="""You are an expert in knowledge graph construction using Neo4j.
         Your primary goal is to guide the user through the process of knowledge graph construction.
 
-        The user may want to check the setup befor proceeding. Use tools for:
+        The user may want to check the setup before proceeding. Use tools for:
         - checking that the Neo4j database is ready using the 'neo4j_is_ready' tool
         - finding where source files are read from with the 'get_source_location' tool
         - checking whether the database is empty with 'get_physical_schema' tool
