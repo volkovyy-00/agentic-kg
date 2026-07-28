@@ -41,7 +41,34 @@ def list_import_files(tool_context: ToolContext) -> dict:
 
 def set_suggested_files(suggest_files:List[str], tool_context:ToolContext) -> Dict[str, Any]:
     """Set the files to be used for data import.
+
+    Every name must be one the source location actually holds. The list is
+    chosen by an LLM, so a plausible-looking name that is not there would
+    otherwise be stored and approved, and only fail later when the schema
+    agent tried to read it -- an agent hop away from the mistake.
     """
+    if not suggest_files:
+        return tool_error(
+            "No files were suggested. Call 'list_import_files' and choose from the "
+            "names it returns."
+        )
+
+    try:
+        available = set(list_source_files())
+    except SourceError as exc:
+        return tool_error(str(exc))
+
+    # "./name.csv" identifies the same file as "name.csv" everywhere else in
+    # the codebase, so accept it here too rather than refusing a name the rest
+    # of the tools would have read.
+    suggest_files = [name.removeprefix("./") for name in suggest_files]
+    unknown = [name for name in suggest_files if name not in available]
+    if unknown:
+        return tool_error(
+            f"These are not files at the source location: {unknown}. "
+            "Call 'list_import_files' and choose from the names it returns."
+        )
+
     tool_context.state[SUGGESTED_FILES] = suggest_files
     return tool_success(SUGGESTED_FILES, suggest_files)
 

@@ -205,3 +205,29 @@ def test_collapse_check_missing_column_returns_error(collapse_source):
         "line_items.csv", "part_name", "not_a_column", FakeToolContext())
     assert result["status"] == "error"
     assert "not_a_column" in result["error_message"]
+
+
+# Suggested files must exist at the source
+
+def test_suggesting_a_file_that_is_not_there_is_refused(memory_source):
+    """The list is LLM-chosen, so a plausible name that does not exist would
+    otherwise be stored, approved, and only fail an agent hop later."""
+    context = FakeToolContext()
+    result = file_tools.set_suggested_files(["people.csv", "ghost.csv"], context)
+    assert result["status"] == "error"
+    assert "ghost.csv" in result["error_message"]
+    assert file_tools.SUGGESTED_FILES not in context.state
+
+
+def test_suggesting_no_files_is_refused(memory_source):
+    context = FakeToolContext()
+    result = file_tools.set_suggested_files([], context)
+    assert result["status"] == "error"
+    assert file_tools.SUGGESTED_FILES not in context.state
+
+
+def test_suggesting_real_files_still_works(memory_source):
+    context = FakeToolContext()
+    result = file_tools.set_suggested_files(["people.csv", "notes/readme.md"], context)
+    assert result["status"] == "success"
+    assert context.state[file_tools.SUGGESTED_FILES] == ["people.csv", "notes/readme.md"]
