@@ -17,7 +17,6 @@ from typing import Any, Dict, List
 
 from agentic_kg.common.csv_reader import read_csv_batches
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked as _checked
-from agentic_kg.common.file_source import SourceError
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
@@ -92,8 +91,13 @@ def load_nodes_from_csv(
                     f"(the failing batch was rolled back): {result['error_message']}"
                 )
             rows_committed += len(batch)
-    except (SourceError, FileNotFoundError) as exc:
-        return tool_error(f"{source_file}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        # Not just SourceError/FileNotFoundError: a source CSV that is not UTF-8
+        # raises UnicodeDecodeError out of read_csv_batches, and clevercsv can
+        # raise its own parse errors. Escaping into ADK breaks the contract that
+        # every tool returns a ToolResult, and the agent sees a crashed run
+        # rather than a file it could ask the user about.
+        return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
 
     return tool_success("rows_loaded", {"source_file": source_file, "rows": rows_committed})
 
@@ -182,8 +186,13 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             for record in result.get("records") or []:
                 rows_matched += record.get("rows_matched", 0) or 0
             rows_committed += len(batch)
-    except (SourceError, FileNotFoundError) as exc:
-        return tool_error(f"{source_file}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        # Not just SourceError/FileNotFoundError: a source CSV that is not UTF-8
+        # raises UnicodeDecodeError out of read_csv_batches, and clevercsv can
+        # raise its own parse errors. Escaping into ADK breaks the contract that
+        # every tool returns a ToolResult, and the agent sees a crashed run
+        # rather than a file it could ask the user about.
+        return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
 
     loaded = {
         "source_file": source_file,

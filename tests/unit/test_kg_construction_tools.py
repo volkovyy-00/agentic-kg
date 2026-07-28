@@ -346,3 +346,54 @@ def test_header_is_only_checked_once(fake_db, monkeypatch):
     result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
     assert result["status"] == "success"
     assert len(fake_db.queries) == 2
+
+
+# Read failures are reported, not raised
+
+def _undecodable_csv(monkeypatch, tmp_path):
+    """Point the source at a CSV that is not UTF-8, as an Excel export often is."""
+    (tmp_path / "latin1.csv").write_bytes(b"id,name\n1,Bj\xf6rk\n")
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    from agentic_kg.common.config import reset_settings
+    reset_settings()
+
+
+def test_a_non_utf8_source_is_reported_not_raised(fake_db, monkeypatch, tmp_path):
+    """UnicodeDecodeError escaped read_csv_batches and crashed the run instead
+    of reaching the agent, which broke the contract that every tool returns a
+    ToolResult."""
+    _undecodable_csv(monkeypatch, tmp_path)
+    result = kg.load_nodes_from_csv("latin1.csv", "Person", "id", ["name"])
+    assert result["status"] == "error"
+    assert "latin1.csv" in result["error_message"]
+    assert "UnicodeDecodeError" in result["error_message"]
+
+
+def test_a_non_utf8_source_is_reported_by_the_relationship_loader(
+        fake_db, monkeypatch, tmp_path):
+    _undecodable_csv(monkeypatch, tmp_path)
+    rule = {
+        "source_file": "latin1.csv",
+        "relationship_type": "KNOWS",
+        "from_node_label": "Person",
+        "from_node_column": "id",
+        "to_node_label": "Person",
+        "to_node_column": "name",
+        "properties": [],
+    }
+    result = kg.import_relationships(rule)
+    assert result["status"] == "error"
+    assert "UnicodeDecodeError" in result["error_message"]
+
+
+def test_a_read_failure_does_not_escape_the_agent_facing_tool(
+        fake_db, monkeypatch, tmp_path):
+    """build_graph_from_construction_rules is what the agent actually calls."""
+    _undecodable_csv(monkeypatch, tmp_path)
+    import agentic_kg.tools.cypher_tools as cypher_tools
+    monkeypatch.setattr(cypher_tools, "graphdb", fake_db)
+    plan = {"Person": {
+        "construction_type": "node", "source_file": "latin1.csv", "label": "Person",
+        "unique_column_name": "id", "properties": ["name"]}}
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
