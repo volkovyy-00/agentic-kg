@@ -38,6 +38,18 @@ def test_instances_are_cached_per_kind(monkeypatch):
     assert get_llm(LlmKind.reasoning) is not get_llm(LlmKind.conversational)
 
 
+def test_llm_calls_have_an_explicit_timeout_and_retries(monkeypatch):
+    """Without an explicit timeout, a stalled OpenRouter backend leaves the
+    whole turn hanging on LiteLLM's default (hundreds of seconds) with no
+    error surfaced to the user."""
+    reset_settings()
+    _clear_cache()
+    args = get_llm(LlmKind.reasoning)._additional_args
+    assert args.get("timeout") == llm_catalog._LLM_TIMEOUT_SECONDS
+    assert args.get("num_retries") == llm_catalog._LLM_NUM_RETRIES
+    assert args["timeout"] > 0
+
+
 def test_returns_a_litellm_instance_not_a_string(monkeypatch):
     """ADK never registers LiteLlm in its LLMRegistry, so agents must be handed
     an instance. A bare model string raises at agent construction."""

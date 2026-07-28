@@ -23,6 +23,22 @@ class LlmKind(str, Enum):
 
 _OPENROUTER_PREFIX = "openrouter/"
 
+# Without an explicit timeout, LiteLLM falls back to its own default (hundreds
+# of seconds), so a stalled OpenRouter backend leaves a turn hanging with no
+# error for the user to react to. Every observed healthy call in this system
+# completes well under a minute; 300s is generous headroom for slow reasoning
+# models while still guaranteeing the turn fails fast enough to retry.
+_LLM_TIMEOUT_SECONDS = 300
+_LLM_NUM_RETRIES = 2
+
+# The reasoning kind's model may be a dedicated "reasoning" model (e.g. gpt-5)
+# that defaults to its highest internal-reasoning tier on every call. This
+# agent's reasoning workloads (schema proposal/critique) are many small,
+# structured tool-orchestration steps, not deep multi-step proofs, so a lower
+# effort cuts latency per call substantially without a quality regression
+# we've observed. Only passed for LlmKind.reasoning below.
+_REASONING_EFFORT = "low"
+
 # Cached per kind. The previous single slot meant whichever caller ran first
 # silently chose the model for every other caller.
 _llm_instances: dict["LlmKind", LiteLlm] = {}
@@ -54,5 +70,8 @@ def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
     if kind not in _llm_instances:
         model = _model_name(kind)
         logger.info("Creating LLM for %s: %s", kind.value, model)
-        _llm_instances[kind] = LiteLlm(model=model)
+        kwargs = {"timeout": _LLM_TIMEOUT_SECONDS, "num_retries": _LLM_NUM_RETRIES}
+        if kind is LlmKind.reasoning:
+            kwargs["reasoning_effort"] = _REASONING_EFFORT
+        _llm_instances[kind] = LiteLlm(model=model, **kwargs)
     return _llm_instances[kind]
