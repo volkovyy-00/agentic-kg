@@ -50,6 +50,25 @@ def test_llm_calls_have_an_explicit_timeout_and_retries(monkeypatch):
     assert args["timeout"] > 0
 
 
+def test_reasoning_kind_asks_for_a_low_reasoning_effort(monkeypatch):
+    """A dedicated reasoning model defaults to its highest internal-reasoning
+    tier on every call, which made schema-proposal turns take tens of minutes.
+    The lower effort has to actually reach LiteLLM to have that effect."""
+    reset_settings()
+    _clear_cache()
+    args = get_llm(LlmKind.reasoning)._additional_args
+    assert args.get("reasoning_effort") == llm_catalog._REASONING_EFFORT
+    assert args["reasoning_effort"] == "low"
+
+
+def test_conversational_kind_does_not_send_a_reasoning_effort(monkeypatch):
+    """Conversational models generally reject the parameter outright, so it
+    must be absent rather than merely unset."""
+    reset_settings()
+    _clear_cache()
+    assert "reasoning_effort" not in get_llm(LlmKind.conversational)._additional_args
+
+
 def test_returns_a_litellm_instance_not_a_string(monkeypatch):
     """ADK never registers LiteLlm in its LLMRegistry, so agents must be handed
     an instance. A bare model string raises at agent construction."""

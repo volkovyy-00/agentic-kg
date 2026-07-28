@@ -17,7 +17,9 @@ import pytest
 from agentic_kg.tools import construction_plan_tools as cpt
 from agentic_kg.tools.construction_plan_tools import (
     propose_node_construction,
+    propose_node_constructions,
     propose_relationship_construction,
+    propose_relationship_constructions,
     remove_node_construction,
     get_proposed_construction_plan,
     approve_proposed_construction_plan,
@@ -91,6 +93,119 @@ def test_get_proposed_plan_reflects_state_not_a_snapshot(ctx, any_column_exists)
     propose_node_construction("products.csv", "Product", "product_id", [], ctx)
     assert set(get_proposed_construction_plan(ctx)) == {"Supplier", "Product"}
     assert first is ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+
+
+# --- batch proposal ---------------------------------------------------------
+
+def _only_these_columns_exist(monkeypatch, known_columns, searched):
+    """Stub the propose tools' sanity check so a chosen column is missing.
+
+    Every lookup is appended to `searched`, which is how a test can tell an
+    entry was never attempted from an entry that was attempted and rejected.
+    """
+    def fake_search_file(file_path, pattern):
+        searched.append(pattern)
+        found = 1 if pattern in known_columns else 0
+        return {"status": "success",
+                "search_results": {"metadata": {"lines_found": found}}}
+    monkeypatch.setattr(cpt, "search_file", fake_search_file)
+
+
+def test_propose_node_constructions_adds_every_entry_to_the_plan(ctx, any_column_exists):
+    result = propose_node_constructions([
+        {"approved_file": "products.csv", "proposed_label": "Product",
+         "unique_column_name": "product_id", "proposed_properties": ["product_name"]},
+        {"approved_file": "suppliers.csv", "proposed_label": "Supplier",
+         "unique_column_name": "supplier_id", "proposed_properties": ["name"]},
+    ], ctx)
+
+    assert result["status"] == "success"
+    assert len(result[cpt.NODE_CONSTRUCTION]) == 2
+
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert set(plan) == {"Product", "Supplier"}
+    assert plan["Product"]["unique_column_name"] == "product_id"
+    assert plan["Product"]["properties"] == ["product_name"]
+    assert plan["Supplier"]["source_file"] == "suppliers.csv"
+
+
+def test_propose_node_constructions_stops_at_the_first_failing_entry(ctx, monkeypatch):
+    """Earlier entries must survive the failure so the agent only has to correct
+    the one entry the error names, instead of re-proposing the whole batch."""
+    searched = []
+    _only_these_columns_exist(monkeypatch, {"product_id", "supplier_id", "part_id"}, searched)
+
+    result = propose_node_constructions([
+        {"approved_file": "products.csv", "proposed_label": "Product",
+         "unique_column_name": "product_id", "proposed_properties": []},
+        {"approved_file": "suppliers.csv", "proposed_label": "Supplier",
+         "unique_column_name": "supplier_id", "proposed_properties": []},
+        {"approved_file": "assemblies.csv", "proposed_label": "Assembly",
+         "unique_column_name": "assembly_name", "proposed_properties": []},
+        {"approved_file": "parts.csv", "proposed_label": "Part",
+         "unique_column_name": "part_id", "proposed_properties": []},
+    ], ctx)
+
+    assert result["status"] == "error"
+    assert "2" in result["error_message"], "the error must name the entry's index"
+    assert "Assembly" in result["error_message"]
+    assert "assembly_name" in result["error_message"]
+
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert set(plan) == {"Product", "Supplier"}, "entries before the failure stay in the plan"
+    assert "part_id" not in searched, "entries after the failure are never attempted"
+
+
+def test_propose_relationship_constructions_adds_every_entry_to_the_plan(ctx, any_column_exists):
+    result = propose_relationship_constructions([
+        {"approved_file": "assemblies.csv", "proposed_relationship_type": "ASSEMBLY_OF",
+         "from_node_label": "Assembly", "from_node_column": "assembly_name",
+         "to_node_label": "Product", "to_node_column": "product_id",
+         "proposed_properties": ["quantity"]},
+        {"approved_file": "parts.csv", "proposed_relationship_type": "SUPPLIED_BY",
+         "from_node_label": "Part", "from_node_column": "part_id",
+         "to_node_label": "Supplier", "to_node_column": "supplier_id",
+         "proposed_properties": []},
+    ], ctx)
+
+    assert result["status"] == "success"
+    assert len(result[cpt.RELATIONSHIP_CONSTRUCTION]) == 2
+
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert set(plan) == {"ASSEMBLY_OF", "SUPPLIED_BY"}
+    assert plan["ASSEMBLY_OF"]["from_node_column"] == "assembly_name"
+    assert plan["ASSEMBLY_OF"]["to_node_column"] == "product_id"
+    assert plan["ASSEMBLY_OF"]["properties"] == ["quantity"]
+
+
+def test_propose_relationship_constructions_stops_at_the_first_failing_entry(ctx, monkeypatch):
+    searched = []
+    _only_these_columns_exist(
+        monkeypatch, {"assembly_name", "product_id", "part_id", "supplier_id"}, searched)
+
+    result = propose_relationship_constructions([
+        {"approved_file": "assemblies.csv", "proposed_relationship_type": "ASSEMBLY_OF",
+         "from_node_label": "Assembly", "from_node_column": "assembly_name",
+         "to_node_label": "Product", "to_node_column": "product_id",
+         "proposed_properties": []},
+        {"approved_file": "parts.csv", "proposed_relationship_type": "INCLUDED_IN",
+         "from_node_label": "Part", "from_node_column": "part_id",
+         "to_node_label": "Assembly", "to_node_column": "assembly_id",
+         "proposed_properties": []},
+        {"approved_file": "parts.csv", "proposed_relationship_type": "SUPPLIED_BY",
+         "from_node_label": "Part", "from_node_column": "part_id",
+         "to_node_label": "Supplier", "to_node_column": "supplier_id",
+         "proposed_properties": []},
+    ], ctx)
+
+    assert result["status"] == "error"
+    assert "1" in result["error_message"], "the error must name the entry's index"
+    assert "INCLUDED_IN" in result["error_message"]
+    assert "assembly_id" in result["error_message"]
+
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert set(plan) == {"ASSEMBLY_OF"}, "entries before the failure stay in the plan"
+    assert "supplier_id" not in searched, "entries after the failure are never attempted"
 
 
 # --- consistency check ------------------------------------------------------
