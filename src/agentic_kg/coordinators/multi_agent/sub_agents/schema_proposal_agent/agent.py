@@ -60,7 +60,13 @@ class CheckStatusAndEscalate(BaseAgent):
         # punctuation).
         text = str(feedback).strip()
         first_token = text.split(maxsplit=1)[0].strip(":.,").lower() if text else ""
-        should_stop = first_token == "valid"
+        # An empty verdict must stop the loop too, not just a 'valid' one: the
+        # summary below already tells the coordinator to inspect the plan
+        # itself rather than wait on the critic, so letting the loop spend
+        # another schema_proposal_agent/schema_critic_agent iteration first
+        # (escalate=False) would contradict the guidance this same event
+        # hands back.
+        should_stop = first_token == "valid" or not text
         # This event's text is what the coordinator's AgentTool call returns:
         # AgentTool takes the text of the *last* event of the wrapped agent's
         # run, and StopChecker always runs last in the loop. When this event

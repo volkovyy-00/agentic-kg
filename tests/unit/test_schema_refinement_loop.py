@@ -75,8 +75,18 @@ def test_the_verdict_is_returned_verbatim(feedback):
 
 
 def test_a_missing_verdict_reads_as_retry_not_as_valid():
-    """should_stop is False in that case, so the text must not say otherwise --
-    and it must send the coordinator to the plan, not into another blind run."""
+    """The text must say retry, not valid, and must send the coordinator to
+    the plan rather than inventing one from memory."""
     text = _event_text(_run("")[0])
     assert text.lower().startswith("retry")
     assert "get_proposed_construction_plan" in text
+
+
+def test_a_missing_verdict_still_escalates():
+    """A missing verdict must stop the *internal* loop immediately, not spend
+    another schema_proposal_agent/schema_critic_agent iteration first: the
+    returned text already tells the coordinator to inspect the plan itself
+    rather than wait for the loop to try again on the same no-answer input.
+    escalate=False here would keep looping despite the text saying not to."""
+    events = _run("")
+    assert events[0].actions.escalate is True
