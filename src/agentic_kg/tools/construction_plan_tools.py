@@ -15,6 +15,18 @@ APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 
 NODE_CONSTRUCTION = "node_construction"
 
+
+def _missing_values(**fields) -> list[str]:
+    """Names of the given fields that are absent or empty.
+
+    A construction is assembled from an LLM-produced argument list, so a field
+    can simply not arrive. Without this, an absent label is stored as a plan
+    entry keyed None with "label": None, which check_construction_plan_consistency
+    accepts and which only fails much later at import time.
+    """
+    return [name for name, value in fields.items() if not value]
+
+
 def propose_node_construction(approved_file: str, proposed_label: str, unique_column_name: str, proposed_properties: list[str], tool_context:ToolContext) -> dict:
     """Propose a node construction for an approved file that supports the user goal.
 
@@ -39,6 +51,17 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
                 If 'error', includes an 'error_message' key.
                 The 'error_message' may have instructions about how to handle the error.
     """
+    missing = _missing_values(
+        approved_file=approved_file,
+        proposed_label=proposed_label,
+        unique_column_name=unique_column_name,
+    )
+    if missing:
+        return tool_error(
+            f"missing required values: {', '.join(missing)}. "
+            "Supply every one of them and propose the node again."
+        )
+
     # quick sanity check -- does the approved file have the unique column?
     search_results = search_file(approved_file, unique_column_name)
     if search_results["status"] == "error":
@@ -53,11 +76,48 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
         "source_file": approved_file,
         "label": proposed_label,
         "unique_column_name": unique_column_name,
-        "properties": proposed_properties
-    }   
+        # A model may send a JSON null here rather than omitting the field. That
+        # reaches Cypher as FOREACH (k IN null | ...), which is a silent no-op:
+        # the nodes load with no properties at all and nothing reports a problem.
+        "properties": proposed_properties or []
+    }
     construction_plan[proposed_label] = node_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(NODE_CONSTRUCTION, node_construction_rule)
+
+def propose_node_constructions(node_constructions: list[dict], tool_context:ToolContext) -> dict:
+    """Propose several node constructions at once, instead of one call per node.
+
+    Each entry is proposed with the same rules and the same validation as
+    'propose_node_construction'. Proposing stops at the first entry that fails, so
+    earlier entries stay in the plan and the error names the entry to correct.
+
+    Args:
+        node_constructions: a list of dictionaries, each with the keys
+            'approved_file', 'proposed_label', 'unique_column_name' and 'proposed_properties',
+            matching the arguments of 'propose_node_construction'
+
+    Returns:
+        dict: Includes a 'status' key ('success' or 'error').
+                If 'success', includes a "node_construction" key with the list of construction rules.
+                If 'error', includes an 'error_message' key naming the entry that failed.
+    """
+    proposed = []
+    for index, node_construction in enumerate(node_constructions):
+        result = propose_node_construction(
+            node_construction.get("approved_file"),
+            node_construction.get("proposed_label"),
+            node_construction.get("unique_column_name"),
+            node_construction.get("proposed_properties", []),
+            tool_context,
+        )
+        if result["status"] == "error":
+            return tool_error(
+                f"node construction {index} ({node_construction.get('proposed_label')}) failed: "
+                f"{result['error_message']}"
+            )
+        proposed.append(result[NODE_CONSTRUCTION])
+    return tool_success(NODE_CONSTRUCTION, proposed)
 
 # Tool: Remove Node Construction
 def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
@@ -112,6 +172,20 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
                 If 'error', includes an 'error_message' key.
                 The 'error_message' may have instructions about how to handle the error.
     """
+    missing = _missing_values(
+        approved_file=approved_file,
+        proposed_relationship_type=proposed_relationship_type,
+        from_node_label=from_node_label,
+        from_node_column=from_node_column,
+        to_node_label=to_node_label,
+        to_node_column=to_node_column,
+    )
+    if missing:
+        return tool_error(
+            f"missing required values: {', '.join(missing)}. "
+            "Supply every one of them and propose the relationship again."
+        )
+
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
     if search_results["status"] == "error": 
@@ -133,11 +207,51 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
         "from_node_column": from_node_column,
         "to_node_label": to_node_label,
         "to_node_column": to_node_column,
-        "properties": proposed_properties
-    }   
+        # See propose_node_construction: a null reaches Cypher as a silent no-op.
+        "properties": proposed_properties or []
+    }
     construction_plan[proposed_relationship_type] = relationship_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(RELATIONSHIP_CONSTRUCTION, relationship_construction_rule)
+
+def propose_relationship_constructions(relationship_constructions: list[dict], tool_context:ToolContext) -> dict:
+    """Propose several relationship constructions at once, instead of one call per relationship.
+
+    Each entry is proposed with the same rules and the same validation as
+    'propose_relationship_construction'. Proposing stops at the first entry that fails, so
+    earlier entries stay in the plan and the error names the entry to correct.
+
+    Args:
+        relationship_constructions: a list of dictionaries, each with the keys
+            'approved_file', 'proposed_relationship_type', 'from_node_label', 'from_node_column',
+            'to_node_label', 'to_node_column' and 'proposed_properties', matching the arguments
+            of 'propose_relationship_construction'
+
+    Returns:
+        dict: Includes a 'status' key ('success' or 'error').
+                If 'success', includes a "relationship_construction" key with the list of construction rules.
+                If 'error', includes an 'error_message' key naming the entry that failed.
+    """
+    proposed = []
+    for index, relationship_construction in enumerate(relationship_constructions):
+        result = propose_relationship_construction(
+            relationship_construction.get("approved_file"),
+            relationship_construction.get("proposed_relationship_type"),
+            relationship_construction.get("from_node_label"),
+            relationship_construction.get("from_node_column"),
+            relationship_construction.get("to_node_label"),
+            relationship_construction.get("to_node_column"),
+            relationship_construction.get("proposed_properties", []),
+            tool_context,
+        )
+        if result["status"] == "error":
+            return tool_error(
+                f"relationship construction {index} "
+                f"({relationship_construction.get('proposed_relationship_type')}) failed: "
+                f"{result['error_message']}"
+            )
+        proposed.append(result[RELATIONSHIP_CONSTRUCTION])
+    return tool_success(RELATIONSHIP_CONSTRUCTION, proposed)
 
 # Tool: Remove Relationship Construction
 def remove_relationship_construction(relationship_type: str, tool_context:ToolContext) -> dict:
@@ -165,10 +279,89 @@ def remove_relationship_construction(relationship_type: str, tool_context:ToolCo
     return tool_success("relationship_construction_removed", relationship_type) 
 
 
+def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
+    """Find internal inconsistencies between relationship joins and node constructions.
+
+    Purely structural: it compares the plan against itself, with no file or database
+    access. It exists because a relationship can only ever match nodes if its join
+    column is a value the referenced node actually carries — its unique identifier,
+    or one of its stored properties. A join on any other column silently produces
+    zero relationships at build time (and the relationship type never appears in the
+    database at all), which is indistinguishable from success in the tool output.
+
+    This is also the mechanical check that catches a revision drifting out of sync:
+    if a node's unique identifier is changed (or reverted) without the relationships
+    that join on it being updated to match, the plan becomes inconsistent here.
+
+    Args:
+        construction_plan: the construction plan dictionary, keyed by label/type
+
+    Returns:
+        list[str]: a problem description per inconsistency; empty if the plan is consistent
+    """
+    if not isinstance(construction_plan, dict):
+        return []
+
+    nodes = {
+        key: rule for key, rule in construction_plan.items()
+        if isinstance(rule, dict) and rule.get("construction_type") == "node"
+    }
+    problems = []
+
+    def check_endpoint(rel_key, side, label, column):
+        node_rule = nodes.get(label)
+        if node_rule is None:
+            problems.append(
+                f"{rel_key}: {side} node label '{label}' has no node construction in the plan."
+            )
+            return
+        unique_column = node_rule.get("unique_column_name")
+        known_columns = {unique_column, *(node_rule.get("properties") or [])}
+        if column not in known_columns:
+            problems.append(
+                f"{rel_key}: {side} join column '{column}' is not a column of the "
+                f"'{label}' node, which is keyed by '{unique_column}' with properties "
+                f"{sorted(c for c in known_columns if c and c != unique_column)}. "
+                f"This join would match zero rows. Either key '{label}' by '{column}' "
+                f"or join on '{unique_column}'."
+            )
+
+    for key, rule in construction_plan.items():
+        if not isinstance(rule, dict) or rule.get("construction_type") != "relationship":
+            continue
+        check_endpoint(key, "from", rule.get("from_node_label"), rule.get("from_node_column"))
+        check_endpoint(key, "to", rule.get("to_node_label"), rule.get("to_node_column"))
+
+    return problems
+
+
 # Tool: Approve the proposed construction plan
 def approve_proposed_construction_plan(tool_context:ToolContext) -> dict:
-    """Approve the proposed construction plan."""
-    tool_context.state[APPROVED_CONSTRUCTION_PLAN] = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
+    """Approve the proposed construction plan, if it is internally consistent.
+
+    Approval is refused when a relationship construction joins on a column the
+    referenced node does not carry, or names an endpoint label that has no node
+    construction in the plan, since such a plan cannot build the graph that was
+    described to the user no matter what was said in conversation.
+    """
+    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
+    if not construction_plan:
+        return tool_error(
+            "There is no proposed construction plan to approve. "
+            "Produce one first, then present it to the user."
+        )
+
+    problems = check_construction_plan_consistency(construction_plan)
+    if problems:
+        return tool_error(
+            "The proposed construction plan is internally inconsistent and was NOT approved:\n- "
+            + "\n- ".join(problems)
+            + "\nFix the plan, then show the user the corrected plan returned by "
+            "'get_proposed_construction_plan' and ask them to approve again. Do not "
+            "describe the plan as fixed until this tool reports success."
+        )
+
+    tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(APPROVED_CONSTRUCTION_PLAN, tool_context.state[APPROVED_CONSTRUCTION_PLAN])
 
 # Tool: Get Proposed construction Plan

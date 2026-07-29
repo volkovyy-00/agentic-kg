@@ -35,6 +35,18 @@ def set_perceived_user_goal(kind_of_graph: str, graph_description:str, tool_cont
         kind_of_graph: 2-3 word definition of the kind of graph, for example "recent US patents"
         graph_description: a single paragraph description of the graph, summarizing the user's intent
     """
+    # Both fields are carried forward as the description every later agent
+    # reasons from, so an empty one is stored, approved, and then quietly
+    # shapes file selection and schema proposal with nothing in it.
+    missing = [name for name, value in
+               (("kind_of_graph", kind_of_graph), ("graph_description", graph_description))
+               if not (value or "").strip()]
+    if missing:
+        return tool_error(
+            f"missing required values: {', '.join(missing)}. "
+            "Ask the user about them, then set the goal again."
+        )
+
     user_goal_data = {"kind_of_graph": kind_of_graph, "graph_description": graph_description}
     tool_context.state["perceived_user_goal"] = user_goal_data
     print("User's goal set:", user_goal_data)

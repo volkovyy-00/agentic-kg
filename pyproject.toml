@@ -8,9 +8,17 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.9",
     "clevercsv[full]>=0.8.3",
-    "google-adk>=1.10.0",
-    "litellm>=1.75.5.post1,<1.82.7",
+    "fsspec>=2024.9,<2025.0.0",
+    "google-adk>=1.10,<2",
+    # >=1.82.3 required for GPT-5 / reasoning-model streaming: it maps `reasoning`
+    # -> `reasoning_content` in the streaming Delta and requires openai>=2.8.0,
+    # which understands GPT-5's reasoning stream events (old openai 1.54 parsed
+    # them as unknown chunks, so CustomStreamWrapper never terminated -> hang).
+    "litellm>=1.83.9,<1.84",
+    # litellm 1.83.9 hard-pins openai==2.24.0; stated here so the requirement is explicit.
+    "openai>=2.24,<3",
     "neo4j>=5.28.2",
     "neo4j-graphrag>=1.9.1",
     "pydantic>=2.11.7",

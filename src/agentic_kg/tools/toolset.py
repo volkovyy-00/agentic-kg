@@ -1,4 +1,3 @@
-from tkinter import Label
 from typing import Callable, TypedDict, List
 
 class ToolSet(TypedDict):

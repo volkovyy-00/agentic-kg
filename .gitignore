@@ -18,3 +18,6 @@ wheels/
 
 # Local scratch content, not part of the project
 prototype/
+
+# Superpowers / SDD scratch workspace (process artifacts, not deliverables)
+.superpowers/

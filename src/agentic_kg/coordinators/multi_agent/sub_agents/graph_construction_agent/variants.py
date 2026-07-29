@@ -17,7 +17,10 @@ from agentic_kg.tools.cypher_tools import (
 )
 from agentic_kg.tools.file_tools import get_approved_files
 from agentic_kg.tools.kg_construction_tools import build_graph_from_construction_rules
-from agentic_kg.tools.adk_tools import finished
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+
+finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 variants = {
     "graph_construction_agent_v1": {
@@ -37,7 +40,15 @@ variants = {
         3. use the 'build_graph_from_construction_rules' tool to build the graph
         4. verify that the graph has been built by comparing the physical schema with the approved schema using the 'read_neo4j_cypher' tool
         5. verify that the graph is reasonable by proposing a hypothetical question that reflects the user goal. try to answer it using the 'read_neo4j_cypher' tool
-        6. summarize the state of the graph and your post-construction analysis to the user
+        6. summarize the state of the graph and your post-construction analysis to the user.
+           If the 'build_graph_from_construction_rules' result includes a 'warnings' list, report every
+           warning to the user verbatim: a relationship that matched far fewer rows than were read is a
+           sign that its join columns do not line up, even though construction reported success.
+           When reporting counts, never call 'rows' or 'rows_matched' a number of nodes or relationships.
+           Those are CSV rows processed; several rows sharing a key merge into one node or relationship,
+           so the graph usually holds fewer. Report node counts from 'nodes_in_graph' and relationship
+           counts from 'relationships_in_graph'. If either is absent, say how many rows were processed
+           and count the label or type yourself with 'read_neo4j_cypher' before quoting a number.
         7. invite the user to try some questions that you'll answer using the 'read_neo4j_cypher' tool
         8. when the user is satisfied, use the 'finished' tool to signal that this phase of graph construction is complete
 

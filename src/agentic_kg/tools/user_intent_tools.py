@@ -8,7 +8,7 @@ from google.adk.tools import ToolContext
 from agentic_kg.domain.user_intent import UserIntent, create_user_intent, validate_user_intent
 
 from .toolset import ToolSet
-from .tool_result import tool_success, tool_error
+from agentic_kg.common.tool_result import tool_success, tool_error
 
 USER_INTENT_KEY = "user_intent_specification"
 

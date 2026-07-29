@@ -1,15 +1,19 @@
 import logging
 
-from pathlib import Path
-import clevercsv
 from itertools import islice
 
 from google.adk.tools import ToolContext
 from typing import Dict, Any, List
 
+from agentic_kg.common.csv_reader import make_csv_reader, read_csv_batches
 from agentic_kg.common.tool_result import tool_success, tool_error
-
-from .cypher_tools import get_neo4j_import_dir
+from agentic_kg.common.file_source import (
+    SourceError,
+    get_source_root,
+    list_source_files,
+    open_source,
+    source_exists,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,38 +21,64 @@ ALL_AVAILABLE_FILES = "all_available_files"
 SUGGESTED_FILES = "suggested_file_list"
 APPROVED_FILES = "approved_file_list"
 
-def list_import_files(tool_context:ToolContext) -> dict:
-    f"""Lists files available for knowledge graph construction.
-    All files are relative to the import directory.
+def list_import_files(tool_context: ToolContext) -> dict:
+    """Lists files available for knowledge graph construction.
+
+    All names are relative to the configured source location.
 
     Returns:
-        dict: A dictionary containing metadata about the content.
-                Includes a 'status' key ('success' or 'error').
-                If 'success', includes a {ALL_AVAILABLE_FILES} key with list of file names.
-                If 'error', includes an 'error_message' key.
-                The 'error_message' may have instructions about how to handle the error.
+        dict: 'status' of 'success' or 'error'. On success, an
+              'all_available_files' key with a list of relative file names.
     """
-    # get the import dir using the helper function
-    result = get_neo4j_import_dir()
+    try:
+        file_names = list_source_files()
+    except SourceError as exc:
+        return tool_error(str(exc))
 
-    if result["status"] == "error":
-        return result
-    import_dir = Path(result["neo4j_import_dir"])
-
-    # get a list of relative file names, so files must be rooted at the import dir
-    file_names = [str(x.relative_to(import_dir)) 
-                 for x in import_dir.rglob("*") 
-                 if x.is_file()]
-
-    # save the list to state so we can inspect it later
     tool_context.state[ALL_AVAILABLE_FILES] = file_names
-
     return tool_success(ALL_AVAILABLE_FILES, file_names)
 
 
 def set_suggested_files(suggest_files:List[str], tool_context:ToolContext) -> Dict[str, Any]:
     """Set the files to be used for data import.
+
+    Args:
+        suggest_files: a list of file names, exactly as 'list_import_files' returned them
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'suggested_file_list'
+              key with the names that were set. On error, an 'error_message' key.
     """
+    # The list is chosen by a model, so a plausible name the source does not
+    # hold would otherwise be stored, approved, and fail only when the schema
+    # agent tried to read it -- an agent hop away from the mistake.
+    if not isinstance(suggest_files, list) or not suggest_files:
+        return tool_error(
+            "No files were suggested. Call 'list_import_files' and pass a list of "
+            "the names it returns."
+        )
+
+    if not all(isinstance(name, str) for name in suggest_files):
+        return tool_error(
+            "Every suggested file must be a name returned by 'list_import_files'."
+        )
+
+    try:
+        available = set(list_source_files())
+    except SourceError as exc:
+        return tool_error(str(exc))
+
+    # "./name.csv" identifies the same file as "name.csv" everywhere else in
+    # the codebase, so accept it here too rather than refusing a name the rest
+    # of the tools would have read.
+    suggest_files = [name.removeprefix("./") for name in suggest_files]
+    unknown = [name for name in suggest_files if name not in available]
+    if unknown:
+        return tool_error(
+            f"These are not files at the source location: {unknown}. "
+            "Call 'list_import_files' and choose from the names it returns."
+        )
+
     tool_context.state[SUGGESTED_FILES] = suggest_files
     return tool_success(SUGGESTED_FILES, suggest_files)
 
@@ -66,13 +96,21 @@ def get_suggested_files(tool_context:ToolContext) -> Dict[str, Any]:
         return tool_error("Suggested files have not been set. Take no action other than to inform user.")
     return tool_success(SUGGESTED_FILES, tool_context.state[SUGGESTED_FILES])
 
-def approve_suggested_files(tool_context:ToolContext) -> Dict[str, Any]:
-    f"""Approves the {SUGGESTED_FILES} in state for further processing as {APPROVED_FILES}."""
-    
+def get_source_location(tool_context: ToolContext) -> Dict[str, Any]:
+    """Reports where the system is reading source files from."""
+    try:
+        return tool_success("source_location", get_source_root())
+    except SourceError as exc:
+        return tool_error(str(exc))
+
+
+def approve_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
+    """Approves the suggested files for further processing."""
     if SUGGESTED_FILES not in tool_context.state:
         return tool_error("Current files have not been set. Take no action other than to inform user.")
 
     tool_context.state[APPROVED_FILES] = tool_context.state[SUGGESTED_FILES]
+    return tool_success(APPROVED_FILES, tool_context.state[APPROVED_FILES])
 
 
 def get_approved_files(tool_context:ToolContext) -> Dict[str, Any]:
@@ -84,57 +122,34 @@ def get_approved_files(tool_context:ToolContext) -> Dict[str, Any]:
     return tool_success(APPROVED_FILES, tool_context.state[APPROVED_FILES])
 
 def sample_file(file_path: str, tool_context: ToolContext) -> dict:
-    """Samples a file by reading its content as text.
-    
-    Treats any file as text and reads up to a maximum of 100 lines.
-    
+    """Samples a file by reading up to 100 lines as text.
+
     Args:
-      file_path: file to sample, relative to the import directory
+      file_path: file to sample, relative to the source location
       tool_context: ToolContext object
-      
+
     Returns:
-        dict: A dictionary containing metadata about the content,
-              along with a sampling of the file.
-              Includes a 'status' key ('success' or 'error').
-              If 'success', includes a 'metadata' key with content details.
-              If 'error', includes an 'error_message' key.
+        dict: 'status' of 'success' or 'error'. On success, a 'sample' key with
+              metadata and content.
     """
-    import_dir_result = get_neo4j_import_dir() # chain tool call
-    if import_dir_result["status"] == "error": return import_dir_result
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    p = import_dir / file_path
-    
-    if not p.exists():
-        return tool_error(f"Path does not exist: {file_path}")
-    
-    # Set basic metadata
+    suffix = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+    mimetype = {"csv": "text/csv", "md": "text/markdown"}.get(suffix, "text/plain")
+
     result = {
-        "metadata": {
-            "path": file_path,
-        },
-        "annotations": []
+        "metadata": {"path": file_path, "mimetype": mimetype},
+        "annotations": [],
     }
-    
-    # Set mimetype based on extension
-    file_extension = p.suffix.lower()
-    if file_extension == '.csv':
-        result["metadata"]["mimetype"] = "text/csv"
-    elif file_extension == '.md':
-        result["metadata"]["mimetype"] = "text/markdown"
-    else:
-        result["metadata"]["mimetype"] = "text/plain"
-    
+
     try:
-        # Treat all files as text
-        with open(p, 'r', encoding='utf-8') as file:
-            # Read up to 100 lines
-            lines = list(islice(file, 100))
-            content = ''.join(lines)
-            result["content"] = content
-    
-    except Exception as e:
-        return tool_error(f"Error reading or processing file {file_path}: {e}")
-    
+        with open_source(file_path, "r") as handle:
+            result["content"] = "".join(islice(handle, 100))
+    except SourceError as exc:
+        return tool_error(str(exc))
+    except FileNotFoundError:
+        return tool_error(f"Path does not exist: {file_path}")
+    except Exception as exc:  # noqa: BLE001 - report decoding failures to the agent
+        return tool_error(f"Error reading or processing file {file_path}: {exc}")
+
     return tool_success("sample", result)
 
 
@@ -143,7 +158,7 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     Searches a CSV file for rows containing the given query string in any of its fields.
 
     Args:
-      file_path: Path to the CSV file, relative to the Neo4j import directory.
+      file_path: Path to the CSV file, relative to the source location.
       query: The string to search for.
       tool_context: The ToolContext object.
       case_sensitive: Whether the search should be case-sensitive (default: False).
@@ -155,19 +170,11 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
               and 'metadata' (path, mimetype, query, case_sensitive, rows_found).
               If 'error', includes an 'error_message'.
     """
-    import_dir_result = get_neo4j_import_dir()
-    if import_dir_result["status"] == "error":
-        return import_dir_result
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    p = import_dir / file_path
-
-    if not p.exists():
-        return tool_error(f"CSV file does not exist: {file_path}")
-    if not p.is_file():
-        return tool_error(f"Path is not a file: {file_path}")
-    if not (p.suffix.lower() == ".csv"):
-        # Basic check, could be enhanced with mimetypes for more accuracy
-        logger.warning(f"File {file_path} does not have a .csv extension, but attempting to process as CSV.")
+    try:
+        if not source_exists(file_path):
+            return tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return tool_error(str(exc))
 
     matching_rows = []
     search_query = query if case_sensitive else query.lower()
@@ -176,32 +183,16 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     try:
         # Handle empty query - return no results
         if not query:
-            with open(p, 'r', newline='', encoding='utf-8') as csvfile:
-                try:
-                    # Just read enough to get the header
-                    dialect = clevercsv.Sniffer().sniff(csvfile.read(2048))
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile, dialect)
-                except clevercsv.Error:
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile)
+            with open_source(file_path, "r") as csvfile:
+                reader = make_csv_reader(csvfile, file_path)
                 header_row = next(reader, [])
                 # Empty query returns no matches, but we still read the header
         else:
-            with open(p, 'r', newline='', encoding='utf-8') as csvfile:
-                try:
-                    # Read a chunk to sniff dialect, then rewind
-                    dialect = clevercsv.Sniffer().sniff(csvfile.read(2048))
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile, dialect)
-                except clevercsv.Error:
-                    # Fallback if sniffing fails (e.g., empty or very small file, or not CSV)
-                    csvfile.seek(0)
-                    reader = clevercsv.reader(csvfile) # Use default dialect
-                    logger.warning(f"Could not sniff CSV dialect for {file_path}. Using default dialect.")
-                
+            with open_source(file_path, "r") as csvfile:
+                reader = make_csv_reader(csvfile, file_path)
+
                 header_row = next(reader, []) # Store header, or empty list if file is empty
-                
+
                 for row in reader:
                     for field in row:
                         field_to_check = str(field) if case_sensitive else str(field).lower()
@@ -224,129 +215,278 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     }
     return tool_success("search_results", result_data)
 
-SEARCH_RESULTS = "search_results"
+def _collect_column_values(file_path: str, column: str):
+    """Read every value of one column from a source CSV.
 
-def search_file(file_path: str, query: str) -> dict:
+    Returns:
+        (values, error) where values holds one entry per data row and error is a
+        tool_error dict when the file or column cannot be read.
+
+    read_csv_batches omits the key entirely for a row shorter than the header, so
+    a ragged row contributes "" here rather than being skipped. That keeps one
+    value per row, which is what column_stats' row_count and empty_count report.
     """
-    Searches any text file (markdown, csv, txt)for lines containing the given query string.
-    Simple grep-like functionality that works with any text file.
-    Search is always case insensitive.
+    try:
+        if not source_exists(file_path):
+            return None, tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return None, tool_error(str(exc))
+
+    values: List[str] = []
+    header: List[str] = []
+    saw_header = False
+    try:
+        for batch_header, rows in read_csv_batches(file_path):
+            if not saw_header:
+                header = batch_header
+                saw_header = True
+                if column not in header:
+                    return None, tool_error(
+                        f"Column '{column}' is not in {file_path}. Available columns: {header}"
+                    )
+            for row in rows:
+                values.append(row.get(column, ""))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    if not saw_header:
+        return None, tool_error(f"CSV file has no header row: {file_path}")
+
+    return values, None
+
+
+def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict:
+    """Reports how unique the values of one CSV column are.
+
+    Use this to decide whether a column can serve as a node's unique
+    identifier, and to detect per-row columns that would be collapsed (and
+    silently overwritten) when rows are merged into a single node.
+
+    Empty values are counted as rows but are not treated as usable identifier
+    values: 'is_unique' is only true when every row has a non-empty value and
+    all of those values are distinct.
 
     Args:
-      file_path: Path to the file, relative to the Neo4j import directory.
-      query: The string to search for.
+      file_path: Path to the CSV file, relative to the source location.
+      column: The column to analyze.
       tool_context: The ToolContext object.
 
     Returns:
-        dict: A dictionary with 'status' ('success' or 'error').
-              If 'success', includes 'search_results' containing 'matching_lines'
-              (a list of dictionaries with 'line_number' and 'content' keys)
-              and basic metadata about the search.
-              If 'error', includes an 'error_message'.
+        dict: 'status' of 'success' or 'error'. On success, a 'column_stats'
+              key with 'path', 'column', 'row_count', 'distinct_count',
+              'empty_count' and 'is_unique'.
     """
-    import_dir_result = get_neo4j_import_dir()
-    if import_dir_result["status"] == "error":
-        return import_dir_result
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    p = import_dir / file_path
+    values, error = _collect_column_values(file_path, column)
+    if error is not None:
+        return error
 
-    if not p.exists():
-        return tool_error(f"File does not exist: {file_path}")
-    if not p.is_file():
-        return tool_error(f"Path is not a file: {file_path}")
+    empty_count = sum(1 for value in values if value is None or str(value).strip() == "")
+    non_empty = [value for value in values if value is not None and str(value).strip() != ""]
+    distinct_count = len(set(non_empty))
 
-    # Check if file has an acceptable extension
-    file_ext = p.suffix.lower()
-    supported_extensions = {".csv", ".md", ".txt"}
-    if file_ext not in supported_extensions:
-        logger.warning(f"File {file_path} has an unsupported extension {file_ext}, but attempting to search anyway.")
+    return tool_success("column_stats", {
+        "path": file_path,
+        "column": column,
+        "row_count": len(values),
+        "distinct_count": distinct_count,
+        "empty_count": empty_count,
+        "is_unique": empty_count == 0 and distinct_count == len(values),
+    })
 
-    # Handle empty query - return no results
+
+def _collect_column_pairs(file_path: str, column_a: str, column_b: str):
+    """Read two columns of one source CSV, row by row.
+
+    Returns:
+        (pairs, error) where pairs is a list of (value_a, value_b) tuples and
+        error is a tool_error dict when the file or either column cannot be
+        read.
+    """
+    try:
+        if not source_exists(file_path):
+            return None, tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return None, tool_error(str(exc))
+
+    pairs = []
+    saw_header = False
+    try:
+        for batch_header, rows in read_csv_batches(file_path):
+            if not saw_header:
+                saw_header = True
+                missing = [c for c in (column_a, column_b) if c not in batch_header]
+                if missing:
+                    return None, tool_error(
+                        f"Column(s) {missing} are not in {file_path}. "
+                        f"Available columns: {batch_header}"
+                    )
+            for row in rows:
+                pairs.append((row.get(column_a, ""), row.get(column_b, "")))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    if not saw_header:
+        return None, tool_error(f"CSV file has no header row: {file_path}")
+
+    return pairs, None
+
+
+def collapse_check(file_path: str, node_key_column: str, candidate_column: str,
+                   tool_context: ToolContext) -> dict:
+    """Checks whether a column survives collapsing rows onto a node key.
+
+    This is the only tool that answers the post-MERGE question. Node loading
+    MERGEs one node per distinct 'node_key_column' value and then overwrites
+    the other properties from every row, so whichever row loads last wins. If
+    the rows sharing a node key disagree about 'candidate_column', only one
+    arbitrary value survives on the node, and any relationship joining on that
+    column will silently match almost nothing.
+
+    A candidate column is safe to use as a relationship join key only when
+    every group has exactly one distinct value for it, i.e.
+    'groups_with_conflicts' is 0 (which is trivially true when the candidate
+    column *is* the node key).
+
+    Note that 'column_stats' cannot answer this: a per-row ID is reported as
+    perfectly unique, which is exactly the column class that does *not*
+    survive collapsing. 'join_preview' cannot answer it either, because it
+    compares raw CSV values before any collapsing happens.
+
+    Args:
+      file_path: Path to the node file's CSV, relative to the source location.
+      node_key_column: The column the nodes will be MERGEd on.
+      candidate_column: The column being considered as a join key or property.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'collapse_check'
+              key with 'path', 'node_key_column', 'candidate_column',
+              'row_count', 'group_count' (distinct node keys),
+              'groups_with_conflicts' (groups holding more than one distinct
+              candidate value), 'survives_collapse' (True when there are no
+              conflicts) and 'example_conflicts' (up to 5 entries of
+              {'node_key', 'values'}).
+    """
+    pairs, error = _collect_column_pairs(file_path, node_key_column, candidate_column)
+    if error is not None:
+        return error
+
+    groups: Dict[str, set] = {}
+    for key, value in pairs:
+        key_text = "" if key is None else str(key)
+        value_text = "" if value is None else str(value)
+        groups.setdefault(key_text, set()).add(value_text)
+
+    conflicts = [(key, values) for key, values in groups.items() if len(values) > 1]
+    example_conflicts = [
+        {"node_key": key, "values": sorted(values)[:10]}
+        for key, values in conflicts[:5]
+    ]
+
+    return tool_success("collapse_check", {
+        "path": file_path,
+        "node_key_column": node_key_column,
+        "candidate_column": candidate_column,
+        "row_count": len(pairs),
+        "group_count": len(groups),
+        "groups_with_conflicts": len(conflicts),
+        "survives_collapse": len(conflicts) == 0,
+        "example_conflicts": example_conflicts,
+    })
+
+
+def join_preview(file_a: str, column_a: str, file_b: str, column_b: str,
+                 tool_context: ToolContext) -> dict:
+    """Estimates how well a join between two CSV columns would match.
+
+    Compares the distinct values of file_a's column against those of file_b's
+    column, so a relationship construction can be checked for coverage before
+    it is proposed. Empty values are ignored on both sides.
+
+    Args:
+      file_a: Path to the first CSV file, relative to the source location.
+      column_a: Column in file_a to join on.
+      file_b: Path to the second CSV file, relative to the source location.
+      column_b: Column in file_b to join on.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'join_preview'
+              key with, for each side, the number of distinct values, how many
+              of them have a match on the other side, and the matched fraction
+              (0.0 when a side has no usable values).
+    """
+    values_a, error = _collect_column_values(file_a, column_a)
+    if error is not None:
+        return error
+    values_b, error = _collect_column_values(file_b, column_b)
+    if error is not None:
+        return error
+
+    distinct_a = {str(v) for v in values_a if v is not None and str(v).strip() != ""}
+    distinct_b = {str(v) for v in values_b if v is not None and str(v).strip() != ""}
+    overlap = distinct_a & distinct_b
+
+    def fraction(matched: int, total: int) -> float:
+        return round(matched / total, 4) if total else 0.0
+
+    return tool_success("join_preview", {
+        "file_a": file_a,
+        "column_a": column_a,
+        "file_b": file_b,
+        "column_b": column_b,
+        "file_a_total": len(distinct_a),
+        "file_a_matched": len(overlap),
+        "file_a_match_fraction": fraction(len(overlap), len(distinct_a)),
+        "file_b_total": len(distinct_b),
+        "file_b_matched": len(overlap),
+        "file_b_match_fraction": fraction(len(overlap), len(distinct_b)),
+    })
+
+
+SEARCH_RESULTS = "search_results"
+
+def search_file(file_path: str, query: str) -> dict:
+    """Searches any text file for lines containing the query string, case-insensitively.
+
+    Args:
+      file_path: path relative to the source location
+      query: the string to search for
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'search_results'
+              key with 'matching_lines' and metadata.
+    """
+    try:
+        if not source_exists(file_path):
+            return tool_error(f"File does not exist: {file_path}")
+    except SourceError as exc:
+        return tool_error(str(exc))
+
     if not query:
         return tool_success(SEARCH_RESULTS, {
-            "metadata": {
-                "path": file_path,
-                "query": query,
-                "lines_found": 0
-            },
-            "matching_lines": []
+            "metadata": {"path": file_path, "query": query, "lines_found": 0},
+            "matching_lines": [],
         })
 
     matching_lines = []
     search_query = query.lower()
-    
     try:
-        with open(p, 'r', encoding='utf-8') as file:
-            # Process the file line by line
-            for i, line in enumerate(file, 1):
-                line_to_check = line.lower()
-                if search_query in line_to_check:
+        with open_source(file_path, "r") as handle:
+            for line_number, line in enumerate(handle, 1):
+                if search_query in line.lower():
                     matching_lines.append({
-                        "line_number": i,
-                        "content": line.strip()  # Remove trailing newlines
+                        "line_number": line_number,
+                        "content": line.strip(),
                     })
-                        
-    except Exception as e:
-        return tool_error(f"Error reading or searching file {file_path}: {e}")
+    except Exception as exc:  # noqa: BLE001
+        return tool_error(f"Error reading or searching file {file_path}: {exc}")
 
-    # Prepare basic metadata
-    metadata = {
-        "path": file_path,
-        "query": query,
-        "lines_found": len(matching_lines)
-    }
-    
-    result_data = {
-        "metadata": metadata,
-        "matching_lines": matching_lines
-    }
-    return tool_success("search_results", result_data)
-
-async def import_markdown_file(source_file: str, label_name: str, tool_context: ToolContext):
-    """Reads the content of a markdown file then creates a text node in Neo4j.
-    The node will only have two properties:
-    - content: the entire content of the markdown file
-
-    Args:
-      source_file: path to the markdown file, relative to the import directory
-      label_name: the label applied to the created node
-      tool_context: ToolContext object.
-
-    Returns:
-        dict: A dictionary indicating success or failure.
-              Includes a 'status' key ('success' or 'error').
-              If 'error', includes an 'error_message' key.
-    """
-    from agentic_kg.sub_agents.cypher_agent.tools import create_uniqueness_constraint, write_neo4j_cypher
-    
-    # 1. Ensure that a property constraint has been created for label/source_file
-    constraint_result = await create_uniqueness_constraint(label_name, "source_file")
-    if constraint_result["status"] == "error":
-        return constraint_result
-    
-    # 2. Read the content of the markdown
-    import_dir_result = get_neo4j_import_dir()
-    if import_dir_result["status"] == "error":
-        return import_dir_result
-    
-    import_dir = Path(import_dir_result["neo4j_import_dir"])
-    file_path = import_dir / source_file
-    
-    if not file_path.exists():
-        return tool_error(f"Markdown file does not exist: {source_file}")
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as mdfile:
-            content = mdfile.read()
-    except Exception as e:
-        return tool_error(f"Error reading markdown file {source_file}: {e}")
-    
-    # 3. Create a node for the markdown using a parameterized cypher query
-    query = "MERGE (t:$($label_name) {source_file: $source_file}) SET t.content = $content"
-    properties = {
-        "label_name": label_name,
-        "source_file": source_file,
-        "content": content
-    }
-    return await write_neo4j_cypher(query, properties)
-    
+    return tool_success(SEARCH_RESULTS, {
+        "metadata": {
+            "path": file_path,
+            "query": query,
+            "lines_found": len(matching_lines),
+        },
+        "matching_lines": matching_lines,
+    })
