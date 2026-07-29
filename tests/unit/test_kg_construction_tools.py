@@ -202,6 +202,87 @@ def test_construct_domain_graph_reports_successes_alongside_failures(monkeypatch
     assert "boom" in result["error_message"]
 
 
+# Rows processed vs. what the MERGE actually left in the graph
+
+@pytest.fixture
+def duplicate_keys(monkeypatch):
+    """Four rows keyed on two distinct assembly names, as a bill-of-materials
+    file with one row per component of an assembly legitimately is."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["assembly_name", "part"], [
+            {"assembly_name": "chair", "part": "leg"},
+            {"assembly_name": "chair", "part": "seat"},
+            {"assembly_name": "desk", "part": "top"},
+            {"assembly_name": "desk", "part": "drawer"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+class MergeSimulatingGraphDb:
+    """Actually dedupes on the MERGE key, instead of a canned count response.
+
+    A hardcoded {"count": 2} response would pass this test whether or not
+    load_nodes_from_csv sent the right label or the right key column -- it
+    proves nothing about the count query beyond "some number came back". This
+    tracks the same key-uniqueness MERGE gives a real database, so the count
+    query result actually depends on how many distinct keys the load sent.
+    """
+    def __init__(self):
+        self.queries = []
+        self._keys_by_label: dict[str, set] = {}
+
+    def send_query(self, query, parameters=None):
+        parameters = parameters or {}
+        self.queries.append((query, parameters))
+        if query.strip().startswith("UNWIND") and "MERGE (n:" in query:
+            label = query.split("MERGE (n:", 1)[1].split(" ", 1)[0].split("{")[0]
+            keys = self._keys_by_label.setdefault(label, set())
+            unique_column_name = parameters["unique_column_name"]
+            for row in parameters["rows"]:
+                keys.add(row[unique_column_name])
+            return {"status": "success", "records": []}
+        if query.startswith("MATCH (n:") and "count(n)" in query:
+            label = query.split("MATCH (n:", 1)[1].split(")", 1)[0]
+            return {"status": "success",
+                    "records": [{"count": len(self._keys_by_label.get(label, set()))}]}
+        return {"status": "success", "records": []}
+
+
+def test_node_count_reflects_merged_nodes_not_rows(monkeypatch, duplicate_keys):
+    """MERGE collapses rows sharing a key, so 'rows' overstates the graph --
+    the reported node count must come from the database, not the file."""
+    db = MergeSimulatingGraphDb()
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.load_nodes_from_csv("assemblies.csv", "Assembly", "assembly_name", ["part"])
+    assert result["status"] == "success"
+    assert result["rows_loaded"]["rows"] == 4, "row count stays available"
+    assert result["rows_loaded"]["nodes_in_graph"] == 2, (
+        "two distinct assembly_name values (chair, desk) among four rows"
+    )
+
+
+def test_node_count_is_read_back_from_the_label(monkeypatch, duplicate_keys):
+    db = FakeGraphDb()
+    monkeypatch.setattr(kg, "graphdb", db)
+    kg.load_nodes_from_csv("assemblies.csv", "Assembly", "assembly_name", ["part"])
+    count_query, _params = db.queries[-1]
+    assert count_query == "MATCH (n:Assembly) RETURN count(n) AS count"
+
+
+def test_a_failed_count_does_not_fail_a_committed_load(monkeypatch, duplicate_keys):
+    """The rows are already committed, so an unavailable count must leave the
+    field off rather than report the load as failed."""
+    db = FakeGraphDb(responses=[
+        {"status": "success", "records": []},
+        {"status": "error", "error_message": "boom"},
+    ])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.load_nodes_from_csv("assemblies.csv", "Assembly", "assembly_name", ["part"])
+    assert result["status"] == "success"
+    assert "nodes_in_graph" not in result["rows_loaded"]
+    assert result["rows_loaded"]["rows"] == 4
+
+
 REL_RULE = {
     "source_file": "knows.csv",
     "relationship_type": "KNOWS",
@@ -211,6 +292,46 @@ REL_RULE = {
     "to_node_column": "name",
     "properties": [],
 }
+
+
+def test_relationship_count_reflects_merged_edges_not_rows(monkeypatch, one_batch):
+    """rows_matched counts matched rows, which collapse on MERGE the same way
+    node rows do, so the edge total is counted separately."""
+    db = FakeGraphDb(responses=[
+        {"status": "success", "records": [{"rows_matched": 1}]},
+        {"status": "success", "records": [{"count": 27}]},
+    ])
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows_matched"] == 1, "existing field is unchanged"
+    assert result["rows_loaded"]["relationships_in_graph"] == 27
+    count_query, _params = db.queries[-1]
+    assert count_query == "MATCH ()-[r:KNOWS]->() RETURN count(r) AS count"
+
+
+def test_partial_failure_summary_reports_nodes_not_rows(monkeypatch):
+    """This string is what the agent parrots back, so it must not call 64 rows
+    64 nodes."""
+    def fake_import_nodes(rule):
+        if rule["label"] == "Assembly":
+            return {"status": "success", "rows_loaded": {
+                "source_file": "assemblies.csv", "rows": 64, "nodes_in_graph": 10}}
+        return {"status": "error", "error_message": "boom"}
+
+    monkeypatch.setattr(kg, "import_nodes", fake_import_nodes)
+    monkeypatch.setattr(kg, "import_relationships", lambda rule: {
+        "status": "success", "rows_loaded": {
+            "source_file": "knows.csv", "rows": 88, "rows_matched": 88,
+            "relationships_in_graph": 27}})
+    plan = {
+        "Assembly": {"construction_type": "node", "label": "Assembly"},
+        "Supplier": {"construction_type": "node", "label": "Supplier"},
+        "KNOWS": {"construction_type": "relationship", "relationship_type": "KNOWS"},
+    }
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
+    assert "Assembly (10 nodes now in graph, 64 rows read)" in result["error_message"]
+    assert "KNOWS (27 relationships now in graph, 88 rows read)" in result["error_message"]
 
 
 def test_import_relationships_warns_when_no_rows_match(monkeypatch, one_batch):
@@ -331,10 +452,15 @@ def test_missing_join_column_is_rejected_before_any_query(fake_db, one_batch):
     assert fake_db.queries == []
 
 
+def _load_queries(fake_db):
+    """Only the batch loads, excluding the post-load count query."""
+    return [q for q, _params in fake_db.queries if q.startswith("UNWIND")]
+
+
 def test_present_columns_still_load(fake_db, one_batch):
     result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
     assert result["status"] == "success"
-    assert len(fake_db.queries) == 1
+    assert len(_load_queries(fake_db)) == 1
 
 
 def test_header_is_only_checked_once(fake_db, monkeypatch):
@@ -345,7 +471,7 @@ def test_header_is_only_checked_once(fake_db, monkeypatch):
     monkeypatch.setattr(kg, "read_csv_batches", two_batches)
     result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
     assert result["status"] == "success"
-    assert len(fake_db.queries) == 2
+    assert len(_load_queries(fake_db)) == 2
 
 
 # Read failures are reported, not raised

@@ -44,6 +44,11 @@ variants = {
            If the 'build_graph_from_construction_rules' result includes a 'warnings' list, report every
            warning to the user verbatim: a relationship that matched far fewer rows than were read is a
            sign that its join columns do not line up, even though construction reported success.
+           When reporting counts, never call 'rows' or 'rows_matched' a number of nodes or relationships.
+           Those are CSV rows processed; several rows sharing a key merge into one node or relationship,
+           so the graph usually holds fewer. Report node counts from 'nodes_in_graph' and relationship
+           counts from 'relationships_in_graph'. If either is absent, say how many rows were processed
+           and count the label or type yourself with 'read_neo4j_cypher' before quoting a number.
         7. invite the user to try some questions that you'll answer using the 'read_neo4j_cypher' tool
         8. when the user is satisfied, use the 'finished' tool to signal that this phase of graph construction is complete
 

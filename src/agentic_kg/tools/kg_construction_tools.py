@@ -101,7 +101,37 @@ def load_nodes_from_csv(
         logger.exception("%s: read failed", source_file)
         return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
 
-    return tool_success("rows_loaded", {"source_file": source_file, "rows": rows_committed})
+    loaded = {"source_file": source_file, "rows": rows_committed}
+
+    # Rows processed is not the number of nodes that exist: MERGE collapses
+    # every row sharing a key value into one node, which is by design for a
+    # file with one row per component of an assembly. Reporting rows alone let
+    # an agent tell a user "64 Assembly nodes loaded" when there were 10. Count
+    # the label itself instead of deriving it from the file.
+    counted = _count_in_graph(f"MATCH (n:{label}) RETURN count(n) AS count")
+    if counted is not None:
+        loaded["nodes_in_graph"] = counted
+
+    return tool_success("rows_loaded", loaded)
+
+
+def _count_in_graph(query: str) -> int | None:
+    """Run a MATCH...count() query, or return None if it failed.
+
+    This counts everything the query matches in the graph right now, not just
+    what the load just wrote — it is a label/type-wide count, so pre-existing
+    data or another rule targeting the same label is included too. The rows
+    being counted are already committed by this point, so a failed count must
+    not turn a successful load into an error — it just leaves the count
+    unreported.
+    """
+    result = graphdb.send_query(query)
+    if result["status"] == "error":
+        logger.warning("post-load count failed: %s", result["error_message"])
+        return None
+    for record in result.get("records") or []:
+        return record.get("count")
+    return None
 
 
 def import_nodes(node_construction: dict) -> Dict[str, Any]:
@@ -204,6 +234,16 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         "rows_matched": rows_matched,
     }
 
+    # rows_matched collapses the same way node loading does — several rows
+    # naming the same endpoint pair MERGE into one relationship — so it is not
+    # an edge count either. Added alongside rather than replacing it, so the
+    # idempotent-re-run property above is kept. count() over a relationship
+    # type is a count-store lookup, not a scan, so this is cheap per type.
+    counted = _count_in_graph(
+        f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) AS count")
+    if counted is not None:
+        loaded["relationships_in_graph"] = counted
+
     # A row whose join columns match nothing produces no relationship, and the
     # MERGE reports no error for it. Half the rows failing to match is already
     # a design smell worth a human look; zero matches is almost certainly a
@@ -220,6 +260,23 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         logger.warning(warning)
 
     return tool_success("rows_loaded", loaded)
+
+
+def _loaded_summary(key: str, loaded: dict) -> str:
+    """Describe one loaded rule, preferring what is in the graph over rows read.
+
+    This string is what a partial-failure message hands an LLM agent, so it is
+    the number most likely to be repeated verbatim to the user — it must not
+    say "rows" where the user will hear "nodes".
+    """
+    for field, noun in (("nodes_in_graph", "nodes"),
+                        ("relationships_in_graph", "relationships")):
+        if loaded.get(field) is not None:
+            # "from N rows" would claim this load produced that many nodes,
+            # but the count is label-wide (see _count_in_graph) and can
+            # include nodes a re-run's own rows had nothing to do with.
+            return f"{key} ({loaded[field]} {noun} now in graph, {loaded['rows']} rows read)"
+    return f"{key} ({loaded['rows']} rows)"
 
 
 def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
@@ -280,7 +337,7 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
         # needs to know which rules already committed, both to report
         # accurately and to avoid re-running already-loaded rules on retry.
         successes = [
-            f"{key} ({result['rows_loaded']['rows']} rows)"
+            _loaded_summary(key, result["rows_loaded"])
             for key, result in outcomes.items()
             if result.get("status") == "success" and "rows_loaded" in result
         ]
