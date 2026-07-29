@@ -31,6 +31,15 @@ _OPENROUTER_PREFIX = "openrouter/"
 _LLM_TIMEOUT_SECONDS = 300
 _LLM_NUM_RETRIES = 2
 
+# OpenRouter pre-authorizes a call against the account balance using the
+# model's max output tokens when none is given (65536 for gpt-5), then
+# refunds the unused portion after generation — so a call that will only
+# ever produce a few hundred tokens can still get rejected with a 402 well
+# before the balance is actually exhausted. Capping this bounds that
+# pre-authorization to something every observed turn in this system fits
+# comfortably under.
+_LLM_MAX_TOKENS = 8192
+
 # The reasoning kind's model may be a dedicated "reasoning" model (e.g. gpt-5)
 # that defaults to its highest internal-reasoning tier on every call. This
 # agent's reasoning workloads (schema proposal/critique) are many small,
@@ -70,7 +79,11 @@ def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
     if kind not in _llm_instances:
         model = _model_name(kind)
         logger.info("Creating LLM for %s: %s", kind.value, model)
-        kwargs = {"timeout": _LLM_TIMEOUT_SECONDS, "num_retries": _LLM_NUM_RETRIES}
+        kwargs = {
+            "timeout": _LLM_TIMEOUT_SECONDS,
+            "num_retries": _LLM_NUM_RETRIES,
+            "max_tokens": _LLM_MAX_TOKENS,
+        }
         if kind is LlmKind.reasoning:
             kwargs["reasoning_effort"] = _REASONING_EFFORT
         _llm_instances[kind] = LiteLlm(model=model, **kwargs)
