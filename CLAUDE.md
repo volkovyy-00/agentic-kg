@@ -132,6 +132,11 @@ stage's state key is missing — that's how the "requires approved X" sequencing
 actually enforced. When tracing a bug across agents, look at which state keys a tool reads/writes before assuming
 control flow is the issue.
 
+`schema_proposal_agent`'s `schema_refinement_calls_this_turn` state key caps `schema_refinement_loop` to one
+invocation per user turn (deliberate, not an unexplained restriction): `reset_schema_refinement_turn_budget`
+(coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
+`before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
+
 ### Tool results
 
 All tools return a `ToolResult` (`common/tool_result.py`): `{"status": "success", <key>: value}` or

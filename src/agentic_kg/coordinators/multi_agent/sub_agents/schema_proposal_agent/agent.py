@@ -31,6 +31,14 @@ def prepare_refinement_loop_invocation(callback_context: CallbackContext) -> Opt
     invocation of this loop per user turn: increment the counter before
     checking it, and leave 'feedback' untouched on the short-circuited path
     so the returned message can quote the critic's actual last verdict.
+
+    Scope caveat: the budget is per coordinator entry, not strictly per user
+    message. reset_schema_refinement_turn_budget fires on every entry to
+    schema_proposal_agent_coordinator, so if a single turn transferred out
+    via 'finished' and back in, the budget would reset twice and permit two
+    loop invocations in that turn. Nothing here defends against that; it
+    relies on the parent coordinator's instructions not re-entering this
+    agent mid-turn.
     """
     calls = callback_context.state.get("schema_refinement_calls_this_turn", 0) + 1
     callback_context.state["schema_refinement_calls_this_turn"] = calls
@@ -161,7 +169,8 @@ root_agent = LlmAgent(
       it were correct.
     - If the verdict the loop returns begins with 'retry', the critic found problems that are still in
       the plan: call 'schema_refinement_loop' again, passing that retry feedback, instead of presenting a
-      plan with known problems for approval. Do this at most once for a given problem. If the loop
+      plan with known problems for approval (the loop only runs once per turn -- if you have already run
+      it this turn, present the plan instead). Do this at most once for a given problem. If the loop
       returns 'retry' a second time, stop calling it: some objections cannot be fixed by changing the
       schema, because they are properties of the data. Call 'get_proposed_construction_plan', show the
       user that plan together with the critic's remaining objections, and let them decide whether to

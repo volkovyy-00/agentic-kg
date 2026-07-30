@@ -1,6 +1,7 @@
 """Empirical proof that the coordinator's before_agent_callback -- which
 resets the schema_refinement_loop turn budget -- fires exactly once per
-incoming user message, not once per some other unit of ADK scheduling.
+incoming user message, not once per some other unit of ADK scheduling, when
+this coordinator is the agent the Runner resumes.
 
 This is deliberately a Runner-driven test rather than a hand-built
 InvocationContext: "how many times does ADK call run_async on the
@@ -10,10 +11,15 @@ through ADK's own Runner. The three agents' models are replaced with a
 scripted fake so the test is fast and deterministic -- it is not testing
 whether gpt-5 decides to call the tool, only whether the turn-budget
 mechanism holds when it does.
+
+This harness runs root_agent (schema_proposal_agent_coordinator) directly as
+the Runner's top-level agent; in production it is instead reached by
+transfer from full_workflow_agent. That transfer path is not exercised
+here -- it was separately confirmed to preserve the same once-per-turn
+firing by reading ADK's runners.py `_find_agent_to_run`, not by this test.
 """
 import asyncio
 
-import pytest
 from pydantic import Field
 from google.genai import types
 from google.adk.models.base_llm import BaseLlm
@@ -52,27 +58,27 @@ def _tool_call_response(request_text: str) -> LlmResponse:
     ]))
 
 
-def test_each_user_turn_gets_its_own_one_call_budget():
+def test_each_user_turn_gets_its_own_one_call_budget(monkeypatch):
     async def run():
         # schema_proposal_agent_v1 and schema_critic_agent_v1 only need to
         # end their turn immediately (plain text, no tool calls) so the one
         # allowed schema_refinement_loop invocation per turn completes fast.
-        schema_proposal_agent.model = ScriptedLlm(
+        monkeypatch.setattr(schema_proposal_agent, "model", ScriptedLlm(
             model="scripted", responses=[_text_response("a minimal schema proposal")],
-        )
-        schema_critic_agent.model = ScriptedLlm(
+        ))
+        monkeypatch.setattr(schema_critic_agent, "model", ScriptedLlm(
             model="scripted", responses=[_text_response("valid")],
-        )
+        ))
         # Coordinator: turn 1 tries to call schema_refinement_loop TWICE in a
         # row (reproducing the exact live-observed misbehavior this fix
         # guards against), then finalizes. Turn 2 tries once, then finalizes.
-        root_agent.model = ScriptedLlm(model="scripted", responses=[
+        monkeypatch.setattr(root_agent, "model", ScriptedLlm(model="scripted", responses=[
             _tool_call_response("propose an initial schema"),
             _tool_call_response("the user asked for another change"),
             _text_response("turn 1 final response"),
             _tool_call_response("the user asked for yet another change"),
             _text_response("turn 2 final response"),
-        ])
+        ]))
 
         runner = InMemoryRunner(agent=root_agent, app_name="turn_cap_test")
         session = await runner.session_service.create_session(
@@ -144,3 +150,10 @@ def test_each_user_turn_gets_its_own_one_call_budget():
     assert len(turn_2_results) == 1
     assert turn_2_results[0] == "valid"
     assert calls_after_turn_2 == (2, 2)
+
+    # All 5 scripted coordinator responses were consumed. ScriptedLlm holds
+    # on its last response when more calls arrive than scripted ones, so an
+    # unexpected extra root_agent call would silently replay "turn 2 final
+    # response" instead of surfacing -- this pins the call count so that
+    # would fail loudly instead.
+    assert root_agent.model.call_count == 5
