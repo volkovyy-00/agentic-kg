@@ -14,7 +14,7 @@ invocation) — this callback resets `feedback` for a fresh invocation and, usin
 A second, small callback on the coordinator (`root_agent`) resets that turn's budget to zero so
 every fresh user message gets to try once. No new files for production code; two new test files.
 
-**Tech Stack:** Python 3.12, `uv`, Google ADK (installed venv: `google-adk`), pytest.
+**Tech Stack:** Python 3.12, `uv`, Google ADK 1.10.0 (pinned, see Global Constraints), pytest.
 
 **Spec:** `docs/superpowers/specs/2026-07-29-schema-refinement-loop-latency-design.md` —
 authoritative, reviewed twice against ADK source, approved. Read it before starting.
@@ -33,10 +33,13 @@ authoritative, reviewed twice against ADK source, approved. Read it before start
   plan). Do not pipe through `tail` — `$?` would report `tail`'s exit code, not pytest's:
   `uv run pytest -q > /tmp/out.log 2>&1; echo "exit: $?"; cat /tmp/out.log`.
 - Work on branch `reduce-schema-refinement-latency` (already checked out). Commit after every task.
-- **`ADK's before_agent_callback` never runs on a frozen model** — `BaseAgent`'s `model_config` has
-  no `frozen=True`, so reassigning `.model`/`.before_agent_callback` on an already-constructed agent
-  object (used in Task 2's tests) is safe and was directly verified against this exact installed ADK
-  version before this plan was written; no need to re-verify it.
+- **Reassigning `.model`/`.before_agent_callback` on an already-constructed agent object is safe** —
+  `BaseAgent`'s `model_config` sets neither `frozen=True` nor `validate_assignment`, so post-construction
+  attribute assignment is both unblocked and unvalidated (a wrong-typed value would be accepted
+  silently, not rejected — don't rely on pydantic to catch a mistake here). Used in Task 2's tests;
+  directly verified against this exact installed ADK version (`1.10.0`) before this plan was written,
+  no need to re-verify it. If `google-adk` is ever bumped past `<2` (currently far behind upstream,
+  which is at `1.36.2`+), re-verify this assumption — it was not checked against any other version.
 
 ---
 
@@ -171,8 +174,9 @@ def test_coordinator_carries_the_reset_callback():
 
 Run: `uv run pytest tests/unit/test_schema_refinement_loop_callbacks.py -v`
 
-Expected: `ImportError` / `ModuleNotFoundError`-style collection failure — `agent.py` does not yet
-define `prepare_refinement_loop_invocation` or `reset_schema_refinement_turn_budget`.
+Expected: `ImportError: cannot import name 'prepare_refinement_loop_invocation' from ...` at collection
+time — `agent.py` does not yet define `prepare_refinement_loop_invocation` or
+`reset_schema_refinement_turn_budget`.
 
 - [ ] **Step 3: Implement the fix**
 
