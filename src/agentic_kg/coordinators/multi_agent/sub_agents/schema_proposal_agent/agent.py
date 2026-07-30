@@ -4,7 +4,7 @@ from google.adk.agents.callback_context import CallbackContext
 
 from google.adk.tools import agent_tool
 
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from google.adk.events import Event, EventActions
 from google.genai import types
 
@@ -20,9 +20,40 @@ finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 from .variants import variants
 
-# initialize context for schema_proposal_agent with blank feedback, which may get filled later by the schema_critic_agent
-def initialize_feedback(callback_context: CallbackContext) -> None:
+def prepare_refinement_loop_invocation(callback_context: CallbackContext) -> Optional[types.Content]:
+    """Runs once per schema_refinement_loop invocation (never mid-loop, since
+    this is attached to refinement_loop itself, not to schema_proposal_agent
+    -- a LoopAgent's own before_agent_callback fires once per call to
+    LoopAgent.run_async, while each sub-agent's before_agent_callback would
+    refire on every internal iteration).
+
+    Resets 'feedback' for a fresh invocation, and enforces at most one
+    invocation of this loop per user turn: increment the counter before
+    checking it, and leave 'feedback' untouched on the short-circuited path
+    so the returned message can quote the critic's actual last verdict.
+    """
+    calls = callback_context.state.get("schema_refinement_calls_this_turn", 0) + 1
+    callback_context.state["schema_refinement_calls_this_turn"] = calls
+    if calls > 1:
+        last_feedback = callback_context.state.get("feedback", "")
+        return types.Content(
+            role="model",
+            parts=[types.Part(text=(
+                "stopped: schema_refinement_loop already ran once this turn "
+                f"(last verdict: {last_feedback}). Do not call it again this "
+                "turn -- call get_proposed_construction_plan and present that "
+                "plan together with the verdict above, and let the user decide."
+            ))],
+        )
     callback_context.state["feedback"] = ""
+    return None
+
+
+def reset_schema_refinement_turn_budget(callback_context: CallbackContext) -> None:
+    """Runs once per incoming user turn, on the coordinator itself, giving
+    every fresh turn a new one-invocation budget for schema_refinement_loop."""
+    callback_context.state["schema_refinement_calls_this_turn"] = 0
+
 
 def initialize_schema_and_construction_plan(callback_context: CallbackContext) -> None:
     callback_context.state["proposed_schema"] = ""
@@ -35,7 +66,6 @@ schema_proposal_agent = LlmAgent(
     model=get_llm(LlmKind.reasoning),
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"], 
-    before_agent_callback=initialize_feedback
 )
     
 CRITIC_NAME = "schema_critic_agent_v1"
@@ -95,12 +125,14 @@ refinement_loop = LoopAgent(
     description="Analyzes approved files to propose a graph construction plan based on user intent and feedback",
     max_iterations=2,
     sub_agents=[schema_proposal_agent, schema_critic_agent, CheckStatusAndEscalate(name="StopChecker")],
+    before_agent_callback=prepare_refinement_loop_invocation,
     # before_agent_callback=initialize_schema_and_construction_plan
 )
 
 root_agent = LlmAgent(
     name="schema_proposal_agent_coordinator",
     model=get_llm(LlmKind.reasoning),
+    before_agent_callback=reset_schema_refinement_turn_budget,
     instruction="""
     You are a coordinator for the graph construction plan process. Use tools to propose a schema to the user.
     If the user disapproves, use the tools to refine the schema and ask the user to approve again.
@@ -134,6 +166,11 @@ root_agent = LlmAgent(
       schema, because they are properties of the data. Call 'get_proposed_construction_plan', show the
       user that plan together with the critic's remaining objections, and let them decide whether to
       approve it as it stands.
+    - If the verdict the loop returns begins with 'stopped:', 'schema_refinement_loop' has already run once
+      this turn and refused to run again -- do not call it again this turn no matter what. Call
+      'get_proposed_construction_plan' and present that plan together with the verdict's last-known
+      feedback (quoted in the 'stopped:' message), and let the user decide whether to approve it or ask
+      for another change, which will run in a fresh turn with a new budget.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.
