@@ -23,7 +23,7 @@ Each gets its own spec, plan and implementation cycle.
 - Foundation spec: `docs/superpowers/specs/2026-07-27-foundation-design.md`
 - Foundation plan: `docs/superpowers/plans/2026-07-27-foundation.md` (12 TDD tasks — self-contained, assumes no prior context)
 - **Decisions for sub-projects 2 and 3: `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`**
-- Branch: `foundation-file-sources-and-models`
+- Foundation is merged to `main` (the `foundation-file-sources-and-models` branch is gone — deleted after merge); work continues directly on `main`.
 
 **All design decisions for sub-projects 2 and 3 are already settled** — chunking, extraction context,
 resumability, identity model, approval posture, models, and definition of done — and are recorded with their
@@ -63,6 +63,8 @@ uv run pytest -q -m integration
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - No linter/formatter is configured in this project.
+- `gh` resolves to the wrong repo without `--repo volkovyy-00/agentic-kg` — there are two remotes (`origin` vs
+  `upstream neo4j-contrib/agentic-kg`).
 - Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
   nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
   has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with
@@ -83,6 +85,13 @@ uv run pytest -q -m integration
   3. `schema_proposal_agent` — requires approved file suggestions; proposes a construction plan
   4. `graph_construction_agent` — requires an approved schema; builds the graph
   5. `graphrag_agent` — only usable once `get_physical_schema` shows the graph exists; answers questions over it
+
+When a turn in the dev UI produces no visible response and no spinner, the UI alone can't tell you why (hung
+tool call, routing bug, and swallowed exception all look identical from the browser). Cheapest checks first:
+poll `GET /apps/{app}/users/{user}/sessions/{id}` directly (frozen event count = nothing happened), then the
+undocumented `GET /debug/trace/session/{id}` (spans have `start_time`/`end_time`, but a call that raises never
+gets a span — telemetry only fires on success), then the `adk web` server's own stdout, which is the only
+place a swallowed exception actually surfaces. Never reload the tab while a turn is genuinely streaming.
 
 Note there are **two separate implementations of similarly-named agents**: `src/agentic_kg/agents/` (standalone
 versions, e.g. `cypher_agent` — the one actually wired into `single_agent` — plus `user_intent_agent`, which is not
@@ -123,6 +132,11 @@ stage's state key is missing — that's how the "requires approved X" sequencing
 actually enforced. When tracing a bug across agents, look at which state keys a tool reads/writes before assuming
 control flow is the issue.
 
+`schema_proposal_agent`'s `schema_refinement_calls_this_turn` state key caps `schema_refinement_loop` to one
+invocation per user turn (deliberate, not an unexplained restriction): `reset_schema_refinement_turn_budget`
+(coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
+`before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
+
 ### Tool results
 
 All tools return a `ToolResult` (`common/tool_result.py`): `{"status": "success", <key>: value}` or
@@ -141,7 +155,10 @@ Neo4j import directory to manage: `tools/kg_construction_tools.py` reads CSVs cl
 and `common/csv_reader.py`) and loads rows with parameterised `UNWIND` batches, since Aura forbids
 `LOAD CSV FROM "file:///"`. Labels and relationship types, which Cypher cannot parameterise, are validated with
 `common/cypher_identifiers.checked()` and then interpolated into the query text — never passed as Cypher `$()`
-dynamic labels, which cannot use a uniqueness index.
+dynamic labels, which cannot use a uniqueness index. The loaders' `ToolResult`s include `nodes_in_graph` /
+`relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
+collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
+wrote, so a re-run against a non-empty graph will include prior data too.
 
 ### LLM selection
 
@@ -151,6 +168,12 @@ site's model choice winning for the whole process. Every model runs through Open
 in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.g. `"openai/gpt-4o"`), and
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
+`get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
+(e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
+exceeds the balance, the call gets a 402 that ADK's dev UI shows as an indistinguishable hang — no spinner, no
+error, no trace span, since telemetry only fires on a successful response. If reasoning-model calls silently
+stop working, check account balance and the `adk web` server's own stdout (it logs the real exception) before
+assuming a code regression.
 
 ### Domain models
 
