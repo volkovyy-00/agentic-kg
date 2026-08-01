@@ -1205,46 +1205,42 @@ def _pattern_degree(start: str, rel_type: str, end: str) -> Dict[str, Any]:
     pattern in it -- reintroducing the exact grain error this profile exists
     to prevent.
     """
-    query = (
-        f"MATCH (a:{quote(start)})-[r:{quote(rel_type)}]->(b:{quote(end)}) "
-        "WITH a, b, r "
-        "WITH collect({a: id(a), b: id(b)}) AS pairs, count(r) AS edges "
-        "UNWIND pairs AS p "
-        "WITH edges, p.a AS a_id, p.b AS b_id "
-        "WITH edges, "
-        "     count(DISTINCT a_id) AS distinct_start, "
-        "     count(DISTINCT b_id) AS distinct_end "
-        "RETURN edges, distinct_start, distinct_end"
-    )
-    rows = _records(graphdb.send_read_query(query, max_rows=None))
-    if not rows:
-        return {"edges": 0, "start_degree": "unknown", "end_degree": "unknown"}
-
-    row = rows[0]
-    edges = row["edges"]
-
-    def _degree(query_text):
-        got = _records(graphdb.send_read_query(query_text, max_rows=None))
-        if not got:
-            return "unknown"
-        r = got[0]
-        return {"min": r["lo"], "max": r["hi"], "mean": round(r["avg"], 2)}
-
-    start_degree = _degree(
+    # Two queries, one grouped at each end. Grouping by the start node yields
+    # the start-degree stats *and*, as a by-product, the edge total (the sum of
+    # per-node degrees) and the distinct start count -- so no separate
+    # cardinality query is needed. Every figure below is scoped to this one
+    # (start, type, end) pattern; pooling patterns of the same type is the bug
+    # this whole keying decision exists to avoid.
+    start_rows = _records(graphdb.send_read_query(
         f"MATCH (a:{quote(start)})-[r:{quote(rel_type)}]->(:{quote(end)}) "
         "WITH a, count(r) AS d "
-        "RETURN min(d) AS lo, max(d) AS hi, avg(d) AS avg")
-    end_degree = _degree(
+        "RETURN count(a) AS distinct_nodes, sum(d) AS edges, "
+        "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
+        max_rows=None))
+    end_rows = _records(graphdb.send_read_query(
         f"MATCH (:{quote(start)})-[r:{quote(rel_type)}]->(b:{quote(end)}) "
         "WITH b, count(r) AS d "
-        "RETURN min(d) AS lo, max(d) AS hi, avg(d) AS avg")
+        "RETURN count(b) AS distinct_nodes, "
+        "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
+        max_rows=None))
+
+    if not start_rows or start_rows[0].get("edges") in (None, 0):
+        return {"edges": 0, "start_degree": "unknown", "end_degree": "unknown"}
+
+    def _degree(row):
+        if not row or row.get("lo") is None:
+            return "unknown"
+        return {"min": row["lo"], "max": row["hi"], "mean": round(row["avg"], 2)}
+
+    start_row = start_rows[0]
+    end_row = end_rows[0] if end_rows else {}
 
     return {
-        "edges": edges,
-        "distinct_start": row["distinct_start"],
-        "distinct_end": row["distinct_end"],
-        "start_degree": start_degree,
-        "end_degree": end_degree,
+        "edges": start_row["edges"],
+        "distinct_start": start_row["distinct_nodes"],
+        "distinct_end": end_row.get("distinct_nodes"),
+        "start_degree": _degree(start_row),
+        "end_degree": _degree(end_row),
     }
 
 
@@ -2094,20 +2090,33 @@ def graphdb_against_container():
         graph_profile.graphdb = db
         graph_profile.reset_cache()
 
+        # Degrees are deliberately UNEVEN. A fixture where every degree is 1
+        # cannot distinguish per-pattern keying from pooled keying, because
+        # both produce identical numbers -- it would look like a passing test
+        # while proving nothing.
+        #
+        # Ground truth this builds:
+        #   Alpha-[LINKS]->Beta          edges=3  start={a1:2, m1:1}  end={b1:2, b2:1}
+        #   Alpha-[LINKS]->Gamma         edges=1  start={a1:1}        end={g1:1}
+        #   Alpha-[LINKS]->Legal Entity  edges=1  start={m1:1}        end={le1:1}
+        #   Alpha-[FOLLOWS]->Alpha       edges=2  start={a1:1, a2:1}  end={a2:1, m1:1}
+        # LINKS totals 5 edges across three patterns, so a pooled
+        # implementation reports edges=5 where a correct one reports 3.
         db.send_query("""
-            CREATE (a:Alpha {code: 'a1'})
-            CREATE (b:Beta {code: 'b1'})
-            CREATE (g:Gamma {code: 'g1'})
-            // one relationship type spanning two (start, end) pairs
-            CREATE (a)-[:LINKS {kind: 'x'}]->(b)
-            CREATE (a)-[:LINKS {kind: 'y'}]->(g)
-            // self-referencing type
+            CREATE (a1:Alpha {code: 'a1'})
             CREATE (a2:Alpha {code: 'a2'})
-            CREATE (a)-[:FOLLOWS]->(a2)
-            // multi-label node and a name that is not a bare identifier
             CREATE (m:Alpha:Archived {code: 'm1'})
+            CREATE (b1:Beta {code: 'b1'})
+            CREATE (b2:Beta {code: 'b2'})
+            CREATE (g1:Gamma {code: 'g1'})
             CREATE (le:`Legal Entity` {code: 'le1'})
+            CREATE (a1)-[:LINKS {kind: 'x'}]->(b1)
+            CREATE (a1)-[:LINKS {kind: 'x'}]->(b2)
+            CREATE (m)-[:LINKS {kind: 'y'}]->(b1)
+            CREATE (a1)-[:LINKS {kind: 'y'}]->(g1)
             CREATE (m)-[:LINKS {kind: 'x'}]->(le)
+            CREATE (a1)-[:FOLLOWS]->(a2)
+            CREATE (a2)-[:FOLLOWS]->(m)
         """)
 
         yield db, graph_profile
@@ -2139,6 +2148,71 @@ def test_degree_is_reported_per_pattern_not_pooled(graphdb_against_container):
     # them under one "LINKS" key is the bug this asserts against.
     links = {p for p in patterns if "[LINKS]" in p}
     assert len(links) >= 3, f"LINKS pooled instead of split per pattern: {patterns}"
+
+
+def _pattern(profile, key):
+    for entry in profile["patterns"]:
+        if entry["pattern"] == key:
+            return entry
+    raise AssertionError(f"pattern {key} missing from {[p['pattern'] for p in profile['patterns']]}")
+
+
+def test_degree_numbers_match_hand_computed_ground_truth(graphdb_against_container):
+    """The assertion the spec actually requires: real numbers, not just keys.
+
+    Checking only that distinct pattern keys exist would pass against a
+    completely wrong degree calculation. These figures are hand-derived from
+    the fixture topology documented in the fixture above.
+    """
+    db, graph_profile = graphdb_against_container
+    profile = graph_profile.build_profile(_schema_for(db))
+
+    beta = _pattern(profile, "Alpha-[LINKS]->Beta")
+    # 5 LINKS edges exist in total; a pooled implementation reports 5 here.
+    assert beta["edges"] == 3
+    assert beta["distinct_start"] == 2          # a1, m1
+    assert beta["distinct_end"] == 2            # b1, b2
+    assert beta["start_degree"] == {"min": 1, "max": 2, "mean": 1.5}
+    assert beta["end_degree"] == {"min": 1, "max": 2, "mean": 1.5}
+
+    gamma = _pattern(profile, "Alpha-[LINKS]->Gamma")
+    assert gamma["edges"] == 1
+    assert gamma["distinct_start"] == 1
+    assert gamma["distinct_end"] == 1
+    assert gamma["start_degree"] == {"min": 1, "max": 1, "mean": 1.0}
+
+    legal = _pattern(profile, "Alpha-[LINKS]->Legal Entity")
+    assert legal["edges"] == 1
+    assert legal["distinct_start"] == 1         # m1 only
+
+    follows = _pattern(profile, "Alpha-[FOLLOWS]->Alpha")
+    assert follows["edges"] == 2
+    assert follows["distinct_start"] == 2       # a1, a2
+    assert follows["distinct_end"] == 2         # a2, m1
+
+
+def test_fixed_grain_signal_is_trustworthy_per_pattern(graphdb_against_container):
+    """min == max means fixed grain. It must hold per pattern, not per type.
+
+    Across all LINKS edges pooled, start degrees are {a1:3, m1:2} -- min != max.
+    Per pattern, Alpha->Gamma is a clean 1:1. A pooled implementation loses
+    that, which is precisely the grain information the agent needs.
+    """
+    db, graph_profile = graphdb_against_container
+    profile = graph_profile.build_profile(_schema_for(db))
+    gamma = _pattern(profile, "Alpha-[LINKS]->Gamma")
+    assert gamma["start_degree"]["min"] == gamma["start_degree"]["max"] == 1
+
+
+def test_entity_counts_match_ground_truth(graphdb_against_container):
+    db, graph_profile = graphdb_against_container
+    profile = graph_profile.build_profile(_schema_for(db))
+    counts = profile["entity_counts"]
+    assert counts["Alpha"] == 3                 # a1, a2, m1 (m1 is multi-label)
+    assert counts["Beta"] == 2
+    assert counts["Legal Entity"] == 1
+    assert counts["LINKS"] == 5
+    assert counts["FOLLOWS"] == 2
 
 
 def test_self_referencing_pattern_is_profiled(graphdb_against_container):
@@ -2243,4 +2317,6 @@ If framing errors persist in v2 with the degree profile in context, that is evid
 
 **Type consistency.** `send_read_query(query, parameters=None, max_rows=MAX_RETURNED_ROWS)` is called with `max_rows=None` throughout Tasks 6 and 7 and with the default in Task 8. `annotate_property(prop, entity_count)` takes `Optional[int]` and is called with `counts.get(name)`, which may be `None`. `build_profile(schema)` returns the four keys Task 7 wraps and Task 10 asserts on. `get_cached_profile(schema_loader)` returns `{"schema", "profile"}`, which is exactly what Task 8 unpacks.
 
-**Known deviation to watch during implementation.** The two degree queries in `_pattern_degree` scan the pattern twice; if that shows up as a cost problem on a large graph, combine them — but only with the integration test in place to prove the combined form still reports per-pattern figures.
+**Cost note.** `_pattern_degree` issues **two** queries per pattern, one grouped at each end. An earlier draft used three — a separate `collect`/`UNWIND` cardinality query alongside the two degree queries — which was both slower and needlessly complex: grouping by the start node already yields the edge total as `sum(d)` and the distinct start count as `count(a)`. The spec's cost table is updated to `2P` accordingly. Going below two would mean a `CALL` subquery that still scans the pattern three times internally, so two is the floor worth having.
+
+**Ground-truth coverage.** `_pattern_degree` builds Cypher by interpolation and is exercised by no unit test (Task 6's fakes never execute Cypher), so its correctness rests entirely on `test_degree_numbers_match_hand_computed_ground_truth` in Task 10. That test asserts real figures derived by hand from the fixture, not merely that distinct pattern keys exist — a key-existence check would pass against arbitrarily wrong arithmetic. The fixture uses deliberately uneven degrees for the same reason: where every degree is 1, pooled and per-pattern implementations produce identical output, so a level fixture would prove nothing while appearing to pass.

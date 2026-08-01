@@ -153,11 +153,11 @@ Each entity's profile queries are wrapped so a failure degrades that one entry t
 |---|---|
 | Library enriched pass — one scan per label and per relationship type | N + M |
 | Entity counts — one query for all node labels, one for all relationship types | 2 |
-| Endpoint degree — one per pattern | P |
+| Endpoint degree — two per pattern, one grouped at each end | 2P |
 | Per-value counts — one per qualifying property | Q |
-| **Cold total** | **N + M + P + Q + 2** |
+| **Cold total** | **N + M + 2P + Q + 2** |
 
-On the demo graph (N=4, M=3, P=3) that is roughly fifteen. On an ingested corpus with tens of labels, tens of patterns and hundreds of properties it is hundreds, in one synchronous tool call, which in `adk web` is indistinguishable from a hang. So: a query budget. Profile the top-K entities by count, mark the remainder `"not_profiled"`, and carry a per-query timeout. The cache reduces how often this is paid; it does not bound what is paid, and per-document writes during ingestion invalidate it constantly.
+On the demo graph (N=4, M=3, P=3) that is roughly eighteen. On an ingested corpus with tens of labels, tens of patterns and hundreds of properties it is hundreds, in one synchronous tool call, which in `adk web` is indistinguishable from a hang. So: a query budget. Profile the top-K entities by count, mark the remainder `"not_profiled"`, and carry a per-query timeout. The cache reduces how often this is paid; it does not bound what is paid, and per-document writes during ingestion invalidate it constantly.
 
 Note also that the counts driving the library's exhaustive-versus-sampled decision come from `apoc.meta.graph({sample: 1000, maxRels: 100})` (`schema.py:65-70`) — they are themselves sampled, and `maxRels: 100` means graphs with more than 100 relationship patterns get some types silently omitted from enrichment. Treat those counts as estimates.
 
@@ -302,7 +302,7 @@ Repeats rather than a pinned temperature: there is no sampling control anywhere 
 - **The cache and query-tool changes are global**, so the v1/v2 A/B does not isolate them. Only the prompt, the profile wrapper and the context filter differ between arms.
 - **`graph_construction_agent`'s latency must not regress.** It is the reason the degree profile is parameterized rather than broadcast; verify its schema payload is unchanged.
 - **Fingerprint invalidation is blind to property-only edits** that leave node and relationship counts unchanged.
-- **The profile costs `N + M + P + Q + 2` queries when cold** — see the cost table under *Degree and value profile* for the terms. Roughly fifteen on the demo graph; hundreds on an ingested corpus. The cache reduces how often that is paid and the query budget bounds what is paid; neither alone is sufficient, and this is the largest remaining performance risk in the design.
+- **The profile costs `N + M + 2P + Q + 2` queries when cold** — see the cost table under *Degree and value profile* for the terms. Roughly eighteen on the demo graph; hundreds on an ingested corpus. The cache reduces how often that is paid and the query budget bounds what is paid; neither alone is sufficient, and this is the largest remaining performance risk in the design.
 - **This work verifies the agent is well-informed, not that it reasons correctly.** If framing errors persist with the degree profile in context, that is evidence the model tier is the binding constraint — a useful outcome, not a failure.
 
 ## Known gaps, named rather than implied
