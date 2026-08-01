@@ -118,3 +118,81 @@ def test_failed_write_does_not_increment(db):
     result = db.send_query("MERGE (n:Thing)")
     assert result["status"] == "error"
     assert db.write_count == 0
+
+
+from agentic_kg.common.neo4j_for_adk import MAX_RETURNED_ROWS, ROW_COUNT_CEILING
+
+
+def _rows(n):
+    return [{"i": i} for i in range(n)]
+
+
+def test_read_query_opens_a_read_access_session(db):
+    db._driver = FakeDriver(_rows(3))
+    db.send_read_query("MATCH (n) RETURN n")
+    assert db._driver.sessions[0]["default_access_mode"] == "READ"
+
+
+def test_read_query_passes_a_timeout(db):
+    db._driver = FakeDriver(_rows(1))
+    db.send_read_query("MATCH (n) RETURN n")
+    query_obj, _params, _kwargs = db._driver.queries[0]
+    assert getattr(query_obj, "timeout", None) is not None
+
+
+def test_read_query_returns_exact_row_count_under_the_cap(db):
+    db._driver = FakeDriver(_rows(3))
+    result = db.send_read_query("MATCH (n) RETURN n")
+    payload = result["query_result"]
+    assert payload["row_count"] == 3
+    assert payload["truncated"] is False
+    assert len(payload["records"]) == 3
+
+
+def test_read_query_truncates_records_but_counts_them_all(db):
+    db._driver = FakeDriver(_rows(MAX_RETURNED_ROWS + 25))
+    payload = db.send_read_query("MATCH (n) RETURN n")["query_result"]
+    assert len(payload["records"]) == MAX_RETURNED_ROWS
+    assert payload["row_count"] == MAX_RETURNED_ROWS + 25
+    assert payload["truncated"] is True
+    assert "aggregation" in payload["note"]
+
+
+def test_read_query_reports_a_floor_past_the_counting_ceiling(db, monkeypatch):
+    monkeypatch.setattr(neo4j_for_adk, "ROW_COUNT_CEILING", 10)
+    db._driver = FakeDriver(_rows(25))
+    payload = db.send_read_query("MATCH (n) RETURN n")["query_result"]
+    assert "row_count" not in payload
+    assert payload["row_count_at_least"] == 10
+    assert payload["truncated"] is True
+
+
+def test_read_query_never_increments_the_write_counter(db):
+    db._driver = FakeDriver(_rows(1))
+    db.send_read_query("MATCH (n) SET n.x = 1")
+    assert db.write_count == 0
+
+
+def test_read_query_max_rows_none_retains_everything(db):
+    db._driver = FakeDriver(_rows(120))
+    payload = db.send_read_query("MATCH (n) RETURN n", max_rows=None)["query_result"]
+    assert len(payload["records"]) == 120
+    assert payload["truncated"] is False
+
+
+def test_read_query_returns_structured_error_not_an_exception(db):
+    def boom(**k):
+        raise RuntimeError("syntax error at line 1")
+    db._driver.session = boom
+    result = db.send_read_query("MATCH bad")
+    assert result["status"] == "error"
+    assert "syntax error" in result["error_message"]
+
+
+def test_long_lists_are_summarised_not_returned_whole(db):
+    db._driver = FakeDriver([{"embedding": [0.1] * 1536, "name": "x"}])
+    payload = db.send_read_query("MATCH (c) RETURN c")["query_result"]
+    record = payload["records"][0]
+    assert record["name"] == "x"
+    assert isinstance(record["embedding"], str)
+    assert "1536" in record["embedding"]

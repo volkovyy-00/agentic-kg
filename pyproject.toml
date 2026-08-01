@@ -19,7 +19,7 @@ dependencies = [
     "litellm>=1.83.9,<1.84",
     # litellm 1.83.9 hard-pins openai==2.24.0; stated here so the requirement is explicit.
     "openai>=2.24,<3",
-    "neo4j>=5.28.2",
+    "neo4j>=5.28.2,<6",
     "neo4j-graphrag>=1.9.1",
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",

@@ -6,6 +6,8 @@ import logging
 
 from neo4j import (
     GraphDatabase,
+    Query,
+    READ_ACCESS,
     Result,
 )
 
@@ -14,6 +16,30 @@ from .pydantic_neo4j import Neo4jConfig
 from .tool_result import tool_success, tool_error
 
 logger = logging.getLogger(__name__)
+
+# Bound on how long any single agent-issued query may run. A hung tool call in
+# `adk web` is indistinguishable from a routing bug, which this project has
+# been burned by before.
+QUERY_TIMEOUT_SECONDS = 30
+
+# How many rows are retained and shown. Not a tuned constant -- a judgement
+# about how many rows are worth reading individually before the honest answer
+# is "aggregate this instead". No behaviour may depend on its exact value.
+MAX_RETURNED_ROWS = 50
+
+# How far we keep counting past the cap before reporting a floor instead of an
+# exact total. Counting is cheap (an int); claiming an exact number we did not
+# finish counting would not be.
+ROW_COUNT_CEILING = 100_000
+
+# Lists longer than this are replaced by a summary string. Embedding vectors
+# would otherwise be pasted into the model's context verbatim.
+MAX_INLINE_LIST_LENGTH = 32
+
+_TRUNCATION_NOTE = (
+    "Records are capped. Counts, rankings and superlatives must come from a "
+    "Cypher aggregation, never from counting these rows."
+)
 
 def load_neo4j_config_from_settings() -> Neo4jConfig:
     settings = get_settings()
@@ -132,6 +158,23 @@ def to_python(value):
         return value
 
 
+def summarise_long_lists(value):
+    """Replace oversized lists with a description of their shape.
+
+    to_python recurses into lists, so `MATCH (c:Chunk) RETURN c` would return a
+    full embedding vector. get_structured_schema's `sanitize` does not reach
+    this path -- it only covers the library's own query family.
+    """
+    if isinstance(value, dict):
+        return {k: summarise_long_lists(v) for k, v in value.items()}
+    if isinstance(value, list):
+        if len(value) > MAX_INLINE_LIST_LENGTH:
+            kind = type(value[0]).__name__ if value else "unknown"
+            return f"<list of {len(value)} {kind} values, omitted>"
+        return [summarise_long_lists(v) for v in value]
+    return value
+
+
 class Neo4jForADK:
     """
     A wrapper for querying Neo4j which returns ADK-friendly responses.
@@ -175,6 +218,67 @@ class Neo4jForADK:
             if is_write_query(cypher_query):
                 self.write_count += 1
             return adk_result
+        except Exception as e:
+            return tool_error(str(e))
+        finally:
+            if session is not None:
+                session.close()
+
+    def send_read_query(
+        self,
+        cypher_query,
+        parameters=None,
+        max_rows: Optional[int] = MAX_RETURNED_ROWS,
+    ) -> Dict[str, Any]:
+        """Run a query read-only, timed, and with bounded row retention.
+
+        Read-only is enforced by the *server* through default_access_mode, not
+        by inspecting the query text -- text matching cannot distinguish a
+        keyword from a string literal, and misses camelCase procedure calls
+        like apoc.refactor.mergeNodes.
+
+        Rows are streamed rather than materialised, so memory is bounded by
+        max_rows instead of by the size of the result. Counting continues past
+        max_rows up to ROW_COUNT_CEILING; beyond that the payload reports
+        row_count_at_least rather than inventing an exact total.
+
+        Pass max_rows=None to retain every row (used for internal aggregate
+        queries whose results are already small).
+        """
+        session = None
+        try:
+            # Inside the try, for the same reason as send_query: a failure to
+            # open the session must return a structured error, not raise.
+            session = self._driver.session(
+                database=self._neo4j_config.database,
+                default_access_mode=READ_ACCESS,
+            )
+            query = Query(cypher_query, timeout=QUERY_TIMEOUT_SECONDS)
+            result = session.run(query, parameters or {})
+
+            records = []
+            counted = 0
+            hit_ceiling = False
+            for record in result:
+                counted += 1
+                if max_rows is None or len(records) < max_rows:
+                    records.append(summarise_long_lists(to_python(record.data())))
+                if counted >= ROW_COUNT_CEILING:
+                    hit_ceiling = True
+                    break
+
+            truncated = max_rows is not None and counted > len(records)
+            payload: Dict[str, Any] = {
+                "records": records,
+                "truncated": truncated or hit_ceiling,
+            }
+            if hit_ceiling:
+                payload["row_count_at_least"] = counted
+            else:
+                payload["row_count"] = counted
+            if payload["truncated"]:
+                payload["note"] = _TRUNCATION_NOTE
+            return tool_success("query_result", payload)
         except Exception as e:
             return tool_error(str(e))
         finally:
