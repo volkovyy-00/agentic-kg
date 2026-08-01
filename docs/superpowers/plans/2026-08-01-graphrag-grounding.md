@@ -23,6 +23,10 @@
 - **Leave `graphrag_agent_v1` intact.** v2 is added alongside it for the acceptance A/B.
 - **No test asserts on model prose.**
 - **Baseline is 172 passed / 3 skipped.** `uv run pytest` must stay green after every task.
+- Per-task expectations follow the chain `172 +7 +9 +12 +9 +14 +11 +5 +8 +4 = 251`, counting
+  parametrize *expansions*, not function definitions. Task 10 adds no default-suite tests —
+  it is `integration`-marked and excluded by `addopts`. If you change a test count, recount
+  with `ast` rather than by eye; three earlier drafts of these numbers were wrong.
 - **Pin `neo4j<6` in `pyproject.toml` as part of Task 4.** The pin is currently `neo4j>=5.28.2` with no upper bound. `default_access_mode` is the 5.x idiom (5.x docs recommend `execute_read()` for new code, and 6.x is published), so a routine `uv lock --upgrade` could break the read path silently. Change the dependency line to `"neo4j>=5.28.2,<6",` and note it in Task 4's commit.
 - Run tests with `uv run pytest`. `addopts = "-q -m 'not integration'"` already excludes integration tests; run those with `uv run pytest -m integration`.
 
@@ -825,21 +829,27 @@ from agentic_kg.common.graph_profile import (
     annotate_property,
 )
 
-# Same payload shape for both kinds -- the library returns identical property
-# dicts under "node_props" and "rel_props", which is why one function serves.
-KINDS = ["node", "relationship"]
+# NOTE ON KIND SYMMETRY.
+# An earlier draft parametrized every test below over ["node", "relationship"]
+# and then never used the parameter -- the same assertion run twice, which
+# proves nothing and reads as coverage. annotate_property takes no kind
+# argument at all: the library hands back identical property dicts under
+# "node_props" and "rel_props", so kind-symmetry here is structural, not
+# behavioural, and cannot be tested by varying an unused variable.
+#
+# The place kind genuinely changes behaviour is _value_counts, which emits a
+# different MATCH clause for each. That is covered in test_graph_profile.py's
+# Task 6 section by test_value_counts_query_shape_differs_by_kind.
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_complete_when_values_match_distinct_count(kind):
+def test_complete_when_values_match_distinct_count():
     prop = {"property": "flag", "type": "STRING", "values": ["a", "b"], "distinct_count": 2}
     out = annotate_property(prop, entity_count=100)
     assert out["completeness"] == "complete"
     assert out["values"] == ["a", "b"]
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_partial_when_values_are_truncated(kind):
+def test_partial_when_values_are_truncated():
     prop = {"property": "n", "type": "STRING",
             "values": [str(i) for i in range(10)], "distinct_count": 27}
     out = annotate_property(prop, entity_count=100)
@@ -847,67 +857,66 @@ def test_partial_when_values_are_truncated(kind):
     assert out["values"] == [str(i) for i in range(10)]
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_unknown_and_values_suppressed_when_sampled(kind):
+def test_unknown_and_values_suppressed_when_sampled():
     prop = {"property": "n", "type": "STRING", "values": ["7", "9"]}
     out = annotate_property(prop, entity_count=50_000)
     assert out["completeness"] == "unknown"
     assert "values" not in out
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_unique_when_distinct_count_equals_entity_count(kind):
+def test_numeric_like_is_unknown_when_completeness_is_unknown():
+    """Sampled values were discarded as untrustworthy; they cannot then be
+    used as evidence that a property is numeric. Prompt rule 5 acts on this."""
+    prop = {"property": "n", "type": "STRING", "values": ["7", "9"]}
+    out = annotate_property(prop, entity_count=50_000)
+    assert out["numeric_like"] == "unknown"
+
+
+def test_unique_when_distinct_count_equals_entity_count():
     prop = {"property": "id", "type": "STRING", "values": [], "distinct_count": 88}
     out = annotate_property(prop, entity_count=88)
     assert out["uniqueness"] == "unique"
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_non_unique_when_distinct_count_is_below_entity_count(kind):
+def test_non_unique_when_distinct_count_is_below_entity_count():
     prop = {"property": "label", "type": "STRING", "values": [], "distinct_count": 72}
     out = annotate_property(prop, entity_count=88)
     assert out["uniqueness"] == "non_unique"
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_uniqueness_unknown_without_distinct_count(kind):
+def test_uniqueness_unknown_without_distinct_count():
     prop = {"property": "label", "type": "STRING", "values": ["x"]}
     out = annotate_property(prop, entity_count=88)
     assert out["uniqueness"] == "unknown"
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_uniqueness_unknown_when_entity_count_unavailable(kind):
+def test_uniqueness_unknown_when_entity_count_unavailable():
     prop = {"property": "label", "type": "STRING", "values": [], "distinct_count": 5}
     out = annotate_property(prop, entity_count=None)
     assert out["uniqueness"] == "unknown"
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_numeric_like_string_is_flagged(kind):
+def test_numeric_like_string_is_flagged():
     prop = {"property": "days", "type": "STRING",
             "values": ["8", "12", "30"], "distinct_count": 3}
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] is True
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_non_numeric_string_is_not_flagged(kind):
+def test_non_numeric_string_is_not_flagged():
     prop = {"property": "city", "type": "STRING",
             "values": ["Berlin", "Lisbon"], "distinct_count": 2}
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] is False
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_numeric_like_false_for_already_numeric_types(kind):
+def test_numeric_like_false_for_already_numeric_types():
     prop = {"property": "n", "type": "INTEGER", "min": 1, "max": 9}
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] is False
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_every_annotation_key_is_always_present(kind):
+def test_every_annotation_key_is_always_present():
     """Omission-means-unknown is the regression this design forbids.
 
     A missing key reads as *safe* to a model, and the entities we cannot
@@ -920,8 +929,7 @@ def test_every_annotation_key_is_always_present(kind):
         assert key in out, f"{key} must always be present, never omitted"
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_input_is_not_mutated(kind):
+def test_input_is_not_mutated():
     prop = {"property": "flag", "type": "STRING", "values": ["a"], "distinct_count": 1}
     before = dict(prop)
     annotate_property(prop, entity_count=1)
@@ -1028,10 +1036,19 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
     else:
         out["uniqueness"] = "non_unique"
 
+    # Tri-state, for the same reason as the other two. An earlier draft
+    # computed this from `values` even on the sampled branch -- i.e. from the
+    # five rows we had just discarded as untrustworthy -- so a property could
+    # carry completeness "unknown" alongside numeric_like True. That is the one
+    # place the design contradicted its own rule, and it fed prompt rule 5,
+    # which tells the agent to cast.
     prop_type = prop.get("type")
-    out["numeric_like"] = (
-        prop_type not in _NUMERIC_TYPES and _is_numeric_like(values)
-    )
+    if prop_type in _NUMERIC_TYPES:
+        out["numeric_like"] = False          # already numeric; nothing to infer
+    elif out["completeness"] == "unknown":
+        out["numeric_like"] = "unknown"      # sampled values are not evidence
+    else:
+        out["numeric_like"] = _is_numeric_like(values)
 
     return out
 ```
@@ -1039,12 +1056,12 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
 - [ ] **Step 4: Run and confirm the tests pass**
 
 Run: `uv run pytest tests/unit/test_graph_profile.py -v`
-Expected: 25 passed
+Expected: 14 passed
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 234 passed, 3 skipped
+Expected: 223 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -1069,7 +1086,12 @@ motivated these annotations landed on opposite sides of that split."
 
 **Interfaces:**
 - Consumes: `annotate_property` (Task 5), `graphdb.send_read_query` (Task 4).
-- Produces: `MAX_PROFILED_ENTITIES = 25`, `quote(name: str) -> str`, and `build_profile(schema: dict) -> dict` returning
+- Produces: `MAX_PROFILED_ENTITIES = 25
+
+# Separate cap for the degree loop. Patterns and entities scale independently:
+# a multi-label graph inflates patterns much faster than labels, because one
+# relationship type spans every (start, end) label combination it touches.
+MAX_PROFILED_PATTERNS = 25`, `quote(name: str) -> str`, and `build_profile(schema: dict) -> dict` returning
   `{"entity_counts": {...}, "patterns": [...], "properties": {...}, "budget": {...}}`. Task 7 calls `build_profile`; Task 8 is unaffected.
 
 Background: labels and relationship-type names come from the *database*, not from a model, so they must be backtick-quoted the way the library does (`schema.py:707-710`, node labels at 710) and must **not** go through `common/cypher_identifiers.checked()` — that helper rejects anything which is not a bare identifier, so a legal extracted label like `Legal Entity` would raise and take down the whole profile, and with it `get_physical_schema`, the tool graphrag is told to call first. The library isolates failures per entity (`except CypherTypeError: return`, `schema.py:858-859`, invoked per entity at 903 and 914); this must match that or be strictly less robust than what it wraps.
@@ -1175,6 +1197,37 @@ def test_value_counts_only_for_small_distinct_counts(fake_profile_db):
     assert counted and not not_counted
 
 
+@pytest.mark.parametrize("is_relationship,expected,forbidden", [
+    (False, "MATCH (n:`Thing`)", "-[r:`Thing`]->"),
+    (True, "MATCH ()-[r:`Thing`]->()", "MATCH (n:`Thing`)"),
+])
+def test_value_counts_query_shape_differs_by_kind(
+        fake_profile_db, is_relationship, expected, forbidden):
+    """The one place node vs relationship genuinely changes the emitted Cypher.
+
+    This is the real content behind the spec's "asserted twice, once per
+    property kind" commitment -- annotate_property cannot carry it, because it
+    has no kind parameter to vary.
+    """
+    graph_profile._value_counts("Thing", "flag", is_relationship=is_relationship)
+    issued = " ".join(fake_profile_db.queries)
+    assert expected in issued
+    assert forbidden not in issued
+
+
+@pytest.mark.parametrize("collection", ["node_props", "rel_props"])
+def test_both_property_collections_are_annotated_identically(fake_profile_db, collection):
+    """Same property dict, either collection, same annotations."""
+    prop = {"property": "flag", "type": "STRING", "values": ["a", "b"], "distinct_count": 2}
+    schema = {"node_props": {}, "rel_props": {}, "relationships": []}
+    schema[collection] = {"Thing": [dict(prop)]}
+    profile = build_profile(schema)
+    annotated = profile["properties"]["Thing"][0]
+    assert annotated["completeness"] == "complete"
+    assert annotated["uniqueness"] in ("unique", "non_unique", "unknown")
+    assert "value_counts" in annotated
+
+
 def test_budget_marks_unprofiled_entities_rather_than_dropping_them(monkeypatch):
     monkeypatch.setattr(graph_profile, "MAX_PROFILED_ENTITIES", 1)
     db = FakeGraphDbForProfile()
@@ -1186,8 +1239,19 @@ def test_budget_marks_unprofiled_entities_rather_than_dropping_them(monkeypatch)
     profile = build_profile(schema)
     statuses = set(profile["properties"].values())
     assert "not_profiled" in statuses
-    assert profile["budget"]["profiled"] == 1
-    assert profile["budget"]["skipped"] == 2
+    assert profile["budget"]["entities_profiled"] == 1
+    assert profile["budget"]["entities_skipped"] == 2
+
+
+def test_budget_also_caps_the_pattern_loop(monkeypatch):
+    """Gating only entities would leave the 2P degree queries unbounded."""
+    monkeypatch.setattr(graph_profile, "MAX_PROFILED_PATTERNS", 1)
+    db = FakeGraphDbForProfile()
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    profile = build_profile(SCHEMA)
+    degrees = [p["start_degree"] for p in profile["patterns"]]
+    assert "not_profiled" in degrees
+    assert profile["budget"]["patterns_profiled"] == 1
 ```
 
 - [ ] **Step 2: Run and confirm failure**
@@ -1394,13 +1458,24 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
             properties[name] = "profile_error"
         profiled += 1
 
+    # The budget covers patterns too. Gating only the property loop would leave
+    # the 2P degree queries unbounded, so "cold-start cost is bounded" would
+    # hold for Q alone -- which is not what the spec claims. Largest patterns
+    # first, by the edge count of their relationship type.
+    ranked = [r for r in relationships
+              if r.get("start") and r.get("type") and r.get("end")]
+    ranked.sort(key=lambda r: counts.get(r["type"]) or 0, reverse=True)
+
     patterns = []
-    for rel in relationships:
-        start, rel_type, end = rel.get("start"), rel.get("type"), rel.get("end")
-        if not (start and rel_type and end):
-            continue
+    for index, rel in enumerate(ranked):
+        start, rel_type, end = rel["start"], rel["type"], rel["end"]
         entry = {"pattern": f"{start}-[{rel_type}]->{end}",
                  "start": start, "type": rel_type, "end": end}
+        if index >= MAX_PROFILED_PATTERNS:
+            entry["start_degree"] = "not_profiled"
+            entry["end_degree"] = "not_profiled"
+            patterns.append(entry)
+            continue
         try:
             entry.update(_pattern_degree(start, rel_type, end))
         except Exception:
@@ -1414,27 +1489,53 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
         "patterns": patterns,
         "properties": properties,
         "budget": {
-            "profiled": min(profiled, MAX_PROFILED_ENTITIES),
-            "skipped": max(0, len(entities) - MAX_PROFILED_ENTITIES),
-            "limit": MAX_PROFILED_ENTITIES,
+            "entities_profiled": min(profiled, MAX_PROFILED_ENTITIES),
+            "entities_skipped": max(0, len(entities) - MAX_PROFILED_ENTITIES),
+            "entity_limit": MAX_PROFILED_ENTITIES,
+            "patterns_profiled": min(len(ranked), MAX_PROFILED_PATTERNS),
+            "patterns_skipped": max(0, len(ranked) - MAX_PROFILED_PATTERNS),
+            "pattern_limit": MAX_PROFILED_PATTERNS,
         },
     }
 ```
 
-- [ ] **Step 4: Run and confirm the tests pass**
+- [ ] **Step 4: Amend the `cypher_identifiers` docstring**
+
+`src/agentic_kg/common/cypher_identifiers.py` currently ends its module docstring with:
+
+> Every caller that interpolates a label, relationship type or property/column name into
+> Cypher must validate it with `checked()` first.
+
+Task 6 deliberately breaks that rule, so the rule has to change in the same commit —
+otherwise the next reader correctly reads `quote()` as a bug. Replace that closing sentence
+with:
+
+```
+Every caller that interpolates a *model-supplied* label, relationship type or
+property/column name into Cypher must validate it with `checked()` first.
+
+Names read back out of the database are a different case and must NOT use
+`checked()`: Neo4j accepts labels this validator rejects (`Legal Entity`,
+`10-K`), so validating them would raise on data the graph legitimately
+contains. Those callers backtick-quote instead -- see `graph_profile.quote()`.
+The distinction is provenance, not syntax: `checked()` guards against
+injection from an untrusted source, and the database is not one.
+```
+
+- [ ] **Step 5: Run and confirm the tests pass**
 
 Run: `uv run pytest tests/unit/test_graph_profile.py -v`
-Expected: 31 passed
+Expected: 25 passed
 
-- [ ] **Step 5: Run the whole suite**
+- [ ] **Step 6: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 240 passed, 3 skipped
+Expected: 234 passed, 3 skipped
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/agentic_kg/common/graph_profile.py tests/unit/test_graph_profile.py
+git add src/agentic_kg/common/graph_profile.py src/agentic_kg/common/cypher_identifiers.py tests/unit/test_graph_profile.py
 git commit -m "feat: profile entity counts, per-pattern degree, and value counts
 
 Degree is keyed on (start, type, end) triples, never on relationship type
@@ -1623,7 +1724,7 @@ Expected: 5 passed
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 245 passed, 3 skipped
+Expected: 239 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -1893,7 +1994,7 @@ Expected: all pass
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 250 passed, 3 skipped
+Expected: 247 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -2144,7 +2245,7 @@ Expected: 4 passed
 - [ ] **Step 6: Run the whole suite, including the generality guard**
 
 Run: `uv run pytest`
-Expected: 254 passed, 3 skipped. If `test_generality.py` fails, a dataset word reached the new prompt — remove it.
+Expected: 251 passed, 3 skipped. If `test_generality.py` fails, a dataset word reached the new prompt — remove it.
 
 - [ ] **Step 7: Commit**
 
@@ -2481,7 +2582,7 @@ With APOC loaded by the fixture, `apoc.refactor.mergeNodes` returns a genuine `N
 - [ ] **Step 3: Confirm the default suite is unaffected**
 
 Run: `uv run pytest`
-Expected: 254 passed, 3 skipped — the new file is excluded by `addopts`.
+Expected: 251 passed, 3 skipped — unchanged from Task 9, because the new file is excluded by `addopts`.
 
 - [ ] **Step 4: Commit**
 
