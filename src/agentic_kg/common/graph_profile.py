@@ -335,3 +335,62 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
             "pattern_limit": MAX_PROFILED_PATTERNS,
         },
     }
+
+
+# Module-level, deliberately not session state: one adk web process serves
+# every session, and what is cached is a property of the database, not of a
+# conversation. Per-session caches would disagree with each other the moment
+# one session rebuilt the graph.
+_cache: Dict[str, Any] = {}
+
+_FINGERPRINT_QUERY = (
+    "MATCH (n) WITH count(n) AS nodes "
+    "OPTIONAL MATCH ()-[r]->() "
+    "RETURN nodes, count(r) AS rels"
+)
+
+
+def reset_cache() -> None:
+    """Discard the cached profile. For tests and for explicit invalidation."""
+    _cache.clear()
+
+
+def _fingerprint():
+    """Node and relationship totals, or None when they cannot be read.
+
+    Catches writes the counter structurally cannot see -- anything done to the
+    database from outside this process. Blind to edits that change property
+    values without changing counts; the shape and cardinality we cache do not
+    move under those.
+    """
+    rows = _records(graphdb.send_read_query(_FINGERPRINT_QUERY, max_rows=None))
+    if not rows:
+        return None
+    return (rows[0].get("nodes"), rows[0].get("rels"))
+
+
+def get_cached_profile(schema_loader) -> Dict[str, Any]:
+    """Return {"schema": ..., "profile": ...}, recomputing only when stale.
+
+    schema_loader is a zero-argument callable returning the enriched schema.
+    It is only invoked on a miss, so the expensive enriched pass is skipped
+    entirely on a hit.
+    """
+    write_count = getattr(graphdb, "write_count", None)
+    fingerprint = _fingerprint()
+
+    if (
+        _cache
+        and _cache.get("write_count") == write_count
+        and _cache.get("fingerprint") == fingerprint
+        and fingerprint is not None
+    ):
+        return _cache["value"]
+
+    schema = schema_loader()
+    value = {"schema": schema, "profile": build_profile(schema)}
+    _cache.clear()
+    _cache.update(
+        {"write_count": write_count, "fingerprint": fingerprint, "value": value}
+    )
+    return value
