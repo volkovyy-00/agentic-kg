@@ -73,7 +73,9 @@ New module `src/agentic_kg/common/adk_context.py` owns the context filter and th
 `tool_success(key, value)` produces `{"status": "success", <key>: value}`, and `_payload_key` (`tool_result.py:53-64`) raises when a success result carries more than one non-status key. Sibling keys are therefore forbidden. Both tools keep a single payload key:
 
 ```
-get_physical_schema(include_data_profile: bool = False)
+_physical_schema(include_data_profile: bool)   # private, never bound as a tool
+get_physical_schema()                          # tool: structure only
+get_graph_schema_with_profile()                # tool: structure + data profile
   -> tool_success("schema", { ...library keys..., "profile": {...} })
 
 read_neo4j_cypher(query, params)
@@ -121,7 +123,7 @@ There is a third branch worth a comment in the implementation, though it needs n
 
 ### Degree and value profile
 
-New `include_data_profile: bool = False` parameter. Only graphrag binds a wrapper that passes `True`.
+New `include_data_profile` parameter on a **private** `_physical_schema`, never on a tool. Two zero-argument public wrappers select it: `get_physical_schema()` for structure only, `get_graph_schema_with_profile()` for the profiled form, which only graphrag binds.
 
 Throughout this section **entity** means a node label or a relationship type, and **entity count** means that label's node count or that type's edge count. Both annotations below apply uniformly to node and relationship properties. This symmetry is deliberate and is the main thing to protect during implementation: the two failures that motivated these annotations happened to land on opposite sides of that split — `preferred_supplier` is a relationship property, `part_name` is a node property — and defining either annotation over only the half where its own bug lived would fit the design to the bugs rather than to the class.
 
@@ -164,6 +166,15 @@ Note also that the counts driving the library's exhaustive-versus-sampled decisi
 **Consumer check.** `get_physical_schema` has four consumers: the `multi_agent` coordinator (`agent.py:44`), `graph_construction_agent` (`variants.py:59`), `graphrag_agent`, and `single_agent`'s `cypher_agent` (both variants). Only graphrag can use a degree profile. `graph_construction_agent`'s latency was specifically tuned in a prior session and must not regress, and `single_agent` is a separate coordinator outside this work's scope. Hence the parameter, defaulting off.
 
 The wrapper is an explicit named function, **not** `functools.partial`. ADK derives tool identity from the callable (`function_tool.py:42-58`): a partial has no `__name__`, so it falls through to `func.__class__.__name__`, which is the literal string `"partial"`, and its `__doc__` resolves to the `functools.partial` class docstring. The tool would register under a colliding name with a description of the wrong thing. `include_data_profile` is never exposed to any model as a parameter — a model-visible flag is an optional one, and optional is what we rejected.
+
+That constraint forced the private-function split, and an earlier draft of this document violated it while claiming to satisfy it. ADK builds a tool declaration from the callable and **cannot express a default value** in that schema, so a public `get_physical_schema(include_data_profile: bool = False)` is advertised as a *required* boolean:
+
+```
+parameters=Schema(properties={'include_data_profile': Schema(type=BOOLEAN)},
+                  required=['include_data_profile'], type=OBJECT)
+```
+
+All four consumers bind `get_physical_schema` directly, so each would have been handed a knob it knows nothing about, and a model guessing `True` would trigger a full scan per label on the latency-tuned construction agent. Zero-argument wrappers keep the choice in code, and a test asserts no tool declaration contains the flag.
 
 ### Caching and invalidation
 

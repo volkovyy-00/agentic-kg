@@ -23,6 +23,7 @@
 - **Leave `graphrag_agent_v1` intact.** v2 is added alongside it for the acceptance A/B.
 - **No test asserts on model prose.**
 - **Baseline is 172 passed / 3 skipped.** `uv run pytest` must stay green after every task.
+- **Pin `neo4j<6` in `pyproject.toml` as part of Task 4.** The pin is currently `neo4j>=5.28.2` with no upper bound. `default_access_mode` is the 5.x idiom (5.x docs recommend `execute_read()` for new code, and 6.x is published), so a routine `uv lock --upgrade` could break the read path silently. Change the dependency line to `"neo4j>=5.28.2,<6",` and note it in Task 4's commit.
 - Run tests with `uv run pytest`. `addopts = "-q -m 'not integration'"` already excludes integration tests; run those with `uv run pytest -m integration`.
 
 ## File Structure
@@ -195,6 +196,10 @@ def _is_foreign(content: Any) -> bool:
 def drop_foreign_context(callback_context: Any, llm_request: Any) -> Optional[None]:
     """Remove other agents' output from the request, in place.
 
+    The parameter NAMES are load-bearing: ADK invokes this purely by keyword,
+    as callback(callback_context=..., llm_request=...) (base_llm_flow.py:661).
+    Renaming either one fails at request time with a TypeError, not at import.
+
     Returns None so ADK proceeds with the (now filtered) request; a non-None
     return would short-circuit the model call entirely.
     """
@@ -302,7 +307,12 @@ def test_dataset_vocabulary_absent_from_src(token):
 Run: `uv run pytest tests/unit/test_generality.py -v`
 Expected: 9 passed. This test starts green; it is a ratchet, not a to-do. If it fails now, something already leaked and must be removed before continuing.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Run the whole suite**
+
+Run: `uv run pytest`
+Expected: 188 passed, 3 skipped
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add tests/unit/test_generality.py
@@ -321,7 +331,7 @@ git commit -m "test: guard src/ against demo-dataset vocabulary"
 - Consumes: nothing.
 - Produces: `Neo4jForADK.write_count: int`, incremented inside `send_query` when `is_write_query()` is true. Task 6's cache reads `get_graphdb().write_count`.
 
-Background: every write in the codebase funnels through `Neo4jForADK.send_query` — `kg_construction_tools.py:83,128,207` and the `cypher_tools` DDL paths all call it directly, none go through `write_neo4j_cypher`. Instrumenting that one chokepoint means a write path added later is covered with nothing to remember. `neo4j_for_adk.py` has no unit coverage today (only an integration file, excluded by default), so this task creates it and fakes one level below the existing `FakeGraphDb`, at the driver/session boundary.
+Background: every write in the codebase funnels through `Neo4jForADK.send_query` — `kg_construction_tools.py:83,207` and the `cypher_tools` DDL paths all call it directly (line 128 is a post-load count query, a read), none go through `write_neo4j_cypher`. Instrumenting that one chokepoint means a write path added later is covered with nothing to remember. `neo4j_for_adk.py` has no unit coverage today (only an integration file, excluded by default), so this task creates it and fakes one level below the existing `FakeGraphDb`, at the driver/session boundary.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -441,7 +451,11 @@ def test_failed_write_does_not_increment(db):
 - [ ] **Step 2: Run and confirm failure**
 
 Run: `uv run pytest tests/unit/test_neo4j_for_adk.py -v`
-Expected: `DROP CONSTRAINT` / `DROP INDEX` cases FAIL (regex lacks `DROP`); counter tests FAIL with `AttributeError: 'Neo4jForADK' object has no attribute 'write_count'`.
+Expected: the `DROP CONSTRAINT` / `DROP INDEX` cases FAIL (the regex lacks `DROP`), and
+`test_write_query_increments_the_counter` FAILS with `assert 0 == 1`.
+
+Note the `db` fixture pre-sets `write_count = 0`, so there is no `AttributeError`, and
+`test_read_query_leaves_the_counter_alone` passes vacuously until the counter exists.
 
 - [ ] **Step 3: Add `DROP` to the regex**
 
@@ -483,8 +497,14 @@ Replace `send_query`:
 
 ```python
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
-        session = self._driver.session(database=self._neo4j_config.database)
+        # Session creation must sit INSIDE the try. It is currently outside
+        # (line 148), so a driver that cannot open a session raises straight
+        # out of this method instead of returning a structured error -- which
+        # in ADK surfaces as an unhandled exception mid-turn rather than a
+        # message the agent can react to.
+        session = None
         try:
+            session = self._driver.session(database=self._neo4j_config.database)
             result = session.run(cypher_query, parameters or {})
             adk_result = result_to_adk(result)
             if is_write_query(cypher_query):
@@ -493,18 +513,19 @@ Replace `send_query`:
         except Exception as e:
             return tool_error(str(e))
         finally:
-            session.close()
+            if session is not None:
+                session.close()
 ```
 
 - [ ] **Step 5: Run and confirm the tests pass**
 
 Run: `uv run pytest tests/unit/test_neo4j_for_adk.py -v`
-Expected: 14 passed
+Expected: 12 passed
 
 - [ ] **Step 6: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 193 passed, 3 skipped
+Expected: 200 passed, 3 skipped
 
 - [ ] **Step 7: Commit**
 
@@ -531,7 +552,7 @@ a security boundary."
 - Consumes: `Neo4jForADK` from Task 3.
 - Produces: module constants `QUERY_TIMEOUT_SECONDS = 30`, `MAX_RETURNED_ROWS = 50`, `ROW_COUNT_CEILING = 100_000`, and
   `Neo4jForADK.send_read_query(cypher_query, parameters=None, max_rows=MAX_RETURNED_ROWS) -> Dict[str, Any]`
-  returning `tool_success("query_result", {...})` where the payload holds `records`, `truncated`, and either `row_count` (exact) or `row_count_at_least`. Task 5 calls it with `max_rows=None`; Task 8 calls it with the default.
+  returning `tool_success("query_result", {...})` where the payload holds `records`, `truncated`, and either `row_count` (exact) or `row_count_at_least`. Tasks 6 and 7 call it with `max_rows=None`; Task 8 calls it with the default.
 
 Background: `send_query` runs untimed and `result_to_adk` calls `to_eager_result()`, materialising every row before any cap can apply — so a row cap alone cannot bound the runaway queries it is named against. Verified available in the installed `neo4j` 5.28.2: `neo4j.Query(text, timeout=...)`, `neo4j.READ_ACCESS == 'READ'`, and `SessionConfig.default_access_mode`.
 
@@ -618,7 +639,7 @@ def test_long_lists_are_summarised_not_returned_whole(db):
 
 - [ ] **Step 2: Run and confirm failure**
 
-Run: `uv run pytest tests/unit/test_neo4j_for_adk.py -v -k read or summarised`
+Run: `uv run pytest tests/unit/test_neo4j_for_adk.py -v -k "read or summarised"`
 Expected: `ImportError: cannot import name 'MAX_RETURNED_ROWS'`
 
 - [ ] **Step 3: Implement**
@@ -706,11 +727,14 @@ Add the method to `Neo4jForADK`, directly after `send_query`:
         Pass max_rows=None to retain every row (used for internal aggregate
         queries whose results are already small).
         """
-        session = self._driver.session(
-            database=self._neo4j_config.database,
-            default_access_mode=READ_ACCESS,
-        )
+        session = None
         try:
+            # Inside the try, for the same reason as send_query: a failure to
+            # open the session must return a structured error, not raise.
+            session = self._driver.session(
+                database=self._neo4j_config.database,
+                default_access_mode=READ_ACCESS,
+            )
             query = Query(cypher_query, timeout=QUERY_TIMEOUT_SECONDS)
             result = session.run(query, parameters or {})
 
@@ -740,18 +764,19 @@ Add the method to `Neo4jForADK`, directly after `send_query`:
         except Exception as e:
             return tool_error(str(e))
         finally:
-            session.close()
+            if session is not None:
+                session.close()
 ```
 
 - [ ] **Step 4: Run and confirm the tests pass**
 
 Run: `uv run pytest tests/unit/test_neo4j_for_adk.py -v`
-Expected: 23 passed
+Expected: 21 passed
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 202 passed, 3 skipped
+Expected: 209 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -779,7 +804,7 @@ never reach the model's context."
 - Consumes: nothing (pure functions over dicts).
 - Produces: `VALUE_COUNT_MAX_DISTINCT = 10` and `annotate_property(prop: dict, entity_count: int) -> dict`, returning a new dict with `completeness`, `uniqueness` and `numeric_like` always present. Task 6 calls it for every property of every entity.
 
-Background from the library (`neo4j_graphrag/schema.py`): the exhaustive branch emits `values` plus a true `distinct_count` (lines 566-577); the sampled branch emits `values` with **no** `distinct_count` (572-573). A third path reads a RANGE index and also emits `distinct_count` (546-564) — it always yields `len(values) == distinct_count`, so the comparison below classifies it as complete by construction, with no special case. `DISTINCT_VALUE_LIMIT` is 10 (`schema.py:29`), which is where `VALUE_COUNT_MAX_DISTINCT` comes from: above it the library truncates `values`, so per-value counts would be partial regardless.
+Background from the library (`neo4j_graphrag/schema.py`): the exhaustive branch emits `values` truncated to `DISTINCT_VALUE_LIMIT` plus a true `distinct_count` (lines 574-579, with `distinct_count` itself at 578); the sampled branch emits `values` with **no** `distinct_count` (572-573). A third path reads a RANGE index and also emits `distinct_count` (546-564) — it always yields `len(values) == distinct_count`, so the comparison below classifies it as complete by construction, with no special case. `DISTINCT_VALUE_LIMIT` is 10 (`schema.py:29`), which is where `VALUE_COUNT_MAX_DISTINCT` comes from: above it the library truncates `values`, so per-value counts would be partial regardless.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -929,6 +954,16 @@ five sampled values read exactly like the whole truth.
 Every annotation here is therefore tri-state and ALWAYS present. An absent key
 would read as "fine", and the entities we cannot annotate are precisely the
 large, unfamiliar ones where a confident wrong answer is most likely.
+
+A third library branch needs no special case. Where a property has a RANGE
+index whose own statistics report <= DISTINCT_VALUE_LIMIT distinct values, the
+library reads the complete distinct set from the index instead of sampling rows
+(neo4j_graphrag/schema.py:546-564) and emits `distinct_count` despite not being
+row-exhaustive. That path always yields len(values) == distinct_count, so the
+comparison below classifies it "complete", which is correct by construction. It
+cannot arise here today -- the only index creation is
+create_uniqueness_constraint, on ID properties -- but a reader diffing this file
+against schema.py will find that branch and wonder why it is unhandled.
 """
 import logging
 import re
@@ -944,10 +979,15 @@ VALUE_COUNT_MAX_DISTINCT = 10
 
 _NUMERIC_TYPES = {"INTEGER", "FLOAT"}
 
-# Tolerates a leading currency symbol and thousands separators, because the
-# point of this flag is to spot values that *look* numeric while being stored
-# as text -- which is where silent lexicographic ordering comes from.
-_NUMERIC_LIKE = re.compile(r"^\s*[^\d\-+.]?\s*[-+]?[\d,]*\.?\d+\s*$")
+# Spots values that *look* numeric while being stored as text -- which is where
+# silent lexicographic ordering comes from ('9' sorts after '30').
+#
+# The currency class is explicit rather than "any non-digit". A wildcard prefix
+# matches ordinary identifier shapes -- 'a1', 'x9', 'Q3', '#5' all pass -- and
+# flagging an identifier column as numeric would tell the agent (prompt rule 5)
+# to cast a key to a number.
+_NUMERIC_LIKE = re.compile(
+    r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
 
 
 def _is_numeric_like(values) -> bool:
@@ -1001,7 +1041,12 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
 Run: `uv run pytest tests/unit/test_graph_profile.py -v`
 Expected: 25 passed
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run the whole suite**
+
+Run: `uv run pytest`
+Expected: 234 passed, 3 skipped
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/agentic_kg/common/graph_profile.py tests/unit/test_graph_profile.py
@@ -1027,7 +1072,7 @@ motivated these annotations landed on opposite sides of that split."
 - Produces: `MAX_PROFILED_ENTITIES = 25`, `quote(name: str) -> str`, and `build_profile(schema: dict) -> dict` returning
   `{"entity_counts": {...}, "patterns": [...], "properties": {...}, "budget": {...}}`. Task 7 calls `build_profile`; Task 8 is unaffected.
 
-Background: labels and relationship-type names come from the *database*, not from a model, so they must be backtick-quoted the way the library does (`schema.py:707-709`) and must **not** go through `common/cypher_identifiers.checked()` — that helper rejects anything which is not a bare identifier, so a legal extracted label like `Legal Entity` would raise and take down the whole profile, and with it `get_physical_schema`, the tool graphrag is told to call first. The library isolates failures per entity (`except CypherTypeError: return`, `schema.py:858-859`, invoked per entity at 903 and 914); this must match that or be strictly less robust than what it wraps.
+Background: labels and relationship-type names come from the *database*, not from a model, so they must be backtick-quoted the way the library does (`schema.py:707-710`, node labels at 710) and must **not** go through `common/cypher_identifiers.checked()` — that helper rejects anything which is not a bare identifier, so a legal extracted label like `Legal Entity` would raise and take down the whole profile, and with it `get_physical_schema`, the tool graphrag is told to call first. The library isolates failures per entity (`except CypherTypeError: return`, `schema.py:858-859`, invoked per entity at 903 and 914); this must match that or be strictly less robust than what it wraps.
 
 - [ ] **Step 1: Write the failing tests (append to `tests/unit/test_graph_profile.py`)**
 
@@ -1096,10 +1141,22 @@ def test_degree_is_keyed_per_start_type_end_pattern(fake_profile_db):
     assert keys == {"Alpha-[LINKS]->Beta", "Alpha-[LINKS]->Gamma"}
 
 
-def test_one_failing_entity_degrades_only_itself(fake_profile_db, monkeypatch):
+FAILING_SCHEMA = {
+    # Alpha needs a qualifying property (distinct_count <= 10) or no per-entity
+    # query is ever issued for it and fail_on has nothing to match -- the
+    # earlier version of this test passed vacuously.
+    "node_props": {"Alpha": [{"property": "code", "type": "STRING",
+                              "values": ["a"], "distinct_count": 2}]},
+    "rel_props": {"LINKS": [{"property": "kind", "type": "STRING",
+                             "values": ["x", "y"], "distinct_count": 2}]},
+    "relationships": [],
+}
+
+
+def test_one_failing_entity_degrades_only_itself(monkeypatch):
     db = FakeGraphDbForProfile(fail_on=("`Alpha`",))
     monkeypatch.setattr(graph_profile, "graphdb", db)
-    profile = build_profile(SCHEMA)
+    profile = build_profile(FAILING_SCHEMA)
     assert profile["properties"]["Alpha"] == "profile_error"
     assert profile["properties"]["LINKS"] != "profile_error"
 
@@ -1152,10 +1209,13 @@ graphdb = get_graphdb()
 Add constants next to `VALUE_COUNT_MAX_DISTINCT`:
 
 ```python
-# Cold profile cost is N + M + P + Q + 2 queries (labels, relationship types,
-# patterns, qualifying properties, plus two count queries). On a large ingested
-# corpus that is hundreds, in one synchronous tool call -- indistinguishable
-# from a hang in `adk web`. Profile the largest entities and mark the rest.
+# Cold profile cost is N + M + 2P + Q + 2 queries: one library scan per label
+# and per relationship type, TWO degree queries per (start, type, end) pattern,
+# one per qualifying property, plus the two entity-count queries.
+# get_cached_profile adds one fingerprint query per call on top. On a large
+# ingested corpus that is hundreds, in one synchronous tool call --
+# indistinguishable from a hang in `adk web`. Profile the largest entities and
+# mark the rest.
 MAX_PROFILED_ENTITIES = 25
 ```
 
@@ -1174,9 +1234,31 @@ def quote(name: str) -> str:
     return "`" + name.replace("`", "``") + "`"
 
 
+class ProfileQueryError(RuntimeError):
+    """A profile query failed. Caught per entity by build_profile."""
+
+
 def _records(result) -> list:
+    """Lenient accessor: a failure yields no rows.
+
+    Only for queries whose absence is survivable -- entity counts and the
+    fingerprint, where "unknown" is a valid answer.
+    """
     if not is_success(result):
         return []
+    return result.get("query_result", {}).get("records", [])
+
+
+def _records_or_raise(result) -> list:
+    """Strict accessor: a failure raises so per-entity isolation can act.
+
+    Using the lenient accessor everywhere would make build_profile's
+    "profile_error" branch unreachable -- a failed query would silently look
+    like an empty result, which is the opposite of the requirement that one
+    failing entity degrade only itself.
+    """
+    if not is_success(result):
+        raise ProfileQueryError(result.get("error_message", "profile query failed"))
     return result.get("query_result", {}).get("records", [])
 
 
@@ -1211,13 +1293,13 @@ def _pattern_degree(start: str, rel_type: str, end: str) -> Dict[str, Any]:
     # cardinality query is needed. Every figure below is scoped to this one
     # (start, type, end) pattern; pooling patterns of the same type is the bug
     # this whole keying decision exists to avoid.
-    start_rows = _records(graphdb.send_read_query(
+    start_rows = _records_or_raise(graphdb.send_read_query(
         f"MATCH (a:{quote(start)})-[r:{quote(rel_type)}]->(:{quote(end)}) "
         "WITH a, count(r) AS d "
         "RETURN count(a) AS distinct_nodes, sum(d) AS edges, "
         "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
         max_rows=None))
-    end_rows = _records(graphdb.send_read_query(
+    end_rows = _records_or_raise(graphdb.send_read_query(
         f"MATCH (:{quote(start)})-[r:{quote(rel_type)}]->(b:{quote(end)}) "
         "WITH b, count(r) AS d "
         "RETURN count(b) AS distinct_nodes, "
@@ -1257,7 +1339,7 @@ def _value_counts(entity: str, prop_name: str, is_relationship: bool) -> Any:
             f"WITH n.{quote(prop_name)} AS value, count(*) AS n "
             "WHERE value IS NOT NULL RETURN value, n ORDER BY n DESC"
         )
-    rows = _records(graphdb.send_read_query(query, max_rows=None))
+    rows = _records_or_raise(graphdb.send_read_query(query, max_rows=None))
     if not rows:
         return "unknown"
     return {str(r["value"]): r["n"] for r in rows}
@@ -1305,6 +1387,9 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
         try:
             properties[name] = _profile_entity(name, props, counts.get(name), is_rel)
         except Exception:
+            # Includes ProfileQueryError. Deliberately broad: a profile is a
+            # convenience, and no failure inside it may take down the schema
+            # tool that graphrag is instructed to call first.
             logger.exception("Profiling failed for entity %s; continuing", name)
             properties[name] = "profile_error"
         profiled += 1
@@ -1344,7 +1429,7 @@ Expected: 31 passed
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 208 passed, 3 skipped
+Expected: 240 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -1538,7 +1623,7 @@ Expected: 5 passed
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 213 passed, 3 skipped
+Expected: 245 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -1563,7 +1648,16 @@ happen in this workflow."
 
 **Interfaces:**
 - Consumes: `get_cached_profile` (Task 7), `send_read_query` (Task 4).
-- Produces: `get_physical_schema(include_data_profile: bool = False)`, `get_graph_schema_with_profile()` (the graphrag-only wrapper, bound by Task 9), and the reshaped `read_neo4j_cypher`.
+- Produces: `_physical_schema(include_data_profile: bool)` (private), and three tool functions — `get_physical_schema()` and `get_graph_schema_with_profile()`, both zero-argument, plus the reshaped `read_neo4j_cypher`. Task 9 binds the profile wrapper.
+
+**Why the flag is private.** ADK builds a tool declaration from the callable and does not support default values in that schema, so a public `get_physical_schema(include_data_profile: bool = False)` is advertised to the model as a **required** boolean:
+
+```
+parameters=Schema(properties={'include_data_profile': Schema(type=BOOLEAN)},
+                  required=['include_data_profile'], type=OBJECT)
+```
+
+All four consumers bind `get_physical_schema` directly, so every one of them would be handed a knob it knows nothing about — and a model that guessed `True` would trigger a full scan per label on the latency-tuned construction agent. Two zero-argument wrappers keep the choice in code.
 
 Critical: with `include_data_profile=False` the returned dict must be byte-identical to today's — no `profile` key **and** no `values`/`distinct_count` keys, because `is_enhanced` stays off. Three other consumers depend on that: the coordinator (`agent.py:44`), `graph_construction_agent` (`variants.py:59`, latency previously tuned), and `single_agent`'s `cypher_agent`.
 
@@ -1580,6 +1674,14 @@ class FakeReadDb(FakeGraphDb):
         super().__init__()
         self.payload = payload or {"records": [], "row_count": 0, "truncated": False}
         self.read_queries = []
+
+    # _physical_schema reads both of these before its try block, so a fake
+    # without them raises AttributeError rather than exercising the tool.
+    def get_driver(self):
+        return object()
+
+    def get_config(self):
+        return type("Cfg", (), {"database": "neo4j"})()
 
     def send_read_query(self, query, parameters=None, max_rows=MAX_RETURNED_ROWS):
         self.read_queries.append((query, parameters, max_rows))
@@ -1635,7 +1737,7 @@ def test_get_physical_schema_with_profile_enriches_and_profiles(monkeypatch):
     graph_profile.reset_cache()
     monkeypatch.setattr(graph_profile, "graphdb", FakeReadDb())
 
-    result = cypher_tools.get_physical_schema(include_data_profile=True)
+    result = cypher_tools.get_graph_schema_with_profile()
 
     assert captured["is_enhanced"] is True
     assert captured["sanitize"] is True
@@ -1650,8 +1752,25 @@ def test_graphrag_wrapper_is_a_named_function_not_a_partial():
     fn = cypher_tools.get_graph_schema_with_profile
     assert fn.__name__ == "get_graph_schema_with_profile"
     assert fn.__doc__ and "partial" not in fn.__doc__.lower()
+
+
+@pytest.mark.parametrize("tool_name", [
+    "get_physical_schema", "get_graph_schema_with_profile", "read_neo4j_cypher",
+])
+def test_no_tool_exposes_the_profile_flag_to_a_model(tool_name):
+    """ADK cannot express a default in a tool declaration, so any parameter
+    with one is advertised as REQUIRED. A model-visible include_data_profile
+    would make the profile optional -- and could trigger a full scan per label
+    on the latency-tuned construction agent."""
     import inspect
-    assert not inspect.signature(fn).parameters, "must take no model-visible args"
+    from google.adk.tools.function_tool import FunctionTool
+
+    fn = getattr(cypher_tools, tool_name)
+    assert "include_data_profile" not in inspect.signature(fn).parameters
+
+    declared = FunctionTool(fn)._get_declaration()
+    props = (declared.parameters.properties or {}) if declared.parameters else {}
+    assert "include_data_profile" not in props
 ```
 
 - [ ] **Step 2: Run and confirm failure**
@@ -1676,28 +1795,25 @@ from agentic_kg.common.neo4j_for_adk import (
 Replace `get_physical_schema` (`:26-42`):
 
 ```python
-def get_physical_schema(include_data_profile: bool = False) -> Dict[str, Any]:
-    """Tool to get the physical schema of a Neo4j graph database.
+def _physical_schema(include_data_profile: bool) -> Dict[str, Any]:
+    """Internal implementation. NOT bound as a tool -- see the two wrappers.
 
-    Args:
-        include_data_profile: when True, additionally enrich the schema with
-            value information and attach a data profile (entity counts,
-            per-pattern degree, per-value counts, completeness and uniqueness
-            annotations). Defaults to False so the coordinator, the
-            construction agent and single_agent's cypher agent keep receiving
-            exactly the dict they receive today -- enrichment costs a full scan
-            per label and one of those consumers is latency-tuned.
-
-    Returns:
-        A dictionary containing:
-        - "status": "success" or "error"
-        - "schema": the schema as a JSON object if "success"
-        - "error_message": the error message if "error"
+    The flag must not appear in any tool's signature. ADK builds a tool's
+    declaration from the callable, and it does not support default values in
+    that schema, so a public `get_physical_schema(include_data_profile=False)`
+    is advertised to the model as a REQUIRED boolean parameter. All four
+    consumers -- the coordinator, graph_construction_agent, graphrag and
+    single_agent's cypher_agent -- would be handed a knob they know nothing
+    about, and a model that guessed True would silently trigger a full scan per
+    label on a latency-tuned agent. Two zero-argument wrappers keep the choice
+    in code where it belongs.
     """
-    driver = graphdb.get_driver()
-    database_name = graphdb.get_config().database
-
     try:
+        # Inside the try: a driver or config failure must return a structured
+        # error, not raise out of a tool call.
+        driver = graphdb.get_driver()
+        database_name = graphdb.get_config().database
+
         if not include_data_profile:
             return tool_success("schema", get_structured_schema(driver, database=database_name))
 
@@ -1718,6 +1834,18 @@ def get_physical_schema(include_data_profile: bool = False) -> Dict[str, Any]:
         return tool_error(str(e))
 
 
+def get_physical_schema() -> Dict[str, Any]:
+    """Tool to get the physical schema of a Neo4j graph database.
+
+    Returns:
+        A dictionary containing:
+        - "status": "success" or "error"
+        - "schema": the schema as a JSON object if "success"
+        - "error_message": the error message if "error"
+    """
+    return _physical_schema(include_data_profile=False)
+
+
 def get_graph_schema_with_profile() -> Dict[str, Any]:
     """Get the graph schema together with a profile of the data it holds.
 
@@ -1728,7 +1856,7 @@ def get_graph_schema_with_profile() -> Dict[str, Any]:
     nodes at each end. Use this before writing any query: it tells you the
     grain of a pattern, which determines whether counting rows is meaningful.
     """
-    return get_physical_schema(include_data_profile=True)
+    return _physical_schema(include_data_profile=True)
 ```
 
 Replace `read_neo4j_cypher` (`:44-63`):
@@ -1765,7 +1893,7 @@ Expected: all pass
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 219 passed, 3 skipped
+Expected: 250 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -2016,7 +2144,7 @@ Expected: 4 passed
 - [ ] **Step 6: Run the whole suite, including the generality guard**
 
 Run: `uv run pytest`
-Expected: 223 passed, 3 skipped. If `test_generality.py` fails, a dataset word reached the new prompt — remove it.
+Expected: 254 passed, 3 skipped. If `test_generality.py` fails, a dataset word reached the new prompt — remove it.
 
 - [ ] **Step 7: Commit**
 
@@ -2071,12 +2199,19 @@ def graphdb_against_container():
     from agentic_kg.common import graph_profile
     from agentic_kg.common.neo4j_for_adk import Neo4jForADK
 
-    with Neo4jContainer(image="neo4j:5") as container:
+    # APOC is mandatory, not optional. Every get_structured_schema path is
+    # APOC-only -- NODE_PROPERTIES_QUERY, REL_PROPERTIES_QUERY, REL_QUERY all
+    # open with CALL apoc.meta.data and SCHEMA_COUNTS_QUERY uses
+    # apoc.meta.graph (neo4j_graphrag/schema.py:30-69). Stock neo4j:5 ships no
+    # plugins, so without this every test in this file dies with
+    # Neo.ClientError.Procedure.ProcedureNotFound rather than skipping.
+    container = Neo4jContainer(image="neo4j:5").with_env("NEO4J_PLUGINS", '["apoc"]')
+    with container:
         url = container.get_connection_url()
-        try:
-            auth = container.get_auth()
-        except AttributeError:
-            auth = ("neo4j", "password")
+        # testcontainers 4.12 has no get_auth(); username/password are set in
+        # __init__ (testcontainers/neo4j/__init__.py:51-52) and honour
+        # NEO4J_USER / NEO4J_PASSWORD, which a hardcoded fallback would ignore.
+        auth = (container.username, container.password)
 
         from neo4j import GraphDatabase
         driver = GraphDatabase.driver(url, auth=auth)
@@ -2100,8 +2235,15 @@ def graphdb_against_container():
         #   Alpha-[LINKS]->Gamma         edges=1  start={a1:1}        end={g1:1}
         #   Alpha-[LINKS]->Legal Entity  edges=1  start={m1:1}        end={le1:1}
         #   Alpha-[FOLLOWS]->Alpha       edges=2  start={a1:1, a2:1}  end={a2:1, m1:1}
-        # LINKS totals 5 edges across three patterns, so a pooled
+        # LINKS totals 5 edges across three Alpha-rooted patterns, so a pooled
         # implementation reports edges=5 where a correct one reports 3.
+        #
+        # Note m1 carries :Alpha AND :Archived, so the enriched schema also
+        # emits Archived-rooted patterns (Archived->Beta, Archived->Legal
+        # Entity, Alpha->Archived FOLLOWS). Seven patterns total, not four.
+        # That is correct -- a multi-label node genuinely participates in
+        # patterns under each label -- and it is why assertions below match on
+        # named patterns rather than on list length or position.
         db.send_query("""
             CREATE (a1:Alpha {code: 'a1'})
             CREATE (a2:Alpha {code: 'a2'})
@@ -2219,7 +2361,10 @@ def test_self_referencing_pattern_is_profiled(graphdb_against_container):
     db, graph_profile = graphdb_against_container
     profile = graph_profile.build_profile(_schema_for(db))
     follows = [p for p in profile["patterns"] if p["type"] == "FOLLOWS"]
-    assert follows and follows[0]["start"] == follows[0]["end"] == "Alpha"
+    # Membership, not follows[0]: the multi-label node means FOLLOWS yields
+    # both Alpha->Alpha and Alpha->Archived, and apoc.meta.data guarantees no
+    # ordering between them.
+    assert any(p["start"] == p["end"] == "Alpha" for p in follows)
 
 
 def test_non_identifier_label_survives_quoting(graphdb_against_container):
@@ -2238,6 +2383,62 @@ def test_annotations_are_always_present(graphdb_against_container):
         for prop in props:
             for key in ("completeness", "uniqueness", "numeric_like", "value_counts"):
                 assert key in prop, f"{entity}.{prop.get('property')} missing {key}"
+
+
+def test_profile_stays_within_the_query_budget(graphdb_against_container):
+    """Spec assertion: completes "within the query budget".
+
+    Counting the queries actually issued is the only mechanical check that the
+    cold cost is bounded rather than merely cached.
+    """
+    db, graph_profile = graphdb_against_container
+    issued = []
+    original = db.send_read_query
+
+    def counting(query, parameters=None, max_rows=None):
+        issued.append(query)
+        return original(query, parameters, max_rows)
+
+    db.send_read_query = counting
+    try:
+        schema = _schema_for(db)
+        graph_profile.build_profile(schema)
+    finally:
+        db.send_read_query = original
+
+    p = len(schema.get("relationships", []))
+    all_props = (list(schema.get("node_props", {}).values())
+                 + list(schema.get("rel_props", {}).values()))
+    q = sum(1 for props in all_props for prop in props
+            if 0 < (prop.get("distinct_count") or 0) <= graph_profile.VALUE_COUNT_MAX_DISTINCT)
+    # build_profile issues 2 per pattern + 1 per qualifying property + 2 counts.
+    # The library's own N+M enriched scans happen in _schema_for, above.
+    assert len(issued) <= 2 * p + q + 2, (
+        f"{len(issued)} queries issued for P={p} Q={q}; budget is 2P+Q+2")
+
+
+def test_one_failing_entity_degrades_only_that_entry(graphdb_against_container):
+    """Spec assertion: a failure profiling one entity leaves the rest intact.
+
+    Against a real driver rather than a fake, because the unit-level version of
+    this test was passing vacuously.
+    """
+    db, graph_profile = graphdb_against_container
+    original = db.send_read_query
+
+    def flaky(query, parameters=None, max_rows=None):
+        if "`Legal Entity`" in query and "count(*)" in query:
+            return {"status": "error", "error_message": "simulated failure"}
+        return original(query, parameters, max_rows)
+
+    db.send_read_query = flaky
+    try:
+        profile = graph_profile.build_profile(_schema_for(db))
+    finally:
+        db.send_read_query = original
+
+    assert profile["properties"]["Legal Entity"] == "profile_error"
+    assert profile["properties"]["Alpha"] != "profile_error"
 
 
 def test_result_larger_than_the_cap_reports_a_true_row_count(graphdb_against_container):
@@ -2275,12 +2476,12 @@ def test_writes_are_rejected_by_the_server_on_the_read_path(
 Run: `uv run pytest -m integration tests/integration/test_graph_profile_shapes.py -v`
 Expected: all pass, or the module skips cleanly if Docker is not running.
 
-If `apoc.refactor.mergeNodes` errors with "unknown procedure" rather than an access-mode violation, that still satisfies the assertion (the write did not happen), but note it in the commit message — APOC is not installed in the stock `neo4j:5` image.
+With APOC loaded by the fixture, `apoc.refactor.mergeNodes` returns a genuine `Neo.ClientError.Statement.AccessMode` error — the strong assertion. If it instead reports an unknown procedure, the `NEO4J_PLUGINS` env var did not take effect and the rest of the file will be failing too; fix that rather than accepting the weaker signal.
 
 - [ ] **Step 3: Confirm the default suite is unaffected**
 
 Run: `uv run pytest`
-Expected: 223 passed, 3 skipped — the new file is excluded by `addopts`.
+Expected: 254 passed, 3 skipped — the new file is excluded by `addopts`.
 
 - [ ] **Step 4: Commit**
 
