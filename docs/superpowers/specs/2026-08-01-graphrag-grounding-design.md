@@ -145,9 +145,19 @@ Queries are plain Cypher, not APOC. Everything needed is standard aggregation; A
 
 **Identifier quoting and error isolation.** Label and relationship-type names are interpolated into the profile's Cypher, and they come from the database, not from a model. They must be backtick-quoted the way the library does it (`schema.py:707-709`), **not** passed through `common/cypher_identifiers.checked()` — that helper rejects anything which is not a bare identifier, so a perfectly legal extracted label like `Legal Entity` or `10-K` would raise `InvalidIdentifier` and take down the entire profile, and with it `get_physical_schema`, the tool graphrag is instructed to call first.
 
-Each entity's profile queries are wrapped so a failure degrades that one entry to `"profile_error"` rather than failing the call. The library already isolates per label (`schema.py:883`); this design must match that or it is strictly less robust than the thing it wraps.
+Each entity's profile queries are wrapped so a failure degrades that one entry to `"profile_error"` rather than failing the call. The library already does this — `except CypherTypeError: return` at `schema.py:858-859`, inside `enhance_properties`, which `enhance_schema` invokes once per entity (lines 903 and 914). This design must match it or it is strictly less robust than the thing it wraps.
 
-**Cold-start cost is bounded, not merely cached.** Cold cost is roughly `2(N+M) + P` queries — the library's enriched pass scans once per label and per relationship type, then entity counts, degree per pattern, and one per qualifying property. On the demo graph that is about a dozen. On an ingested corpus with tens of labels and hundreds of properties it is hundreds, in one synchronous tool call, which in `adk web` is indistinguishable from a hang. So: a query budget. Profile the top-K entities by count, mark the remainder `"not_profiled"`, and carry a per-query timeout. The cache reduces how often this is paid; it does not bound what is paid, and per-document writes during ingestion invalidate it constantly.
+**Cold-start cost is bounded, not merely cached.** Writing the terms out, where **N** is node labels, **M** relationship types, **P** distinct `(start, type, end)` patterns (P ≥ M), and **Q** qualifying properties:
+
+| Driver | Queries |
+|---|---|
+| Library enriched pass — one scan per label and per relationship type | N + M |
+| Entity counts — one query for all node labels, one for all relationship types | 2 |
+| Endpoint degree — one per pattern | P |
+| Per-value counts — one per qualifying property | Q |
+| **Cold total** | **N + M + P + Q + 2** |
+
+On the demo graph (N=4, M=3, P=3) that is roughly fifteen. On an ingested corpus with tens of labels, tens of patterns and hundreds of properties it is hundreds, in one synchronous tool call, which in `adk web` is indistinguishable from a hang. So: a query budget. Profile the top-K entities by count, mark the remainder `"not_profiled"`, and carry a per-query timeout. The cache reduces how often this is paid; it does not bound what is paid, and per-document writes during ingestion invalidate it constantly.
 
 Note also that the counts driving the library's exhaustive-versus-sampled decision come from `apoc.meta.graph({sample: 1000, maxRels: 100})` (`schema.py:65-70`) — they are themselves sampled, and `maxRels: 100` means graphs with more than 100 relationship patterns get some types silently omitted from enrichment. Treat those counts as estimates.
 
@@ -233,15 +243,23 @@ The unit tests cover every mechanism in isolation. The integration file exists f
 
 The canary builds a real `Event` authored by another agent, passes it through ADK's own `_convert_foreign_event`, and asserts the filter catches the result. Asserting on the literal string would only prove we still agree with ourselves; this fails on drift. Motivated by the wide pin `google-adk>=1.10,<2` (`pyproject.toml:14`), under which a routine `uv sync` could change the sentinel.
 
-**`test_graph_profile.py`** — annotation logic as pure functions over dicts: `distinct_count` present and equal to `len(values)` → complete; present and greater → partial; absent → non-exhaustive with values suppressed; below the entity count → marked non-unique; equal → not marked.
+**`test_graph_profile.py`** — annotation logic as pure functions over dicts. `completeness`: `distinct_count` equal to `len(values)` → `"complete"`; greater → `"partial"`; absent → `"unknown"` with `values` suppressed. `uniqueness`: `distinct_count` equal to entity count → `"unique"`; below → `"non_unique"`; absent → `"unknown"`. One test asserts that **no annotation key is ever missing** from a profiled property, since omission-means-unknown is the specific regression this design forbids.
 
 Every case is asserted **twice, once for a node property and once for a relationship property**, since the node/relationship symmetry is the specific thing most likely to be lost during implementation. Fixtures use neutral synthetic names per generality constraint 2 — no furniture vocabulary.
 
 **`test_generality.py`** — greps `src/` for the curated dataset-token list and fails if any appears. Cheap and mechanical, but **necessary rather than sufficient**: it catches vocabulary overfitting only. It cannot see structural overfitting — assuming one pattern per relationship type, assuming entities below `EXHAUSTIVE_SEARCH_LIMIT`, assuming single-label nodes — nor threshold overfitting, nor anything in the prompt prose. Those are covered by the shape-based integration tests below, which is where the real guarantee lives.
 
-### Integration tests (marked `integration`)
+**`test_graph_profile_cache.py`** — same counter and fingerprint → no recompute; counter bumped → recompute; counter unchanged but fingerprint moved → recompute (the external-write case).
 
-These are the only tests here that need a database, and they exist because the profile builds Cypher by interpolating names from the graph and nothing else ever executes it. Three synthetic graphs built with Testcontainers, following the existing `tests/integration/` setup:
+**`test_neo4j_for_adk.py`** — new file. `FakeGraphDb` replaces the whole `graphdb` binding and therefore bypasses `send_query` entirely, so the cache test cannot verify the counter itself. This fakes one level lower, at the driver/session boundary, and asserts the counter increments on `MERGE`/`SET`/`DROP` and holds on `MATCH`. `neo4j_for_adk.py` currently has no unit coverage at all — only `tests/integration/test_neo4j_for_adk_integration.py`, which is excluded by default.
+
+**`test_cypher_tools.py`** additions — row count present and exact under the ceiling, `row_count_at_least` past it, truncation flag set at the cap, array properties summarised rather than returned whole, `is_write_query` matches `DROP` (as a *cache hint*; rejection of writes is the server's job and is asserted in the integration file), and the byte-identical guard: `get_physical_schema()` with no argument returns a dict with no `profile` key **and no `values`/`distinct_count` keys**, proving `is_enhanced` stayed off for the other three consumers.
+
+**`test_graphrag_context_filtering.py`** — extends the existing `ScriptedLlm` (`test_schema_refinement_loop_turn_cap.py:36`) with one line appending each `llm_request`. Seeds a session containing a foreign-agent event, runs both variants through `InMemoryRunner`, asserts v2's captured requests contain no sentinel **and that v1's do**. Without the negative control, a test passing because the fixture never produced foreign context would look identical to a working filter.
+
+### `tests/integration/test_graph_profile_shapes.py` (marked `integration`)
+
+The only test here that needs a database. It exists because the profile builds Cypher by interpolating names taken from the graph, and nothing else ever executes it. Three synthetic graphs built with Testcontainers, following the existing `tests/integration/` setup:
 
 1. **Multi-pattern** — one relationship type spanning two different `(start, end)` label pairs
 2. **Self-referencing** — a relationship type whose start and end are the same label
@@ -257,14 +275,6 @@ Assertions, all shape-based and domain-free:
 - a write submitted through `read_neo4j_cypher` is rejected by the server, including `CALL apoc.refactor.mergeNodes(...)`, which the regex does not catch
 
 This is the only evidence in the whole plan that any of this works on a graph other than the demo. Without it, "universal" is an assertion.
-
-**`test_graph_profile_cache.py`** — same counter and fingerprint → no recompute; counter bumped → recompute; counter unchanged but fingerprint moved → recompute (the external-write case).
-
-**`test_neo4j_for_adk.py`** — new file. `FakeGraphDb` replaces the whole `graphdb` binding and therefore bypasses `send_query` entirely, so the cache test cannot verify the counter itself. This fakes one level lower, at the driver/session boundary, and asserts the counter increments on `MERGE`/`SET`/`DROP` and holds on `MATCH`. `neo4j_for_adk.py` currently has no unit coverage at all — only `tests/integration/test_neo4j_for_adk_integration.py`, which is excluded by default.
-
-**`test_cypher_tools.py`** additions — row count present, truncation flag set at the limit, array properties summarised, `is_write_query` matches `DROP` and `read_neo4j_cypher` rejects it, and `get_physical_schema()` with no argument returns a dict with no `profile` key.
-
-**`test_graphrag_context_filtering.py`** — extends the existing `ScriptedLlm` (`test_schema_refinement_loop_turn_cap.py:36`) with one line appending each `llm_request`. Seeds a session containing a foreign-agent event, runs both variants through `InMemoryRunner`, asserts v2's captured requests contain no sentinel **and that v1's do**. Without the negative control, a test passing because the fixture never produced foreign context would look identical to a working filter.
 
 ## Acceptance
 
@@ -292,7 +302,7 @@ Repeats rather than a pinned temperature: there is no sampling control anywhere 
 - **The cache and query-tool changes are global**, so the v1/v2 A/B does not isolate them. Only the prompt, the profile wrapper and the context filter differ between arms.
 - **`graph_construction_agent`'s latency must not regress.** It is the reason the degree profile is parameterized rather than broadcast; verify its schema payload is unchanged.
 - **Fingerprint invalidation is blind to property-only edits** that leave node and relationship counts unchanged.
-- **The profile costs N+M aggregate queries** when cold (one per label, one per relationship type, plus one per qualifying property) — about a dozen on the demo graph. The cache is what makes this acceptable; without it the design would not be proposed.
+- **The profile costs `N + M + P + Q + 2` queries when cold** — see the cost table under *Degree and value profile* for the terms. Roughly fifteen on the demo graph; hundreds on an ingested corpus. The cache reduces how often that is paid and the query budget bounds what is paid; neither alone is sufficient, and this is the largest remaining performance risk in the design.
 - **This work verifies the agent is well-informed, not that it reasons correctly.** If framing errors persist with the degree profile in context, that is evidence the model tier is the binding constraint — a useful outcome, not a failure.
 
 ## Known gaps, named rather than implied
