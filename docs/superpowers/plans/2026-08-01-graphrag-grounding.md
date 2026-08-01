@@ -22,8 +22,25 @@
 - **`graphrag_agent` stays on `LlmKind.conversational`.** No model tier change.
 - **Leave `graphrag_agent_v1` intact.** v2 is added alongside it for the acceptance A/B.
 - **No test asserts on model prose.**
+- **Every test must name the broken implementation it would catch.** One sentence, in the
+  docstring or a comment. If you cannot name one, the test is decoration — delete it or
+  strengthen the input until you can.
+
+  This is not style advice. Four tests in earlier drafts of this plan passed while verifying
+  nothing, all failing the same way: **the input could not distinguish a correct
+  implementation from a wrong one.**
+
+  | Test | Why it proved nothing |
+  |---|---|
+  | Integration degree fixture | Every degree was `1`, so pooled and per-pattern keying produce identical numbers |
+  | Per-entity isolation | The fixture entity had no qualifying property, so no query was issued and `fail_on` never fired |
+  | `@parametrize("kind", …)` ×12 | The parameter was never referenced — the same assertion run twice |
+  | Query budget `<= 2P + Q + 2` | Capping only lowers the count, so the assertion passes whether or not the cap works |
+
+  Each was written in good faith and read as coverage. The question "what would this catch?"
+  takes a sentence and would have caught all four before they were written.
 - **Baseline is 172 passed / 3 skipped.** `uv run pytest` must stay green after every task.
-- Per-task expectations follow the chain `172 +7 +9 +12 +9 +14 +11 +5 +8 +4 = 251`, counting
+- Per-task expectations follow the chain `172 +7 +9 +12 +9 +15 +11 +5 +8 +4 = 252`, counting
   parametrize *expansions*, not function definitions. Task 10 adds no default-suite tests —
   it is `integration`-marked and excluded by `addopts`. If you change a test count, recount
   with `ast` rather than by eye; three earlier drafts of these numbers were wrong.
@@ -900,20 +917,28 @@ def test_numeric_like_string_is_flagged():
     prop = {"property": "days", "type": "STRING",
             "values": ["8", "12", "30"], "distinct_count": 3}
     out = annotate_property(prop, entity_count=10)
-    assert out["numeric_like"] is True
+    assert out["numeric_like"] == "yes"
 
 
 def test_non_numeric_string_is_not_flagged():
     prop = {"property": "city", "type": "STRING",
             "values": ["Berlin", "Lisbon"], "distinct_count": 2}
     out = annotate_property(prop, entity_count=10)
-    assert out["numeric_like"] is False
+    assert out["numeric_like"] == "no"
 
 
-def test_numeric_like_false_for_already_numeric_types():
+def test_numeric_like_no_for_already_numeric_types():
     prop = {"property": "n", "type": "INTEGER", "min": 1, "max": 9}
     out = annotate_property(prop, entity_count=10)
-    assert out["numeric_like"] is False
+    assert out["numeric_like"] == "no"
+
+
+def test_every_annotation_uses_the_same_string_vocabulary():
+    """Catches a bool/str mix, where a truthy "unknown" reads as consent."""
+    out = annotate_property({"property": "x"}, entity_count=None)
+    for key in ("completeness", "uniqueness", "numeric_like"):
+        assert isinstance(out[key], str), f"{key} must be a string, got {type(out[key])}"
+    assert out["numeric_like"] == "unknown"
 
 
 def test_every_annotation_key_is_always_present():
@@ -1042,13 +1067,17 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
     # carry completeness "unknown" alongside numeric_like True. That is the one
     # place the design contradicted its own rule, and it fed prompt rule 5,
     # which tells the agent to cast.
+    # All three annotations are strings from the same tri-state vocabulary.
+    # A bool/str mix would put a TRUTHY "unknown" next to False, so any future
+    # `if prop["numeric_like"]:` would read "I don't know" as "yes, cast it" --
+    # the original bug wearing a new coat.
     prop_type = prop.get("type")
     if prop_type in _NUMERIC_TYPES:
-        out["numeric_like"] = False          # already numeric; nothing to infer
+        out["numeric_like"] = "no"           # already numeric; nothing to infer
     elif out["completeness"] == "unknown":
         out["numeric_like"] = "unknown"      # sampled values are not evidence
     else:
-        out["numeric_like"] = _is_numeric_like(values)
+        out["numeric_like"] = "yes" if _is_numeric_like(values) else "no"
 
     return out
 ```
@@ -1056,12 +1085,12 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
 - [ ] **Step 4: Run and confirm the tests pass**
 
 Run: `uv run pytest tests/unit/test_graph_profile.py -v`
-Expected: 14 passed
+Expected: 15 passed
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 223 passed, 3 skipped
+Expected: 224 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -1525,12 +1554,12 @@ injection from an untrusted source, and the database is not one.
 - [ ] **Step 5: Run and confirm the tests pass**
 
 Run: `uv run pytest tests/unit/test_graph_profile.py -v`
-Expected: 25 passed
+Expected: 26 passed
 
 - [ ] **Step 6: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 234 passed, 3 skipped
+Expected: 235 passed, 3 skipped
 
 - [ ] **Step 7: Commit**
 
@@ -1724,7 +1753,7 @@ Expected: 5 passed
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 239 passed, 3 skipped
+Expected: 240 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -1994,7 +2023,7 @@ Expected: all pass
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest`
-Expected: 247 passed, 3 skipped
+Expected: 248 passed, 3 skipped
 
 - [ ] **Step 6: Commit**
 
@@ -2193,7 +2222,8 @@ Add a new entry to the `variants` dict, after the `graphrag_agent_v1` entry (lea
         5. Before ordering, comparing or aggregating a property numerically,
            check its type. A STRING needs an explicit cast: '9' sorts after '30'
            without one, and a value carrying a currency symbol or separator will
-           not cast cleanly. The profile flags such properties as 'numeric_like'.
+           not cast cleanly. The profile's 'numeric_like' is 'yes', 'no' or
+           'unknown'; treat 'unknown' as something to disclose, never as a 'yes'.
         6. Where an annotation reads 'unknown' or 'not_profiled', treat it as
            missing information to disclose, never as permission to assume.
         """,
@@ -2245,7 +2275,7 @@ Expected: 4 passed
 - [ ] **Step 6: Run the whole suite, including the generality guard**
 
 Run: `uv run pytest`
-Expected: 251 passed, 3 skipped. If `test_generality.py` fails, a dataset word reached the new prompt — remove it.
+Expected: 252 passed, 3 skipped. If `test_generality.py` fails, a dataset word reached the new prompt — remove it.
 
 - [ ] **Step 7: Commit**
 
@@ -2486,13 +2516,7 @@ def test_annotations_are_always_present(graphdb_against_container):
                 assert key in prop, f"{entity}.{prop.get('property')} missing {key}"
 
 
-def test_profile_stays_within_the_query_budget(graphdb_against_container):
-    """Spec assertion: completes "within the query budget".
-
-    Counting the queries actually issued is the only mechanical check that the
-    cold cost is bounded rather than merely cached.
-    """
-    db, graph_profile = graphdb_against_container
+def _count_profile_queries(db, graph_profile):
     issued = []
     original = db.send_read_query
 
@@ -2503,19 +2527,64 @@ def test_profile_stays_within_the_query_budget(graphdb_against_container):
     db.send_read_query = counting
     try:
         schema = _schema_for(db)
-        graph_profile.build_profile(schema)
+        profile = graph_profile.build_profile(schema)
     finally:
         db.send_read_query = original
+    return issued, schema, profile
 
-    p = len(schema.get("relationships", []))
+
+def test_profile_query_count_is_exact(graphdb_against_container):
+    """Would catch: a stray or duplicated query per entity or pattern.
+
+    An inequality cannot -- `<=` passes just as happily on a profile that
+    issues fewer queries than it should, including one whose cap silently
+    swallowed work it was supposed to do.
+    """
+    db, graph_profile = graphdb_against_container
+    issued, schema, _ = _count_profile_queries(db, graph_profile)
+
+    p = min(len(schema.get("relationships", [])), graph_profile.MAX_PROFILED_PATTERNS)
     all_props = (list(schema.get("node_props", {}).values())
                  + list(schema.get("rel_props", {}).values()))
     q = sum(1 for props in all_props for prop in props
             if 0 < (prop.get("distinct_count") or 0) <= graph_profile.VALUE_COUNT_MAX_DISTINCT)
-    # build_profile issues 2 per pattern + 1 per qualifying property + 2 counts.
+    # 2 per profiled pattern + 1 per qualifying property + 2 entity counts.
     # The library's own N+M enriched scans happen in _schema_for, above.
-    assert len(issued) <= 2 * p + q + 2, (
-        f"{len(issued)} queries issued for P={p} Q={q}; budget is 2P+Q+2")
+    assert len(issued) == 2 * p + q + 2, (
+        f"{len(issued)} queries issued; expected exactly {2 * p + q + 2} "
+        f"for P={p} Q={q}")
+
+
+def test_pattern_cap_engages_and_marks_rather_than_drops(graphdb_against_container,
+                                                         monkeypatch):
+    """Would catch: a cap that is declared but never applied, and a cap that
+    bounds cost by silently dropping patterns from the output.
+
+    The first is invisible to any `<=` assertion. The second is the failure the
+    profile exists to prevent, reintroduced by the mechanism meant to bound it:
+    a pattern that vanishes has unknowable grain, and nothing says so.
+    """
+    db, graph_profile = graphdb_against_container
+
+    uncapped, schema, full = _count_profile_queries(db, graph_profile)
+    total_patterns = len(schema.get("relationships", []))
+    assert total_patterns > 1, "fixture must have enough patterns to cap"
+
+    monkeypatch.setattr(graph_profile, "MAX_PROFILED_PATTERNS", 1)
+    capped, _, limited = _count_profile_queries(db, graph_profile)
+
+    # The cap actually reduced work.
+    assert len(capped) < len(uncapped)
+    assert limited["budget"]["patterns_profiled"] == 1
+    assert limited["budget"]["patterns_skipped"] == total_patterns - 1
+
+    # ...and never-omit applies to the pattern list, not just to annotations.
+    assert len(limited["patterns"]) == len(full["patterns"]) == total_patterns
+    skipped = [p for p in limited["patterns"] if p["start_degree"] == "not_profiled"]
+    assert len(skipped) == total_patterns - 1
+    for entry in skipped:
+        assert entry["end_degree"] == "not_profiled"
+        assert entry["pattern"]  # still identifiable, just unprofiled
 
 
 def test_one_failing_entity_degrades_only_that_entry(graphdb_against_container):
@@ -2582,7 +2651,7 @@ With APOC loaded by the fixture, `apoc.refactor.mergeNodes` returns a genuine `N
 - [ ] **Step 3: Confirm the default suite is unaffected**
 
 Run: `uv run pytest`
-Expected: 251 passed, 3 skipped — unchanged from Task 9, because the new file is excluded by `addopts`.
+Expected: 252 passed, 3 skipped — unchanged from Task 9, because the new file is excluded by `addopts`.
 
 - [ ] **Step 4: Commit**
 
