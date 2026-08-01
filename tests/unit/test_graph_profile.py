@@ -131,3 +131,161 @@ def test_input_is_not_mutated():
 def test_value_count_threshold_matches_the_library_limit():
     from neo4j_graphrag.schema import DISTINCT_VALUE_LIMIT
     assert VALUE_COUNT_MAX_DISTINCT == DISTINCT_VALUE_LIMIT
+
+
+from agentic_kg.common import graph_profile
+from agentic_kg.common.graph_profile import build_profile, quote
+
+
+class FakeGraphDbForProfile:
+    """Answers profile queries from a scripted table keyed by substring."""
+
+    def __init__(self, responses=None, fail_on=None):
+        self.responses = responses or {}
+        self.fail_on = fail_on or ()
+        self.queries = []
+
+    def send_read_query(self, query, parameters=None, max_rows=None):
+        self.queries.append(query)
+        for needle in self.fail_on:
+            if needle in query:
+                return {"status": "error", "error_message": "boom"}
+        for needle, records in self.responses.items():
+            if needle in query:
+                return {"status": "success",
+                        "query_result": {"records": records, "row_count": len(records),
+                                         "truncated": False}}
+        return {"status": "success",
+                "query_result": {"records": [], "row_count": 0, "truncated": False}}
+
+
+@pytest.fixture
+def fake_profile_db(monkeypatch):
+    db = FakeGraphDbForProfile()
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    return db
+
+
+SCHEMA = {
+    "node_props": {"Alpha": [{"property": "code", "type": "STRING"}]},
+    "rel_props": {"LINKS": [{"property": "kind", "type": "STRING",
+                             "values": ["x", "y"], "distinct_count": 2}]},
+    "relationships": [
+        {"start": "Alpha", "type": "LINKS", "end": "Beta"},
+        {"start": "Alpha", "type": "LINKS", "end": "Gamma"},
+    ],
+}
+
+
+def test_quote_backticks_names_and_escapes_embedded_backticks():
+    assert quote("Alpha") == "`Alpha`"
+    assert quote("Legal Entity") == "`Legal Entity`"
+    assert quote("we`ird") == "`we``ird`"
+
+
+def test_quote_accepts_names_that_checked_would_reject():
+    """checked() is for model-supplied identifiers; these come from the DB."""
+    from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
+    with pytest.raises(InvalidIdentifier):
+        checked("label", "Legal Entity")
+    assert quote("Legal Entity") == "`Legal Entity`"
+
+
+def test_degree_is_keyed_per_start_type_end_pattern(fake_profile_db):
+    profile = build_profile(SCHEMA)
+    keys = {p["pattern"] for p in profile["patterns"]}
+    assert keys == {"Alpha-[LINKS]->Beta", "Alpha-[LINKS]->Gamma"}
+
+
+FAILING_SCHEMA = {
+    # Alpha needs a qualifying property (distinct_count <= 10) or no per-entity
+    # query is ever issued for it and fail_on has nothing to match -- the
+    # earlier version of this test passed vacuously.
+    "node_props": {"Alpha": [{"property": "code", "type": "STRING",
+                              "values": ["a"], "distinct_count": 2}]},
+    "rel_props": {"LINKS": [{"property": "kind", "type": "STRING",
+                             "values": ["x", "y"], "distinct_count": 2}]},
+    "relationships": [],
+}
+
+
+def test_one_failing_entity_degrades_only_itself(monkeypatch):
+    db = FakeGraphDbForProfile(fail_on=("`Alpha`",))
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    profile = build_profile(FAILING_SCHEMA)
+    assert profile["properties"]["Alpha"] == "profile_error"
+    assert profile["properties"]["LINKS"] != "profile_error"
+
+
+def test_value_counts_only_for_small_distinct_counts(fake_profile_db):
+    schema = {
+        "node_props": {"Alpha": [
+            {"property": "small", "type": "STRING", "values": ["a"], "distinct_count": 2},
+            {"property": "big", "type": "STRING", "values": ["a"], "distinct_count": 900},
+        ]},
+        "rel_props": {}, "relationships": [],
+    }
+    build_profile(schema)
+    counted = [q for q in fake_profile_db.queries if "count(*)" in q and "`small`" in q]
+    not_counted = [q for q in fake_profile_db.queries if "count(*)" in q and "`big`" in q]
+    assert counted and not not_counted
+
+
+@pytest.mark.parametrize("is_relationship,expected,forbidden", [
+    (False, "MATCH (n:`Thing`)", "-[r:`Thing`]->"),
+    (True, "MATCH ()-[r:`Thing`]->()", "MATCH (n:`Thing`)"),
+])
+def test_value_counts_query_shape_differs_by_kind(
+        fake_profile_db, is_relationship, expected, forbidden):
+    """The one place node vs relationship genuinely changes the emitted Cypher.
+
+    This is the real content behind the spec's "asserted twice, once per
+    property kind" commitment -- annotate_property cannot carry it, because it
+    has no kind parameter to vary.
+    """
+    graph_profile._value_counts("Thing", "flag", is_relationship=is_relationship)
+    issued = " ".join(fake_profile_db.queries)
+    assert expected in issued
+    assert forbidden not in issued
+
+
+@pytest.mark.parametrize("collection", ["node_props", "rel_props"])
+def test_both_property_collections_are_annotated_identically(fake_profile_db, collection):
+    """Same property dict, either collection, same annotations."""
+    prop = {"property": "flag", "type": "STRING", "values": ["a", "b"], "distinct_count": 2}
+    schema = {"node_props": {}, "rel_props": {}, "relationships": []}
+    schema[collection] = {"Thing": [dict(prop)]}
+    profile = build_profile(schema)
+    annotated = profile["properties"]["Thing"][0]
+    assert annotated["completeness"] == "complete"
+    assert annotated["uniqueness"] in ("unique", "non_unique", "unknown")
+    assert "value_counts" in annotated
+
+
+def test_budget_marks_unprofiled_entities_rather_than_dropping_them(monkeypatch):
+    monkeypatch.setattr(graph_profile, "MAX_PROFILED_ENTITIES", 1)
+    db = FakeGraphDbForProfile()
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    schema = {
+        "node_props": {"Alpha": [], "Beta": [], "Gamma": []},
+        "rel_props": {}, "relationships": [],
+    }
+    profile = build_profile(schema)
+    # list(), not set(): a profiled entity's value is a (possibly empty) list
+    # of annotated properties, which is unhashable, so set() would raise
+    # before this assertion ever ran. `in` on a list only needs `==`.
+    statuses = list(profile["properties"].values())
+    assert "not_profiled" in statuses
+    assert profile["budget"]["entities_profiled"] == 1
+    assert profile["budget"]["entities_skipped"] == 2
+
+
+def test_budget_also_caps_the_pattern_loop(monkeypatch):
+    """Gating only entities would leave the 2P degree queries unbounded."""
+    monkeypatch.setattr(graph_profile, "MAX_PROFILED_PATTERNS", 1)
+    db = FakeGraphDbForProfile()
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    profile = build_profile(SCHEMA)
+    degrees = [p["start_degree"] for p in profile["patterns"]]
+    assert "not_profiled" in degrees
+    assert profile["budget"]["patterns_profiled"] == 1
