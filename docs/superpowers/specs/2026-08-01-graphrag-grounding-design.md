@@ -14,6 +14,16 @@ A live session produced three failures from `graphrag_agent_v1`. All arithmetic 
 
 **3. Reported worst-case quotes as lead times, and miscounted a superlative.** Asked for the longest lead times, it returned the maximum across all quotes. All 15 relationships at ≥28 days are `preferred_supplier='no'` — fallback options, not lead times anyone would experience. It observed that fact and reported it as an insight without noticing it invalidated the framing. Separately it claimed Malmö Desk was the most exposed product with 4 parts in range; Linköping Bed has 6. It reached that by counting ~15 returned rows by eye rather than aggregating.
 
+### Provenance of the dataset claims
+
+Two kinds of evidence appear in this document and they carry different weight.
+
+**Code citations** (file and line) were verified by reading the installed source and can be re-checked by anyone at any time.
+
+**Dataset claims** — the four disconnected supplier IDs, the 88/88 primary-backup split, Sweden 32 versus Canada 0, six `Part` nodes named "Screws", 16 names reused across 63 of 88 parts, 15 relationships at ≥28 days, Linköping Bed 6 versus Malmö 4, and `lead_time_days` returning 10 values against `distinct_count: 27` — were verified by direct Cypher against the live Aura instance on 2026-07-31, but the graph has since been wiped and rebuilt. They are **not** checkable from repository source alone. They are reproducible: all of them derive deterministically from the CSVs in `data/bom/`, so rebuilding the graph and re-running the queries will reproduce them.
+
+**Not reproducible:** the session narrative itself — that the invented supplier list originated in a schema-critique warning issued 3.5 hours earlier in the same conversation. That comes from the session transcript, which is not preserved in the repository. It is the diagnosis behind the context filter, so it is worth knowing it rests on an observation rather than on an artifact anyone can re-inspect.
+
 ## Root causes
 
 - **Failure 1** is a context-plumbing problem, not a memory-discipline problem. ADK rewrites other agents' output into the current agent's context with `role='user'`, so the critique's warning arrived looking like something the user had said.
@@ -40,7 +50,7 @@ New module `src/agentic_kg/common/adk_context.py` owns the context filter and th
 
 ### Tool result shape
 
-`tool_success(key, value)` produces `{"status": "success", <key>: value}`, and `_payload_key` (`tool_result.py:60-70`) raises when a success result carries more than one non-status key. Sibling keys are therefore forbidden. Both tools keep a single payload key:
+`tool_success(key, value)` produces `{"status": "success", <key>: value}`, and `_payload_key` (`tool_result.py:53-64`) raises when a success result carries more than one non-status key. Sibling keys are therefore forbidden. Both tools keep a single payload key:
 
 ```
 get_physical_schema(include_degree_profile: bool = False)
@@ -61,9 +71,9 @@ Detection must use that sentinel, not `role` or `author`. `_convert_foreign_even
 
 Mutating `llm_request.contents` in place and returning `None` is correct: the callback contract passes `callback_context=`/`llm_request=` as keywords, a falsy return means proceed, and the same `llm_request` object flows on to the model with no snapshot taken beforehand.
 
-Attached via `before_model_callback=variants[AGENT_NAME].get("before_model_callback")` in `agent.py`. This is a verified no-op for v1: the field defaults to `None` (`llm_agent.py:224`) and `canonical_before_model_callbacks` returns `[]` on falsy (line 390).
+Attached via `before_model_callback=variants[AGENT_NAME].get("before_model_callback")` in `agent.py`. This is a verified no-op for v1: the field defaults to `None` (`llm_agent.py:225`) and `canonical_before_model_callbacks` returns `[]` on falsy (lines 390-391).
 
-`include_contents='none'` was rejected: `_get_current_turn_contents` (263) walks back to the most recent event authored by `'user'` *or another agent*, which would also discard graphrag's own prior turns and break follow-up questions.
+`include_contents='none'` was rejected: `_get_current_turn_contents` (`contents.py:264`) walks back to the most recent event authored by `'user'` *or another agent*, which would also discard graphrag's own prior turns and break follow-up questions.
 
 ### Enriched schema and completeness annotations
 
@@ -75,11 +85,13 @@ Post-process instead, using a signal the response already carries:
 
 | Condition | Meaning | Annotation |
 |---|---|---|
-| `distinct_count` absent | sampled branch, 5 rows, completeness unknowable (`schema.py:561-564`) | suppress `values`, mark non-exhaustive |
+| `distinct_count` absent | sampled branch, 5 rows, completeness unknowable (`schema.py:572-573`) | suppress `values`, mark non-exhaustive |
 | `len(values) < distinct_count` | exhaustive but truncated to `DISTINCT_VALUE_LIMIT` | mark partial |
 | `len(values) == distinct_count` | complete | leave as-is |
 
 The middle row matters: `lead_time_days` returns 10 values with `distinct_count: 27`. Presented unlabelled, a truncated list reads as complete — the same failure shape this work exists to fix.
+
+There is a third branch worth a comment in the implementation, though it needs no special case. When a property has a RANGE index whose own statistics report 10 or fewer distinct values, the library reads the complete distinct set from the index rather than sampling rows (`schema.py:546-564`) and emits `distinct_count` despite not being row-exhaustive. Because that path always yields `len(values) == distinct_count`, the comparison rule above classifies it as complete, which is correct by construction. It cannot arise in this codebase today — the only index creation is `create_uniqueness_constraint`, which runs on ID properties — but a reader comparing the table against `schema.py` will find a branch the table doesn't obviously cover, so `graph_profile.py` should say so in a comment.
 
 `sanitize=True` is a generic backstop over the library's own query family, **not** an embedding guard. `LIST` properties only ever receive `min_size`/`max_size` (`schema.py:584-596`, dispatch at 758-763) and `BOOLEAN`/`POINT`/`DURATION` are skipped outright, so enriched schema structurally cannot emit a vector. The real embedding exposure is `read_neo4j_cypher` — see below.
 
@@ -135,7 +147,7 @@ No existing test asserts on this tool's return shape.
 
 ### Prompt and packaging
 
-Lands as `graphrag_agent_v2` in `variants.py` per `CLAUDE.md:120`, carrying three keys: `instruction`, `tools` (the profile wrapper, `read_neo4j_cypher`, `finished`), and `before_model_callback`. `agent.py` flips `AGENT_NAME` and adds the one `.get(...)` line.
+Lands as `graphrag_agent_v2` in `variants.py` per `CLAUDE.md:121`, carrying three keys: `instruction`, `tools` (the profile wrapper, `read_neo4j_cypher`, `finished`), and `before_model_callback`. `agent.py` flips `AGENT_NAME` and adds the one `.get(...)` line.
 
 v1 stays intact for the acceptance A/B, then is removed once that has served its purpose. Note that the rationale `CLAUDE.md` gives for the variants pattern — mirroring the course's progressive-exercise structure — no longer applies to this project; the mechanism is kept here because it enables the A/B, not for course fidelity.
 

@@ -4,9 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project purpose
 
-Companion project to the deeplearning.ai short course "Agentic Knowledge Graph Construction". It's a multi-agent
-system, built on Google ADK (Agent Development Kit) with LiteLLM, that interviews a user, picks source files, proposes
-a graph schema, and builds a knowledge graph in Neo4j. It is a reference/teaching implementation, not production code.
+A multi-agent system, built on Google ADK (Agent Development Kit) with LiteLLM, that interviews a user, picks source
+files, proposes a graph schema, and builds a knowledge graph in Neo4j.
+
+Forked from the companion project to the deeplearning.ai short course "Agentic Knowledge Graph Construction", but
+**this is being developed into a real program, not a teaching artifact.** Course-shaped structure that survives in
+the code (the `variants` dicts of successive chapter iterations, the "Differences from the course" section below)
+is inherited history, not a constraint to preserve — prefer the choice that makes a working program over the one
+that mirrors the course. Reproducibility for students is not a design goal.
 
 ## Current work: unstructured ingestion (3 sub-projects)
 
@@ -168,6 +173,14 @@ site's model choice winning for the whole process. Every model runs through Open
 in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.g. `"openai/gpt-4o"`), and
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
+
+Current models: reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash`. The reasoning
+slot moved off `openai/gpt-5` (2026-07-31) because its workload — `schema_proposal_agent`'s propose/critique/refine
+trio and `graph_construction_agent` — is many small tool-orchestration steps at `reasoning_effort="low"`, which is
+exactly Luna's target profile, at ~1/16th the output cost. LiteLLM has no `openrouter/openai/gpt-5.6-luna` entry in
+`model_cost`, so its own cost estimate is 0 for this model; OpenRouter returns real `cost` / `cost_details` on the
+response instead, which is what to read if you add cost tracking.
+
 `get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
 (e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
 exceeds the balance, the call gets a 402 that ADK's dev UI shows as an indistinguishable hang — no spinner, no
