@@ -72,9 +72,21 @@ def is_symbol(symbol: str) -> bool:
 
 
 def is_write_query(query: str) -> bool:
-    """Check if the Cypher query performs any write operations."""
+    """Heuristic write detection, used ONLY as a cache-invalidation hint.
+
+    This is deliberately not a security boundary and must never be used as
+    one. It matches text, so it cannot tell a keyword from a string literal
+    ("... CONTAINS 'set forth' ..." reads as a write) and it misses camelCase
+    procedure calls (\\bMERGE\\b finds no boundary inside `mergeNodes`, which is
+    what apoc.refactor.mergeNodes is). Read-only enforcement is the server's
+    job via default_access_mode -- see send_read_query.
+
+    As a cache hint both error directions are benign: a false positive costs
+    one recomputation, and a false negative is caught by the fingerprint layer
+    in graph_profile.
+    """
     return (
-        re.search(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD)\b", query, re.IGNORECASE)
+        re.search(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD|DROP)\b", query, re.IGNORECASE)
         is not None
     )
 
@@ -135,6 +147,11 @@ class Neo4jForADK:
         self._driver = make_driver(self._neo4j_config)
         logger.debug(f"Neo4j driver initialized at {self._neo4j_config.uri}")
 
+        # Bumped by send_query on every successful write. graph_profile's cache
+        # reads this to invalidate without a round-trip. It counts in-process
+        # writes only; writes from elsewhere are caught by the fingerprint.
+        self.write_count = 0
+
     def get_driver(self):
         return self._driver
 
@@ -145,17 +162,24 @@ class Neo4jForADK:
         return self._driver.close()
 
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
-        session = self._driver.session(database=self._neo4j_config.database)
+        # Session creation must sit INSIDE the try. It is currently outside
+        # (line 148), so a driver that cannot open a session raises straight
+        # out of this method instead of returning a structured error -- which
+        # in ADK surfaces as an unhandled exception mid-turn rather than a
+        # message the agent can react to.
+        session = None
         try:
-            result = session.run(
-                cypher_query,
-                parameters or {}
-            )
-            return result_to_adk(result)
+            session = self._driver.session(database=self._neo4j_config.database)
+            result = session.run(cypher_query, parameters or {})
+            adk_result = result_to_adk(result)
+            if is_write_query(cypher_query):
+                self.write_count += 1
+            return adk_result
         except Exception as e:
             return tool_error(str(e))
         finally:
-            session.close()
+            if session is not None:
+                session.close()
 
 # Lazy singleton for the Neo4j client
 _graphdb_singleton: Optional[Neo4jForADK] = None
