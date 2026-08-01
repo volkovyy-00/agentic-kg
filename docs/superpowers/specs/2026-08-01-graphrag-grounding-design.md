@@ -36,6 +36,18 @@ Two kinds of evidence appear in this document and they carry different weight.
 
 **Out:** the construction-side typing defect (every property stored as `STRING`, `unit_cost` as `'$42.73'`). See `docs/typing-defect.md`. **Also out:** any change to graphrag's model tier — see *Deliberately unchanged* below.
 
+## Generality constraints
+
+This work was diagnosed from one dataset, so the failure mode to guard against is a fix that only works on furniture. Three rules, in decreasing order of how mechanically they can be checked.
+
+**1. No dataset vocabulary in `src/`.** No label, relationship type, property name, or literal value from `data/bom/` — or from any other dataset — may appear anywhere under `src/`, including inside prompt strings. Everything shipped reasons about *shapes*: entity counts, distinct counts, degree, completeness. Nothing reasons about suppliers.
+
+This is enforced by a test that greps `src/` for a curated list of unambiguous dataset tokens: `preferred_supplier`, `supplier_id`, `assembly_id`, `part_id`, `lead_time_days`, `unit_cost`, `minimum_order_quantity`, `SUP-`, `Screws`. Deliberately excluded from that list are the bare label names `Part`, `Product` and `Assembly`, because `Part` collides with `google.genai.types.Part`, which this codebase legitimately uses — a naive token list would fail on correct code and get deleted by the next person. The curated list is the point; do not "improve" it into a broad match.
+
+**2. Test fixtures must not use the demo domain.** Unit tests for `graph_profile.py` construct synthetic schema dicts with neutral names. A fixture that reproduces the furniture graph would let a fix that hardcodes furniture pass, which is exactly the failure this section exists to prevent. The furniture data appears in exactly one place: the manual acceptance run, which is not automated and asserts nothing.
+
+**3. Rubric criteria are evidence, not specifications.** Each acceptance criterion exists because it caught a general defect. None of them may be built against directly. If a proposed change would make a criterion pass without a general principle behind it, it is the wrong change — even if it works.
+
 ## Design
 
 ### Module layout
@@ -99,17 +111,21 @@ There is a third branch worth a comment in the implementation, though it needs n
 
 New `include_degree_profile: bool = False` parameter. Only graphrag binds a wrapper that passes `True`.
 
+Throughout this section **entity** means a node label or a relationship type, and **entity count** means that label's node count or that type's edge count. Both annotations below apply uniformly to node and relationship properties. This symmetry is deliberate and is the main thing to protect during implementation: the two failures that motivated these annotations happened to land on opposite sides of that split — `preferred_supplier` is a relationship property, `part_name` is a node property — and defining either annotation over only the half where its own bug lived would fit the design to the bugs rather than to the class.
+
 Contents:
-- per-label node counts
-- per-relationship-type edge count and endpoint cardinality (for `SUPPLIES`: 176 edges, every `Part` has exactly 2)
-- per-value counts for properties that carry a `distinct_count` of **10 or fewer** (`VALUE_COUNT_MAX_DISTINCT = 10`)
-- a **non-unique** mark on any property whose `distinct_count` is below its label's node count
+- **entity counts** — node count per label, edge count per relationship type
+- **endpoint degree** per relationship type — for each end, the minimum, maximum and mean number of edges per distinct endpoint node, plus the distinct endpoint count. Min equal to max is the signal that says a pattern has fixed grain
+- **per-value counts** for any property, node or relationship, carrying a `distinct_count` of 10 or fewer (`VALUE_COUNT_MAX_DISTINCT = 10`)
+- a **non-unique mark** on any property, node or relationship, whose `distinct_count` is below its entity count
 
 The threshold of 10 is not arbitrary: it is the library's own `DISTINCT_VALUE_LIMIT` (`schema.py:29`). Above it the library truncates the `values` list, so per-value counts would be partial regardless — computing them past that point would produce exactly the misleading half-complete output the annotations exist to prevent.
 
-The per-value counts are the fact that makes failure 2 legible: `preferred_supplier` splits 88/88. The library reports `distinct_count` (how many distinct values) but never per-value row counts, so this is ours to compute. Restricting it to properties that already carry a `distinct_count` means we only compute it where the library took the exhaustive branch and already scanned that label — cheap where it is cheap, skipped precisely where the sampled branch would make it a lie.
+*Why per-value counts.* A low-cardinality property partitions the entities carrying it. Where that property sits on a relationship, the partition divides the edge set into kinds, and any aggregation that counts edges uniformly across them is meaningless. `distinct_count` reveals that a partition exists; only the per-value counts reveal whether it is balanced, and therefore whether uniform counting is defensible. The library never computes per-value counts, so this is ours. Restricting it to properties that already carry a `distinct_count` confines the work to entities the library already scanned exhaustively — cheap where it is cheap, and skipped precisely where the sampled branch would make it a lie.
 
-The non-unique mark closes rubric B.4 with data: six distinct `Part` nodes are named "Screws", and 16 names are reused across 63 of 88 parts.
+*Why the non-unique mark.* Grouping or ranking by a property that does not identify its entity silently merges rows, and the merge is invisible in the result. Comparing distinct values against entity count detects this for any property without knowing anything about what the property means.
+
+Both principles are properties of graphs, not of any dataset. That they happen to close rubric criteria A1 and B.4 is a consequence, not the reason — a rubric criterion is evidence that a general defect is real, never a specification to build against.
 
 Queries are plain Cypher, not APOC. Everything needed is standard aggregation; Aura guarantees only APOC Core, and the enriched schema already depends on APOC through the library. A second APOC dependency of our own would be a portability liability for no gain.
 
@@ -139,7 +155,7 @@ Cost: one query per turn instead of roughly twelve. In-process writes short-circ
 
 `read_neo4j_cypher` returns `row_count` (the true count, before truncation), a `records` list capped at **50 rows** (`MAX_RETURNED_ROWS = 50`), a `truncated` flag, and a note stating that counts must come from a Cypher aggregation rather than from the returned rows.
 
-50 is chosen against the observed failure: the queries behind failure 3 returned roughly 15 to 20 rows, so a normal exploratory query stays untruncated and the change is invisible in ordinary use, while `row_count` is always present to make eyeballing unnecessary. The cap bounds pathological results — an accidental cartesian product, or a bare `MATCH (n) RETURN n`. It also summarises array-valued properties rather than returning them whole: `to_python` (`neo4j_for_adk.py:86`) recurses into lists, so `MATCH (c:Chunk) RETURN c` would return a full embedding vector. This path has no sanitize equivalent and is the real embedding exposure.
+The cap exists to bound context growth from a result set of unknown size — an accidental cartesian product, or a bare `MATCH (n) RETURN n`. Its value is a judgement about how many rows are worth reading individually before the honest answer is "aggregate this instead," which is why `row_count` is always the true count and always present: the number of rows returned should never be load-bearing. 50 is a starting point, not a tuned constant. It is a module-level constant so it can be changed without touching logic, and no behaviour anywhere may depend on its exact value. It also summarises array-valued properties rather than returning them whole: `to_python` (`neo4j_for_adk.py:86`) recurses into lists, so `MATCH (c:Chunk) RETURN c` would return a full embedding vector. This path has no sanitize equivalent and is the real embedding exposure.
 
 **This change is deliberately global, not gated.** Checked all three consumers — `graphrag_agent`, `graph_construction_agent` (referenced in its instruction steps 4, 5 and 7), and `single_agent`'s `cypher_agent` (both variants). All three read rows and draw conclusions, so all three benefit and none pays overhead for a capability it cannot use. That is the opposite of the degree profile, which only graphrag can use. Supporting evidence: `graph_construction_agent/variants.py:51` already instructs that agent to *"count the label or type yourself with `read_neo4j_cypher` before quoting a number"* — a hand-written prompt rule for the thing `row_count` fixes mechanically.
 
@@ -173,7 +189,11 @@ Six files, all in `tests/unit/`, none marked `integration` — no Docker, Neo4j 
 
 The canary builds a real `Event` authored by another agent, passes it through ADK's own `_convert_foreign_event`, and asserts the filter catches the result. Asserting on the literal string would only prove we still agree with ourselves; this fails on drift. Motivated by the wide pin `google-adk>=1.10,<2` (`pyproject.toml:14`), under which a routine `uv sync` could change the sentinel.
 
-**`test_graph_profile.py`** — annotation logic as pure functions over dicts: `distinct_count` present and equal to `len(values)` → complete; present and greater → partial; absent → non-exhaustive with values suppressed; below the label's node count → marked non-unique; equal → not marked.
+**`test_graph_profile.py`** — annotation logic as pure functions over dicts: `distinct_count` present and equal to `len(values)` → complete; present and greater → partial; absent → non-exhaustive with values suppressed; below the entity count → marked non-unique; equal → not marked.
+
+Every case is asserted **twice, once for a node property and once for a relationship property**, since the node/relationship symmetry is the specific thing most likely to be lost during implementation. Fixtures use neutral synthetic names per generality constraint 2 — no furniture vocabulary.
+
+**`test_generality.py`** — greps `src/` for the curated dataset-token list and fails if any appears. Cheap, mechanical, and the only thing standing between this design and a future change that quietly hardcodes the demo domain.
 
 **`test_graph_profile_cache.py`** — same counter and fingerprint → no recompute; counter bumped → recompute; counter unchanged but fingerprint moved → recompute (the external-write case).
 
