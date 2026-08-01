@@ -5,7 +5,13 @@ from google.adk.tools import ToolContext
 from neo4j_graphrag.schema import get_structured_schema
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
-from agentic_kg.common.neo4j_for_adk import get_graphdb, is_write_query, close_graphdb
+from agentic_kg.common.graph_profile import get_cached_profile
+from agentic_kg.common.neo4j_for_adk import (
+    get_graphdb,
+    is_write_query,
+    close_graphdb,
+    QUERY_TIMEOUT_SECONDS,
+)
 from agentic_kg.common.tool_result import tool_success, tool_error
 
 graphdb = get_graphdb()
@@ -23,6 +29,45 @@ def neo4j_is_ready(
     return results
 
 
+def _physical_schema(include_data_profile: bool) -> Dict[str, Any]:
+    """Internal implementation. NOT bound as a tool -- see the two wrappers.
+
+    The flag must not appear in any tool's signature. ADK builds a tool's
+    declaration from the callable, and it does not support default values in
+    that schema, so a public `get_physical_schema(include_data_profile=False)`
+    is advertised to the model as a REQUIRED boolean parameter. All four
+    consumers -- the coordinator, graph_construction_agent, graphrag and
+    single_agent's cypher_agent -- would be handed a knob they know nothing
+    about, and a model that guessed True would silently trigger a full scan per
+    label on a latency-tuned agent. Two zero-argument wrappers keep the choice
+    in code where it belongs.
+    """
+    try:
+        # Inside the try: a driver or config failure must return a structured
+        # error, not raise out of a tool call.
+        driver = graphdb.get_driver()
+        database_name = graphdb.get_config().database
+
+        if not include_data_profile:
+            return tool_success("schema", get_structured_schema(driver, database=database_name))
+
+        def load_enriched_schema():
+            return get_structured_schema(
+                driver,
+                is_enhanced=True,
+                database=database_name,
+                timeout=QUERY_TIMEOUT_SECONDS,
+                sanitize=True,
+            )
+
+        cached = get_cached_profile(load_enriched_schema)
+        schema = dict(cached["schema"])
+        schema["profile"] = cached["profile"]
+        return tool_success("schema", schema)
+    except Exception as e:
+        return tool_error(str(e))
+
+
 def get_physical_schema() -> Dict[str, Any]:
     """Tool to get the physical schema of a Neo4j graph database.
 
@@ -32,35 +77,43 @@ def get_physical_schema() -> Dict[str, Any]:
         - "schema": the schema as a JSON object if "success"
         - "error_message": the error message if "error"
     """
-    driver = graphdb.get_driver()
-    database_name = graphdb.get_config().database
+    return _physical_schema(include_data_profile=False)
 
-    try:
-        schema = get_structured_schema(driver, database=database_name)
-        return tool_success("schema", schema)
-    except Exception as e:
-        return tool_error(str(e))
+
+def get_graph_schema_with_profile() -> Dict[str, Any]:
+    """Get the graph schema together with a profile of the data it holds.
+
+    Returns the node labels, relationship types and properties, plus for each
+    property whether its reported values are complete, whether it uniquely
+    identifies its entity, and how its values are distributed; and for each
+    relationship pattern how many edges it has and how they spread across the
+    nodes at each end. Use this before writing any query: it tells you the
+    grain of a pattern, which determines whether counting rows is meaningful.
+    """
+    return _physical_schema(include_data_profile=True)
+
 
 def read_neo4j_cypher(
     query: str,
     params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Submits a Cypher query to read from a Neo4j database.
+    """Submits a read-only Cypher query to a Neo4j database.
 
     Args:
         query: The Cypher query string to execute.
         params: Optional parameters to pass to the query.
 
     Returns:
-        A list of dictionaries containing the results of the query.
-        Returns an empty list "[]" if no results are found.
+        A dictionary with "status" and, on success, "query_result" holding:
+        - "records": the rows, capped in number
+        - "row_count" (or "row_count_at_least" for very large results)
+        - "truncated": whether records were capped
+        - "note": present when truncated
 
+        Counts and rankings must come from a Cypher aggregation, never from
+        counting the returned records.
     """
-    if is_write_query(query):
-        return tool_error("Only MATCH queries are allowed for read-query")
-
-    results = graphdb.send_query(query, params)
-    return results
+    return graphdb.send_read_query(query, params)
 
 def write_neo4j_cypher(
     query: str,
