@@ -32,7 +32,15 @@ Two kinds of evidence appear in this document and they carry different weight.
 
 ## Scope
 
-**In:** seven changes to the retrieval path — context filtering, enriched schema with completeness annotations, degree and value profiling, caching with invalidation, query-result bounding, three prompt rules, and `graphrag_agent_v2` packaging.
+**In:** changes to the retrieval path — context filtering, enriched schema with completeness annotations, degree and value profiling, caching with invalidation, safe query execution and result bounding, four prompt rules, and `graphrag_agent_v2` packaging.
+
+### Scope revision
+
+An independent review against the goal — *a universal tool that queries any created graph without error* — found the first draft solving a narrower problem: grounding the agent on one small, single-pattern, CSV-built graph. Two groups of work were folded in, for two different reasons, and the distinction matters when judging whether scope grew.
+
+**Group 1: corrections to mechanisms this document already committed to.** Gating `is_enhanced` (the draft enabled it globally while promising byte-identical output to other consumers — a plain contradiction); keying degree on `(start, type, end)` rather than type alone; server-enforced read-only and a query timeout in place of a text-matching guard; tri-state annotations so an uncomputable annotation is not silently read as safe. These are bugs in the draft, not new ambitions. Deferring them would mean writing a second document that reopens `send_query`, `is_write_query` and the profile's dict shape purely to fix the first one.
+
+**Group 2: pulled forward on scheduling grounds, not genericity grounds.** The shape-based integration tests. Sub-project 2 is already committed with its design settled, and it will introduce exactly the multi-pattern and self-referencing relationship shapes where the keying bug lives. Validating against those shapes now costs one test file; discovering the bug mid-way through sub-project 2 costs unwinding a profile shape its consumers already depend on. This is not a retroactive widening of the "don't hardcode supplier names" constraint.
 
 **Out:** the construction-side typing defect (every property stored as `STRING`, `unit_cost` as `'$42.73'`). See `docs/typing-defect.md`. **Also out:** any change to graphrag's model tier — see *Deliberately unchanged* below.
 
@@ -65,7 +73,7 @@ New module `src/agentic_kg/common/adk_context.py` owns the context filter and th
 `tool_success(key, value)` produces `{"status": "success", <key>: value}`, and `_payload_key` (`tool_result.py:53-64`) raises when a success result carries more than one non-status key. Sibling keys are therefore forbidden. Both tools keep a single payload key:
 
 ```
-get_physical_schema(include_degree_profile: bool = False)
+get_physical_schema(include_data_profile: bool = False)
   -> tool_success("schema", { ...library keys..., "profile": {...} })
 
 read_neo4j_cypher(query, params)
@@ -73,7 +81,9 @@ read_neo4j_cypher(query, params)
        "row_count": int, "records": [...], "truncated": bool, "note": str })
 ```
 
-The profile nests *inside* the schema dict. With `include_degree_profile=False` the `profile` key is **absent entirely** — not present-and-empty — so the other consumers receive a byte-identical dict.
+The profile nests *inside* the schema dict. With `include_data_profile=False` the `profile` key is **absent entirely** — not present-and-empty — and `is_enhanced` stays off, so the other three consumers receive a dict byte-identical to today's.
+
+**One flag gates both the enrichment and the profile.** An earlier draft of this document enabled `is_enhanced=True` unconditionally while also promising byte-identical output to other consumers. Those cannot both hold: enrichment adds `values`, `distinct_count`, `min` and `max` to every property *and* costs a full scan per label. Broadcasting it would have made the coordinator's "is the database empty?" check (`agent.py:27`) scan the whole graph and would have regressed `graph_construction_agent`'s latency — the specific thing this document's risk section says must not happen. The parameter is named `include_data_profile` rather than `include_degree_profile` because it now governs both.
 
 ### Context filter
 
@@ -89,7 +99,7 @@ Attached via `before_model_callback=variants[AGENT_NAME].get("before_model_callb
 
 ### Enriched schema and completeness annotations
 
-Call `get_structured_schema` with `is_enhanced=True`, `sanitize=True`, and a timeout. All three are existing parameters currently unused at `cypher_tools.py:39`.
+When `include_data_profile=True`, call `get_structured_schema` with `is_enhanced=True`, `sanitize=True`, and a timeout — all existing parameters currently unused at `cypher_tools.py:39`. When it is `False`, call it exactly as today.
 
 **No global size gate.** The library already decides exhaustive-versus-sampled per label and per relationship type (`schema.py:830`), so a whole-graph gate would downgrade a 20-row `Supplier` label the moment an unrelated `Chunk` label crossed 10,000.
 
@@ -97,9 +107,11 @@ Post-process instead, using a signal the response already carries:
 
 | Condition | Meaning | Annotation |
 |---|---|---|
-| `distinct_count` absent | sampled branch, 5 rows, completeness unknowable (`schema.py:572-573`) | suppress `values`, mark non-exhaustive |
-| `len(values) < distinct_count` | exhaustive but truncated to `DISTINCT_VALUE_LIMIT` | mark partial |
-| `len(values) == distinct_count` | complete | leave as-is |
+| `distinct_count` absent | sampled branch, 5 rows, completeness unknowable (`schema.py:572-573`) | suppress `values`, `completeness: "unknown"` |
+| `len(values) < distinct_count` | exhaustive but truncated to `DISTINCT_VALUE_LIMIT` | `completeness: "partial"` |
+| `len(values) == distinct_count` | complete | `completeness: "complete"` |
+
+**Every annotation is tri-state and always present.** An annotation is never omitted to mean "not applicable" — a missing key reads as *safe* to a model, and the entities where we cannot compute an annotation are exactly the large, unfamiliar ones where being wrong is most likely. `completeness`, `uniqueness` and any later annotation each take an explicit value including `"unknown"`, and the prompt rules are phrased over the tri-state rather than over presence. This is the single most important rule for graphs larger than the demo: above `EXHAUSTIVE_SEARCH_LIMIT` the library computes nothing, and a design that signals that by silence gets *more* permissive as the graph gets less familiar.
 
 The middle row matters: `lead_time_days` returns 10 values with `distinct_count: 27`. Presented unlabelled, a truncated list reads as complete — the same failure shape this work exists to fix.
 
@@ -109,15 +121,17 @@ There is a third branch worth a comment in the implementation, though it needs n
 
 ### Degree and value profile
 
-New `include_degree_profile: bool = False` parameter. Only graphrag binds a wrapper that passes `True`.
+New `include_data_profile: bool = False` parameter. Only graphrag binds a wrapper that passes `True`.
 
 Throughout this section **entity** means a node label or a relationship type, and **entity count** means that label's node count or that type's edge count. Both annotations below apply uniformly to node and relationship properties. This symmetry is deliberate and is the main thing to protect during implementation: the two failures that motivated these annotations happened to land on opposite sides of that split — `preferred_supplier` is a relationship property, `part_name` is a node property — and defining either annotation over only the half where its own bug lived would fit the design to the bugs rather than to the class.
 
 Contents:
 - **entity counts** — node count per label, edge count per relationship type
-- **endpoint degree** per relationship type — for each end, the minimum, maximum and mean number of edges per distinct endpoint node, plus the distinct endpoint count. Min equal to max is the signal that says a pattern has fixed grain
+- **endpoint degree per `(start, type, end)` pattern** — for each end, the minimum, maximum and mean edges per distinct endpoint node, plus the distinct endpoint count. Min equal to max is the signal that a pattern has fixed grain
 - **per-value counts** for any property, node or relationship, carrying a `distinct_count` of 10 or fewer (`VALUE_COUNT_MAX_DISTINCT = 10`)
-- a **non-unique mark** on any property, node or relationship, whose `distinct_count` is below its entity count
+- a **uniqueness** annotation on any property, node or relationship: `"unique"` when `distinct_count` equals its entity count, `"non_unique"` when below, `"unknown"` when `distinct_count` was not computed
+
+**Degree is keyed on the `(start, type, end)` triple, never on the relationship type alone.** The library already returns triples (`schema.py:56`, `REL_QUERY` yields `{start, type, end}`), so this uses data we are handed rather than adding anything. On the demo graph every type spans exactly one label pair, which makes per-type and per-pattern indistinguishable — that is precisely why keying on type alone is easy to write and impossible to notice. On a graph where one type spans several pairs, pooled degree statistics describe no actual pattern, and `min == max` can hold across the pool while being false for every individual pattern. That would reintroduce the exact grain error this profile exists to prevent. Self-referencing types compound it: start and end endpoint sets overlap, so pooled distinct-endpoint counts describe neither in-degree nor out-degree.
 
 The threshold of 10 is not arbitrary: it is the library's own `DISTINCT_VALUE_LIMIT` (`schema.py:29`). Above it the library truncates the `values` list, so per-value counts would be partial regardless — computing them past that point would produce exactly the misleading half-complete output the annotations exist to prevent.
 
@@ -129,9 +143,17 @@ Both principles are properties of graphs, not of any dataset. That they happen t
 
 Queries are plain Cypher, not APOC. Everything needed is standard aggregation; Aura guarantees only APOC Core, and the enriched schema already depends on APOC through the library. A second APOC dependency of our own would be a portability liability for no gain.
 
+**Identifier quoting and error isolation.** Label and relationship-type names are interpolated into the profile's Cypher, and they come from the database, not from a model. They must be backtick-quoted the way the library does it (`schema.py:707-709`), **not** passed through `common/cypher_identifiers.checked()` — that helper rejects anything which is not a bare identifier, so a perfectly legal extracted label like `Legal Entity` or `10-K` would raise `InvalidIdentifier` and take down the entire profile, and with it `get_physical_schema`, the tool graphrag is instructed to call first.
+
+Each entity's profile queries are wrapped so a failure degrades that one entry to `"profile_error"` rather than failing the call. The library already isolates per label (`schema.py:883`); this design must match that or it is strictly less robust than the thing it wraps.
+
+**Cold-start cost is bounded, not merely cached.** Cold cost is roughly `2(N+M) + P` queries — the library's enriched pass scans once per label and per relationship type, then entity counts, degree per pattern, and one per qualifying property. On the demo graph that is about a dozen. On an ingested corpus with tens of labels and hundreds of properties it is hundreds, in one synchronous tool call, which in `adk web` is indistinguishable from a hang. So: a query budget. Profile the top-K entities by count, mark the remainder `"not_profiled"`, and carry a per-query timeout. The cache reduces how often this is paid; it does not bound what is paid, and per-document writes during ingestion invalidate it constantly.
+
+Note also that the counts driving the library's exhaustive-versus-sampled decision come from `apoc.meta.graph({sample: 1000, maxRels: 100})` (`schema.py:65-70`) — they are themselves sampled, and `maxRels: 100` means graphs with more than 100 relationship patterns get some types silently omitted from enrichment. Treat those counts as estimates.
+
 **Consumer check.** `get_physical_schema` has four consumers: the `multi_agent` coordinator (`agent.py:44`), `graph_construction_agent` (`variants.py:59`), `graphrag_agent`, and `single_agent`'s `cypher_agent` (both variants). Only graphrag can use a degree profile. `graph_construction_agent`'s latency was specifically tuned in a prior session and must not regress, and `single_agent` is a separate coordinator outside this work's scope. Hence the parameter, defaulting off.
 
-The wrapper is an explicit named function, **not** `functools.partial`. ADK derives tool identity from the callable (`function_tool.py:42-58`): a partial has no `__name__`, so it falls through to `func.__class__.__name__`, which is the literal string `"partial"`, and its `__doc__` resolves to the `functools.partial` class docstring. The tool would register under a colliding name with a description of the wrong thing. `include_degree_profile` is never exposed to any model as a parameter — a model-visible flag is an optional one, and optional is what we rejected.
+The wrapper is an explicit named function, **not** `functools.partial`. ADK derives tool identity from the callable (`function_tool.py:42-58`): a partial has no `__name__`, so it falls through to `func.__class__.__name__`, which is the literal string `"partial"`, and its `__doc__` resolves to the `functools.partial` class docstring. The tool would register under a colliding name with a description of the wrong thing. `include_data_profile` is never exposed to any model as a parameter — a model-visible flag is an optional one, and optional is what we rejected.
 
 ### Caching and invalidation
 
@@ -143,7 +165,7 @@ Three lazily-computed values: base schema (always), degree profile and per-value
 
 *Counter.* An attribute on the `Neo4jForADK` singleton, incremented inside `send_query` when `is_write_query(cypher_query)` is true. Every write in the codebase funnels through this one method — `kg_construction_tools.py:83,128,207` and the `cypher_tools` DDL paths all call `graphdb.send_query` directly, none go through `write_neo4j_cypher`. Instrumenting the single chokepoint rather than four call sites means a fifth write path added later is covered with nothing to remember. The counter lives in `neo4j_for_adk.py`, not `graph_profile.py`, to preserve dependency direction: `graph_profile.py` already depends on `neo4j_for_adk.py`, and the reverse would invert it.
 
-**`is_write_query` must be extended to match `DROP`.** The current regex (`neo4j_for_adk.py:74-79`) is `MERGE|CREATE|SET|DELETE|REMOVE|ADD`. Two consequences: `reset_neo4j_data` drops constraints and indexes without bumping the counter, and — independently — `read_neo4j_cypher` uses this same function to reject writes, so `graphrag` can today execute `DROP CONSTRAINT` through the read-only tool. Pre-existing, in a function this design already modifies, and the counter's correctness depends on it. False positives on this regex cost only a cache miss; false negatives cost correctness.
+**`is_write_query` must be extended to match `DROP`.** The current regex (`neo4j_for_adk.py:74-79`) is `MERGE|CREATE|SET|DELETE|REMOVE|ADD`, so `reset_neo4j_data` drops constraints and indexes without bumping the counter. The same gap also lets graphrag run `DROP CONSTRAINT` through the read tool today, but that half is fixed properly by access mode (see *Query execution* below) rather than by the regex. Once the regex is only a cache hint, its error profile is benign in both directions: a false positive costs one recomputation, a false negative is caught by the fingerprint layer.
 
 *Fingerprint.* Total node and relationship counts, one combined query, revalidated per graphrag turn. The counter structurally cannot see writes from outside the process, and those happen in this workflow — during the demo the graph was built through the UI and wiped from a script. A counter-only cache would have served a schema for a database that no longer existed and stated it as fact, which is the exact failure class this work addresses.
 
@@ -155,7 +177,24 @@ Cost: one query per turn instead of roughly twelve. In-process writes short-circ
 
 `read_neo4j_cypher` returns `row_count` (the true count, before truncation), a `records` list capped at **50 rows** (`MAX_RETURNED_ROWS = 50`), a `truncated` flag, and a note stating that counts must come from a Cypher aggregation rather than from the returned rows.
 
-The cap exists to bound context growth from a result set of unknown size — an accidental cartesian product, or a bare `MATCH (n) RETURN n`. Its value is a judgement about how many rows are worth reading individually before the honest answer is "aggregate this instead," which is why `row_count` is always the true count and always present: the number of rows returned should never be load-bearing. 50 is a starting point, not a tuned constant. It is a module-level constant so it can be changed without touching logic, and no behaviour anywhere may depend on its exact value. It also summarises array-valued properties rather than returning them whole: `to_python` (`neo4j_for_adk.py:86`) recurses into lists, so `MATCH (c:Chunk) RETURN c` would return a full embedding vector. This path has no sanitize equivalent and is the real embedding exposure.
+The cap exists to bound context growth from a result set of unknown size. Its value is a judgement about how many rows are worth reading individually before the honest answer is "aggregate this instead," which is why `row_count` is always present: the number of rows *returned* must never be load-bearing. 50 is a starting point, not a tuned constant, held in a module-level constant, and no behaviour may depend on its exact value.
+
+It also summarises array-valued properties rather than returning them whole: `to_python` (`neo4j_for_adk.py:86`) recurses into lists, so `MATCH (c:Chunk) RETURN c` would return a full embedding vector. This path has no sanitize equivalent and is the real embedding exposure.
+
+**A row cap alone does not make this path safe.** The cases the cap is named against — a cartesian product, a bare `MATCH (n) RETURN n` — are exactly the cases that exhaust time or memory *before* any capping can happen, because `send_query` runs untimed (`neo4j_for_adk.py:147-158`) and `result_to_adk` calls `to_eager_result()` (line 81-84), materialising every row in the driver process first. A hung tool call in `adk web` is indistinguishable from a routing bug, which this project has already been burned by twice. Three changes, all in `send_query`:
+
+1. **Per-query timeout.** Wrap the text in `neo4j.Query(text, timeout=...)`. Verified available: the installed driver is `neo4j 5.28.2` and `Query.__init__` accepts `timeout`.
+2. **Server-enforced read-only for the read path.** Open the session with `default_access_mode=neo4j.READ_ACCESS` (verified: `neo4j.READ_ACCESS == 'READ'`, and `SessionConfig` accepts `default_access_mode`). The server then rejects any write with a real error.
+3. **Stream instead of materialise.** Iterate the result, retain the first `MAX_RETURNED_ROWS`, and keep counting beyond them up to `ROW_COUNT_CEILING`. Memory is bounded by the retained rows, not the result size. `row_count` is exact when the query completes under the ceiling; past it the payload reports `row_count_at_least` instead, because inventing an exact number we did not finish counting would be the same species of error as everything else in this document.
+
+**`is_write_query` is demoted to a cache hint and must never be a security boundary.** Measured against the current regex (`neo4j_for_adk.py:74-79`):
+
+```
+MATCH (c:Chunk) WHERE c.text CONTAINS 'set forth' RETURN c   -> True   (a read, rejected)
+CALL apoc.refactor.mergeNodes([a,b]) YIELD node RETURN node  -> False  (a write, allowed)
+```
+
+The first fails because the regex matches "set" inside a string literal; the second because `\bMERGE\b` finds no word boundary inside `mergeNodes` — which is the exact call sub-project 2's entity resolver makes. Text matching cannot decide this question, and a longer regex only moves the boundary. Access mode moves the decision to the server, where it belongs. The regex survives solely to decide whether to bump the cache counter, where a false positive costs one recomputation and a false negative is caught by the fingerprint layer. `DROP` is still added to it for the counter's benefit.
 
 **This change is deliberately global, not gated.** Checked all three consumers — `graphrag_agent`, `graph_construction_agent` (referenced in its instruction steps 4, 5 and 7), and `single_agent`'s `cypher_agent` (both variants). All three read rows and draw conclusions, so all three benefit and none pays overhead for a capability it cannot use. That is the opposite of the degree profile, which only graphrag can use. Supporting evidence: `graph_construction_agent/variants.py:51` already instructs that agent to *"count the label or type yourself with `read_neo4j_cypher` before quoting a number"* — a hand-written prompt rule for the thing `row_count` fixes mechanically.
 
@@ -171,9 +210,12 @@ Three prompt additions, none naming a supplier, part, or lead time:
 
 1. Counts, rankings and superlatives come from a Cypher aggregation, never from counting returned rows. Report ties as ties rather than reading rank off row order.
 2. Before querying, state what is being counted and over what.
-3. Do not group or rank by a property the profile marks non-unique.
+3. Do not group or rank by a property whose profile `uniqueness` is `"non_unique"`. Where it is `"unknown"`, say so in the answer rather than proceeding as if it were unique.
+4. Before ordering, comparing or aggregating a property numerically, check its schema type. A `STRING` requires an explicit cast — `'9'` sorts after `'30'` — and a value carrying a currency symbol or separator will not cast cleanly.
 
-Rule 3 points at an assertion the tool computes rather than asking the model to compare two numbers live — consistent with the completeness annotations and the row-count guard, which all move judgment from the model into code.
+Rules 3 and 4 point at assertions the tool computes rather than asking the model to derive them live, consistent with the completeness annotations and the row-count guard.
+
+Rule 4 exists because this design otherwise makes a deferred bug *more* likely to fire. Every property in a CSV-built graph is a `STRING` (`docs/typing-defect.md`), and rule 1 actively directs the agent toward `max()` and `ORDER BY` — over strings, which compare lexicographically. Acceptance criterion B is itself a lead-time ordering question that can satisfy B1 through B3 on framing while the ordering underneath it is wrong. The enriched schema already reports `type: STRING` per property, so the information is present; the profile additionally marks a `STRING` property whose sampled values all parse as numeric, which is the case where a cast is both necessary and safe. This is a retrieval-side mitigation only — the construction-side fix stays deferred.
 
 ## Deliberately unchanged
 
@@ -183,7 +225,9 @@ Moving it is also not a config flip. `_REASONING_EFFORT = "low"` (`llm_catalog.p
 
 ## Testing
 
-Six files, all in `tests/unit/`, none marked `integration` — no Docker, Neo4j or API key required. No test asserts on model prose.
+Seven files in `tests/unit/` needing no Docker, Neo4j or API key, plus one `integration`-marked file that does. No test anywhere asserts on model prose.
+
+The unit tests cover every mechanism in isolation. The integration file exists for one reason the unit tests structurally cannot serve: it is the only place this work runs against a graph shape other than the demo's.
 
 **`test_adk_context.py`** — drops a foreign `Content`; keeps real user messages; keeps graphrag's own model turns including function-call and function-response parts; survives `None` content and empty `parts`.
 
@@ -193,7 +237,26 @@ The canary builds a real `Event` authored by another agent, passes it through AD
 
 Every case is asserted **twice, once for a node property and once for a relationship property**, since the node/relationship symmetry is the specific thing most likely to be lost during implementation. Fixtures use neutral synthetic names per generality constraint 2 — no furniture vocabulary.
 
-**`test_generality.py`** — greps `src/` for the curated dataset-token list and fails if any appears. Cheap, mechanical, and the only thing standing between this design and a future change that quietly hardcodes the demo domain.
+**`test_generality.py`** — greps `src/` for the curated dataset-token list and fails if any appears. Cheap and mechanical, but **necessary rather than sufficient**: it catches vocabulary overfitting only. It cannot see structural overfitting — assuming one pattern per relationship type, assuming entities below `EXHAUSTIVE_SEARCH_LIMIT`, assuming single-label nodes — nor threshold overfitting, nor anything in the prompt prose. Those are covered by the shape-based integration tests below, which is where the real guarantee lives.
+
+### Integration tests (marked `integration`)
+
+These are the only tests here that need a database, and they exist because the profile builds Cypher by interpolating names from the graph and nothing else ever executes it. Three synthetic graphs built with Testcontainers, following the existing `tests/integration/` setup:
+
+1. **Multi-pattern** — one relationship type spanning two different `(start, end)` label pairs
+2. **Self-referencing** — a relationship type whose start and end are the same label
+3. **Awkward names and shapes** — a multi-label node, and a label whose name is not a bare identifier (`Legal Entity`) to prove backtick quoting holds where `checked()` would have raised
+
+Assertions, all shape-based and domain-free:
+- the profile completes without error on all three, within the query budget
+- degree is reported per `(start, type, end)` pattern and matches hand-computed ground truth
+- annotations that cannot be computed are reported as `"unknown"`, never omitted
+- a failure profiling one entity degrades that entry and leaves the rest intact
+- a result larger than the cap reports a true `row_count` and `truncated`
+- a deliberately malformed query returns a structured error, not a hang
+- a write submitted through `read_neo4j_cypher` is rejected by the server, including `CALL apoc.refactor.mergeNodes(...)`, which the regex does not catch
+
+This is the only evidence in the whole plan that any of this works on a graph other than the demo. Without it, "universal" is an assertion.
 
 **`test_graph_profile_cache.py`** — same counter and fingerprint → no recompute; counter bumped → recompute; counter unchanged but fingerprint moved → recompute (the external-write case).
 
@@ -231,3 +294,13 @@ Repeats rather than a pinned temperature: there is no sampling control anywhere 
 - **Fingerprint invalidation is blind to property-only edits** that leave node and relationship counts unchanged.
 - **The profile costs N+M aggregate queries** when cold (one per label, one per relationship type, plus one per qualifying property) — about a dozen on the demo graph. The cache is what makes this acceptable; without it the design would not be proposed.
 - **This work verifies the agent is well-informed, not that it reasons correctly.** If framing errors persist with the degree profile in context, that is evidence the model tier is the binding constraint — a useful outcome, not a failure.
+
+## Known gaps, named rather than implied
+
+These are not addressed here and should not be assumed covered by the words "universal" or "without error".
+
+- **The graph carries no description of what it means.** The context filter removes every other agent's output, which is correct — the goal text from the demo session contained frozen counts stated as fact, and injecting it would rebuild the hallucination through a cleaner channel. But on a graph whose labels are not self-describing, graphrag will have no account of what the graph *is*. That is a real problem and a different one: semantic opacity, not stale facts. The right fix is for the graph to describe itself, not for conversational state to be replayed. Out of scope here.
+- **No vector or hybrid retrieval.** Sub-project 2 produces chunked narrative text, and Cypher alone cannot answer a question about what a document *says*. `read_neo4j_cypher` is the only retrieval tool graphrag has. That is a separate spec.
+- **The typing defect remains.** Rule 4 mitigates it at query time; it does not fix it. See `docs/typing-defect.md`.
+- **The acceptance rubric is domain-specific by construction.** It grades reasoning on a dataset whose ground truth is known. The universality claim rests on the shape-based integration tests, not on the rubric — these two things measure different properties and neither substitutes for the other.
+- **The cache has no lock**, and ADK may run turns concurrently. Worst case is duplicate computation, not incorrect results.
