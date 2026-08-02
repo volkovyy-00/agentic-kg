@@ -60,8 +60,25 @@ def _physical_schema(include_data_profile: bool) -> Dict[str, Any]:
             )
 
         cached = get_cached_profile(load_enriched_schema)
-        schema = dict(cached["schema"])
-        schema["profile"] = cached["profile"]
+        # Project down to the profile rather than passing the library's schema
+        # through beside it. The raw node_props/rel_props describe every
+        # property the profile also describes, and on the library's sampled
+        # branch (any label above its EXHAUSTIVE_SEARCH_LIMIT) the raw copy
+        # lists five arbitrary sample values while the profile says
+        # completeness "unknown" and withholds them -- so the payload asserts
+        # exactly what the profile exists to deny, with the raw copy appearing
+        # first. `metadata` (constraints, indexes) goes too: it describes
+        # write-time guarantees, not anything a retrieval agent can ask about.
+        #
+        # `relationships` stays because it is the only exhaustive list of
+        # patterns: profile["patterns"] carries the same triples but is what
+        # the degree budget acts on. Property names for an entity past the
+        # entity budget are NOT recovered here -- the profile marks that entity
+        # "not_profiled", which prompt rule 7 tells the agent to disclose.
+        schema = {
+            "profile": cached["profile"],
+            "relationships": cached["schema"].get("relationships", []),
+        }
         return tool_success("schema", schema)
     except Exception as e:
         return tool_error(str(e))
@@ -85,9 +102,11 @@ def get_graph_schema_with_profile() -> Dict[str, Any]:
     Returns the node labels, relationship types and properties, plus for each
     property whether its reported values are complete, whether it uniquely
     identifies its entity, and how its values are distributed; and for each
-    relationship pattern how many edges it has and how they spread across the
-    nodes at each end. Use this before writing any query: it tells you the
-    grain of a pattern, which determines whether counting rows is meaningful.
+    relationship pattern how many edges it has, how they spread across the
+    nodes at each end, and whether a property divides those edges into kinds
+    that must not be counted together. Use this before writing any query: it
+    tells you the grain of a pattern, which determines whether counting rows
+    is meaningful.
     """
     return _physical_schema(include_data_profile=True)
 

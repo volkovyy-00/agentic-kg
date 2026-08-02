@@ -94,6 +94,33 @@ def test_non_numeric_string_is_not_flagged():
     assert out["numeric_like"] == "no"
 
 
+@pytest.mark.parametrize("values", [
+    ["$42.73", "$1,299.00"],   # currency symbol
+    ["1,234", "9,000"],        # thousands separator
+    ["8", "$42.73"],           # mixed: one value needs cleaning, so all do
+])
+def test_numeric_like_separates_castable_text_from_text_needing_cleaning(values):
+    """Would catch: one "yes" covering both bare numerals and currency.
+
+    Prompt rule 6 reads "yes" as "a plain cast works". It does not here:
+    toFloat('$42.73') and toFloat('1,234') both return null in Neo4j, and an
+    aggregation over nulls reports a confident wrong number rather than failing.
+    """
+    prop = {"property": "unit_cost", "type": "STRING",
+            "values": values, "distinct_count": len(values)}
+    out = annotate_property(prop, entity_count=10)
+    assert out["numeric_like"] == "numeric_after_cleaning"
+
+
+def test_identifier_shaped_strings_are_still_not_numeric():
+    """The currency class stays explicit rather than "any non-digit prefix":
+    a wildcard would flag 'Q3'/'#5'/'a1' and invite a cast on a key column."""
+    prop = {"property": "code", "type": "STRING",
+            "values": ["Q3", "#5", "a1"], "distinct_count": 3}
+    out = annotate_property(prop, entity_count=10)
+    assert out["numeric_like"] == "no"
+
+
 def test_numeric_like_no_for_already_numeric_types():
     prop = {"property": "n", "type": "INTEGER", "min": 1, "max": 9}
     out = annotate_property(prop, entity_count=10)
@@ -413,3 +440,168 @@ def test_value_counts_complete_is_unknown_when_counts_were_not_computed(fake_pro
     prop = build_profile(schema)["properties"]["Thing"][0]
     assert prop["value_counts"] == "unknown"
     assert prop["value_counts_complete"] == "unknown"
+
+
+# --- partitioned_by: the partition stated where the aggregation happens ------
+
+PARTITIONED_SCHEMA = {
+    "node_props": {},
+    "rel_props": {"SUPPLIES": [{"property": "preferred", "type": "STRING",
+                                "values": ["yes", "no"], "distinct_count": 2}]},
+    "relationships": [{"start": "Supplier", "type": "SUPPLIES", "end": "Part"}],
+}
+
+PARTITION_ROWS = [{"value": "yes", "n": 88}, {"value": "no", "n": 88}]
+
+
+def test_pattern_names_the_property_that_divides_its_edges(monkeypatch):
+    """Would catch: the distribution living only under properties[type].
+
+    That is where it lived, and the agent read past it -- it computed
+    `COUNT(r)` over all 176 SUPPLIES edges when 88 were primary and 88 were
+    fallback, and reported a country that supplies nothing as joint top. The
+    evidence was in the payload; joining it to the pattern whose degree it
+    invalidates was left to the model. Stating it on the pattern is the fix.
+    """
+    db = FakeGraphDbForProfile(responses={"`preferred`": PARTITION_ROWS})
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+
+    pattern = build_profile(PARTITIONED_SCHEMA)["patterns"][0]
+
+    assert pattern["partitioned_by"] == [
+        {"property": "preferred",
+         "distribution": [{"value": "yes", "count": 88},
+                          {"value": "no", "count": 88}],
+         "values_are": "categories",
+         "distribution_covers": "this_pattern"}]
+
+
+def test_partitioning_costs_no_extra_query(monkeypatch):
+    """Both inputs are already in hand; a second value-count pass would double
+    the profile's per-property query cost for information already computed."""
+    db = FakeGraphDbForProfile(responses={"`preferred`": PARTITION_ROWS})
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    build_profile(PARTITIONED_SCHEMA)
+    assert len([q for q in db.queries if "`preferred`" in q]) == 1
+
+
+def test_a_single_valued_property_is_not_a_partition(monkeypatch):
+    """Negative control. Every edge sharing one value splits nothing, and
+    listing it would train the agent to ignore the field where it matters."""
+    db = FakeGraphDbForProfile(responses={"`preferred`": [{"value": "yes", "n": 176}]})
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    pattern = build_profile(PARTITIONED_SCHEMA)["patterns"][0]
+    assert pattern["partitioned_by"] == []
+
+
+def test_partitioned_by_is_unknown_when_the_type_was_not_profiled(monkeypatch):
+    """"Nothing partitions these edges" and "we never looked" are different
+    claims; an empty list would assert the first while meaning the second."""
+    monkeypatch.setattr(graph_profile, "MAX_PROFILED_ENTITIES", 0)
+    monkeypatch.setattr(graph_profile, "graphdb", FakeGraphDbForProfile())
+    pattern = build_profile(PARTITIONED_SCHEMA)["patterns"][0]
+    assert pattern["partitioned_by"] == "unknown"
+
+
+def test_partitioned_by_survives_the_pattern_budget(monkeypatch):
+    """A pattern too far down the list to profile still gets its partition:
+    it is derived, not queried, and matters most where degree is unknown."""
+    monkeypatch.setattr(graph_profile, "MAX_PROFILED_PATTERNS", 0)
+    db = FakeGraphDbForProfile(responses={"`preferred`": PARTITION_ROWS})
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    pattern = build_profile(PARTITIONED_SCHEMA)["patterns"][0]
+    assert pattern["start_degree"] == "not_profiled"
+    assert pattern["partitioned_by"][0]["property"] == "preferred"
+
+
+def test_partitioned_by_is_present_on_a_relationship_type_with_no_properties(
+        fake_profile_db):
+    """A type absent from rel_props has no properties at all -- an empty
+    partition list. Reading `unknown` there would have the agent disclose
+    missing information that is not missing; a KeyError would take down the
+    whole profile, which is the tool graphrag is told to call first."""
+    schema = {"node_props": {}, "rel_props": {},
+              "relationships": [{"start": "A", "type": "LINKS", "end": "B"}]}
+    pattern = build_profile(schema)["patterns"][0]
+    assert pattern["partitioned_by"] == []
+
+
+def test_numeric_valued_properties_are_reported_but_marked_as_numbers(monkeypatch):
+    """Would catch BOTH ways of collapsing this judgement into the payload.
+
+    `quantity` taking small integers splits the edges without naming kinds of
+    edge, so treating every such property as a kind flag is how a field that
+    must be obeyed becomes a field that gets skimmed. But a categorical code
+    stored as digits -- `tier` 1/2/3 -- names kinds and is structurally
+    identical, so DROPPING numeric-valued properties silently pools the tiers.
+    Nothing in the graph tells them apart; the payload reports the shape and
+    leaves the reading to the agent.
+    """
+    schema = {
+        "node_props": {},
+        "rel_props": {"HAS_PART": [{"property": "quantity", "type": "STRING",
+                                    "values": ["1", "2"], "distinct_count": 2}]},
+        "relationships": [{"start": "Assembly", "type": "HAS_PART", "end": "Part"}],
+    }
+    db = FakeGraphDbForProfile(responses={
+        "`quantity`": [{"value": "1", "n": 66}, {"value": "2", "n": 22}]})
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    entry = build_profile(schema)["patterns"][0]["partitioned_by"][0]
+    assert entry["property"] == "quantity"
+    assert entry["values_are"] == "numbers"
+
+
+def test_pooled_distribution_says_it_is_pooled(monkeypatch):
+    """Would catch: copying a type-wide distribution onto each pattern as if
+    it were the pattern's own.
+
+    `_value_counts` counts ()-[r:TYPE]->(), unscoped by end label. Where a type
+    spans several label pairs those counts describe no single pattern -- the
+    exact pooling error `_pattern_degree` is keyed on triples to avoid. Suppose
+    every Supplier-[SUPPLIES]->Part edge is preferred and every
+    Supplier-[SUPPLIES]->Service edge is not: unqualified, the profile tells the
+    agent each pattern is split 88/88, and prompt rule 2 then makes it filter to
+    a kind that yields zero rows.
+    """
+    schema = {
+        "node_props": {},
+        "rel_props": {"SUPPLIES": [{"property": "preferred", "type": "STRING",
+                                    "values": ["yes", "no"], "distinct_count": 2}]},
+        "relationships": [
+            {"start": "Supplier", "type": "SUPPLIES", "end": "Part"},
+            {"start": "Supplier", "type": "SUPPLIES", "end": "Service"},
+        ],
+    }
+    db = FakeGraphDbForProfile(responses={"`preferred`": PARTITION_ROWS})
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    patterns = build_profile(schema)["patterns"]
+    assert len(patterns) == 2
+    for pattern in patterns:
+        assert pattern["partitioned_by"][0]["distribution_covers"] == \
+            "all_patterns_of_this_type"
+
+
+def test_a_property_the_library_only_sampled_is_reported_as_unknown(monkeypatch):
+    """Would catch: dropping un-enumerable properties, yielding an empty list.
+
+    Above EXHAUSTIVE_SEARCH_LIMIT the library samples and emits no
+    distinct_count, so `value_counts` is "unknown" and the property is silently
+    skipped -- publishing `partitioned_by: []`, an affirmative "nothing divides
+    these edges", for exactly the large graphs where a hidden split is most
+    likely and most costly. A property KNOWN to have too many distinct values
+    is a different case and stays omitted.
+    """
+    schema = {
+        "node_props": {},
+        "rel_props": {"SUPPLIES": [
+            {"property": "sampled", "type": "STRING", "values": ["a", "b"]},
+            {"property": "many", "type": "STRING", "values": ["a"],
+             "distinct_count": 900},
+        ]},
+        "relationships": [{"start": "Supplier", "type": "SUPPLIES", "end": "Part"}],
+    }
+    monkeypatch.setattr(graph_profile, "graphdb", FakeGraphDbForProfile())
+    entries = build_profile(schema)["patterns"][0]["partitioned_by"]
+    assert [e["property"] for e in entries] == ["sampled"]
+    assert entries[0]["distribution"] == "unknown"
+    assert entries[0]["values_are"] == "unknown"

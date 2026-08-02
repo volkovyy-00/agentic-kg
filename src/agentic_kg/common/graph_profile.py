@@ -57,18 +57,35 @@ _NUMERIC_TYPES = {"INTEGER", "FLOAT"}
 # Spots values that *look* numeric while being stored as text -- which is where
 # silent lexicographic ordering comes from ('9' sorts after '30').
 #
-# The currency class is explicit rather than "any non-digit". A wildcard prefix
-# matches ordinary identifier shapes -- 'a1', 'x9', 'Q3', '#5' all pass -- and
-# flagging an identifier column as numeric would tell the agent (prompt rule 5)
-# to cast a key to a number.
+# Two patterns, not one, because the two answer different questions. Text that
+# is a bare numeral casts directly: toFloat('42.73') is 42.73. Text carrying a
+# currency symbol or thousands separator does NOT -- toFloat('$42.73') and
+# toFloat('1,234') both return null, silently, and an aggregation over nulls
+# reports a confident wrong number. Collapsing both into one "yes" told the
+# agent (prompt rule 6) that a plain cast was safe when it was not.
+#
+# The currency class is still explicit rather than "any non-digit". A wildcard
+# prefix matches ordinary identifier shapes -- 'a1', 'x9', 'Q3', '#5' all pass
+# -- and flagging an identifier column as numeric would tell the agent to cast
+# a key to a number.
+_BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
 _NUMERIC_LIKE = re.compile(
     r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
 
 
-def _is_numeric_like(values) -> bool:
-    if not values:
-        return False
-    return all(isinstance(v, str) and _NUMERIC_LIKE.match(v) for v in values)
+def _numeric_like_state(values) -> str:
+    """Classify string values as directly castable, castable after cleaning, or not.
+
+    Returns one of "yes" / "numeric_after_cleaning" / "no". Callers decide what
+    an absent or untrustworthy `values` means -- this only reads what it is given.
+    """
+    if not values or not all(isinstance(v, str) for v in values):
+        return "no"
+    if all(_BARE_NUMERIC.match(v) for v in values):
+        return "yes"
+    if all(_NUMERIC_LIKE.match(v) for v in values):
+        return "numeric_after_cleaning"
+    return "no"
 
 
 def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict[str, Any]:
@@ -103,23 +120,24 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
     else:
         out["uniqueness"] = "non_unique"
 
-    # Tri-state, for the same reason as the other two. An earlier draft
-    # computed this from `values` even on the sampled branch -- i.e. from the
-    # five rows we had just discarded as untrustworthy -- so a property could
-    # carry completeness "unknown" alongside numeric_like True. That is the one
-    # place the design contradicted its own rule, and it fed prompt rule 5,
-    # which tells the agent to cast.
-    # All three annotations are strings from the same tri-state vocabulary.
-    # A bool/str mix would put a TRUTHY "unknown" next to False, so any future
-    # `if prop["numeric_like"]:` would read "I don't know" as "yes, cast it" --
-    # the original bug wearing a new coat.
+    # Four states here rather than three, but the same vocabulary discipline as
+    # the other two annotations: always a string, always present, "unknown"
+    # spelled out. A bool/str mix would put a TRUTHY "unknown" next to False,
+    # so any future `if prop["numeric_like"]:` would read "I don't know" as
+    # "yes, cast it" -- the original bug wearing a new coat.
+    #
+    # An earlier draft computed this from `values` even on the sampled branch --
+    # i.e. from the five rows we had just discarded as untrustworthy -- so a
+    # property could carry completeness "unknown" alongside numeric_like True.
+    # That is the one place the design contradicted its own rule, and it fed
+    # prompt rule 6, which tells the agent to cast.
     prop_type = prop.get("type")
     if prop_type in _NUMERIC_TYPES:
         out["numeric_like"] = "no"           # already numeric; nothing to infer
     elif out["completeness"] == "unknown":
         out["numeric_like"] = "unknown"      # sampled values are not evidence
     else:
-        out["numeric_like"] = "yes" if _is_numeric_like(values) else "no"
+        out["numeric_like"] = _numeric_like_state(values)
 
     return out
 
@@ -185,7 +203,7 @@ def _entity_counts(labels, rel_types) -> Dict[tuple, Optional[int]]:
     alone the relationship pass -- which runs second -- would overwrite the
     label's node count, and annotate_property would then be handed an EDGE
     count as the entity count for a LABEL's properties, silently producing a
-    wrong `uniqueness` verdict that prompt rule 4 acts on.
+    wrong `uniqueness` verdict that prompt rule 5 acts on.
     """
     counts: Dict[tuple, Optional[int]] = {(False, name): None for name in labels}
     counts.update({(True, name): None for name in rel_types})
@@ -324,6 +342,72 @@ def _profile_entity(entity, props, entity_count, is_relationship):
     return annotated
 
 
+def _partitions(annotated: Any, patterns_of_type: int) -> Any:
+    """The relationship properties that split a pattern's edges into kinds.
+
+    Issues no query: everything here is already in hand by the time this runs.
+    What it buys is placement. A low-cardinality property on a relationship
+    divides the edge set into kinds, and any aggregation that counts them
+    uniformly is meaningless -- but that evidence lives under
+    properties[type][i].value_counts, three structures away from the
+    patterns[j].end_degree it invalidates, and joining the two across an 8k
+    JSON blob is work the payload can do once instead of asking the model to
+    do it every turn.
+
+    Each entry carries three qualifiers rather than a bare distribution,
+    because the bare distribution would overstate three different things:
+
+    - `distribution_covers`. `_value_counts` counts `()-[r:TYPE]->()`, every
+      edge of the type, unscoped by end labels. Where a type spans several
+      (start, end) label pairs, those counts describe no single pattern -- the
+      exact pooling error `_pattern_degree` exists to avoid, which is why the
+      degree queries are keyed on the triple. Scoping the value counts per
+      pattern would cost one query per pattern per property; saying whose
+      edges the numbers describe costs nothing.
+    - `values_are`. `quantity` taking small integers splits the edges ten ways
+      without naming ten KINDS of edge, and a categorical code stored as
+      digits ('tier' 1/2/3) names kinds while looking identical. Nothing in the
+      graph distinguishes them, so this reports which shape the values have and
+      leaves the reading to the caller, rather than silently dropping one case.
+    - `distribution: "unknown"`. On the library's sampled branch a property has
+      no distinct_count at all, so we cannot say whether it partitions. Omitting
+      it would publish an empty list -- an affirmative "nothing divides these
+      edges" -- for exactly the large graphs where that is most likely false.
+      A property KNOWN to exceed VALUE_COUNT_MAX_DISTINCT is different: too many
+      distinct values to be a kind flag is a finding, and it is omitted.
+
+    A single distinct value partitions nothing and is omitted. When the entity
+    was never profiled (budget cap) or failed, the answer is "unknown" rather
+    than an empty list -- the same distinction the rest of the profile draws
+    between "nothing there" and "we did not look".
+    """
+    if not isinstance(annotated, list):
+        return "unknown"
+    covers = "this_pattern" if patterns_of_type == 1 else "all_patterns_of_this_type"
+    out = []
+    for prop in annotated:
+        counts = prop.get("value_counts")
+        if isinstance(counts, list):
+            if len(counts) < 2:
+                continue
+            distribution = counts
+            values_are = (
+                "numbers"
+                if prop.get("type") in _NUMERIC_TYPES
+                or prop.get("numeric_like") in ("yes", "numeric_after_cleaning")
+                else "categories")
+        elif prop.get("completeness") == "unknown":
+            distribution = "unknown"
+            values_are = "unknown"
+        else:
+            continue          # counted, and too many distinct values to be a kind
+        out.append({"property": prop["property"],
+                    "distribution": distribution,
+                    "values_are": values_are,
+                    "distribution_covers": covers})
+    return out
+
+
 def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Compute entity counts, per-pattern degree, and annotated properties.
 
@@ -380,11 +464,28 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
               if r.get("start") and r.get("type") and r.get("end")]
     ranked.sort(key=lambda r: counts.get((True, r["type"])) or 0, reverse=True)
 
+    # How many patterns each relationship type spans, which is what decides
+    # whether a type-wide value distribution describes one pattern or pools
+    # several. Counted over `ranked` rather than `relationships` so it agrees
+    # with the patterns actually emitted.
+    patterns_of_type: Dict[str, int] = {}
+    for rel in ranked:
+        patterns_of_type[rel["type"]] = patterns_of_type.get(rel["type"], 0) + 1
+
     patterns = []
     for index, rel in enumerate(ranked):
         start, rel_type, end = rel["start"], rel["type"], rel["end"]
         entry = {"pattern": f"{start}-[{rel_type}]->{end}",
-                 "start": start, "type": rel_type, "end": end}
+                 "start": start, "type": rel_type, "end": end,
+                 # Derived from the properties computed above, so it is stated
+                 # even for a pattern the degree budget skipped -- knowing the
+                 # edges are of several kinds matters most where we could not
+                 # afford to say how they spread. A type absent from rel_props
+                 # has no properties at all, which is an empty partition list,
+                 # not an unknown one.
+                 "partitioned_by": _partitions(
+                     properties.get(display.get((True, rel_type)), []),
+                     patterns_of_type[rel_type])}
         if index >= MAX_PROFILED_PATTERNS:
             entry["start_degree"] = "not_profiled"
             entry["end_degree"] = "not_profiled"

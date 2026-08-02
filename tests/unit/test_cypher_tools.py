@@ -122,6 +122,37 @@ def test_get_physical_schema_with_profile_enriches_and_profiles(monkeypatch):
     graph_profile.reset_cache()
 
 
+def test_profiled_payload_states_each_property_once_and_leads_with_the_profile(
+        monkeypatch):
+    """Would catch: returning the library's schema with `profile` bolted on.
+
+    That shape carried the raw `values`/`distinct_count` for every property the
+    profile also describes, and the raw copy came first. On the library's
+    sampled branch the two disagree outright -- the raw copy lists five
+    arbitrary values while the profile says completeness "unknown" and
+    withholds them -- so the payload asserted precisely what the profile exists
+    to deny. `metadata` (constraints, indexes) describes write-time guarantees
+    a retrieval agent cannot ask about.
+    """
+    def fake_structured_schema(driver, **kwargs):
+        return {"node_props": {"A": [{"property": "x", "type": "STRING",
+                                      "values": ["1", "2"], "distinct_count": 9}]},
+                "rel_props": {}, "relationships": [{"start": "A", "type": "R", "end": "A"}],
+                "metadata": {"constraint": [], "index": []}}
+
+    monkeypatch.setattr(cypher_tools, "get_structured_schema", fake_structured_schema)
+    monkeypatch.setattr(cypher_tools, "graphdb", FakeReadDb())
+    from agentic_kg.common import graph_profile
+    graph_profile.reset_cache()
+    monkeypatch.setattr(graph_profile, "graphdb", FakeReadDb())
+
+    schema = cypher_tools.get_graph_schema_with_profile()["schema"]
+
+    assert list(schema) == ["profile", "relationships"]
+    assert schema["relationships"] == [{"start": "A", "type": "R", "end": "A"}]
+    graph_profile.reset_cache()
+
+
 def test_graphrag_wrapper_is_a_named_function_not_a_partial():
     """ADK derives tool identity from the callable; a partial registers as
     'partial' with functools' own docstring as its description."""
