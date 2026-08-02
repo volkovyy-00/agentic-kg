@@ -129,7 +129,10 @@ def read_neo4j_cypher(
         - "values_summarised": whether an oversized list value inside a row was
           replaced by a summary of its shape. Independent of "truncated": a
           result can return every row while still withholding part of one.
-        - "note": present when either of those is true, explaining which
+        - "note": guidance on how to proceed, present when either of those is
+          true. Not a discriminator -- the two flags above are the record of
+          what happened, and when both are true the note carries the
+          truncation guidance alone.
 
         Counts and rankings must come from a Cypher aggregation, never from
         counting the returned records.
