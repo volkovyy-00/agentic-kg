@@ -21,3 +21,6 @@ prototype/
 
 # Superpowers / SDD scratch workspace (process artifacts, not deliverables)
 .superpowers/
+
+# Design docs and plans -- kept locally, not published
+docs/
