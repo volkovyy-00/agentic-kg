@@ -47,7 +47,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.9,<2025.0.0" },
     { name = "google-adk", specifier = ">=1.10,<2" },
     { name = "litellm", specifier = ">=1.83.9,<1.84" },
-    { name = "neo4j", specifier = ">=5.28.2" },
+    { name = "neo4j", specifier = ">=5.28.2,<6" },
     { name = "neo4j-graphrag", specifier = ">=1.9.1" },
     { name = "openai", specifier = ">=2.24,<3" },
     { name = "pydantic", specifier = ">=2.11.7" },

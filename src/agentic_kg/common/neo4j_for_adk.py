@@ -6,6 +6,8 @@ import logging
 
 from neo4j import (
     GraphDatabase,
+    Query,
+    READ_ACCESS,
     Result,
 )
 
@@ -14,6 +16,45 @@ from .pydantic_neo4j import Neo4jConfig
 from .tool_result import tool_success, tool_error
 
 logger = logging.getLogger(__name__)
+
+# Bound on how long a query issued through the READ path may run. A hung tool
+# call in `adk web` is indistinguishable from a routing bug, which this project
+# has been burned by before.
+#
+# Applied by send_read_query only. send_query -- the write path -- is
+# deliberately left unbounded for now: bulk loads and reset_neo4j_data's
+# `DETACH DELETE ... IN TRANSACTIONS` legitimately run past 30s, so timing it
+# needs its own limit rather than this one. That gap is real and open, not an
+# oversight; a runaway write can still hang a turn.
+QUERY_TIMEOUT_SECONDS = 30
+
+# How many rows are retained and shown. Not a tuned constant -- a judgement
+# about how many rows are worth reading individually before the honest answer
+# is "aggregate this instead". No behaviour may depend on its exact value.
+MAX_RETURNED_ROWS = 50
+
+# How far we keep counting past the cap before reporting a floor instead of an
+# exact total. Counting is cheap (an int); claiming an exact number we did not
+# finish counting would not be.
+ROW_COUNT_CEILING = 100_000
+
+# Lists longer than this are replaced by a summary string. Embedding vectors
+# would otherwise be pasted into the model's context verbatim.
+MAX_INLINE_LIST_LENGTH = 32
+
+_TRUNCATION_NOTE = (
+    "Records are capped. Counts, rankings and superlatives must come from a "
+    "Cypher aggregation, never from counting these rows."
+)
+
+# Every row was returned, but at least one oversized list inside them was
+# replaced by a summary. Stated separately so a complete-in-rows result cannot
+# silently imply complete-in-values.
+_SUMMARY_NOTE = (
+    "All rows were returned, but at least one oversized list value was "
+    "replaced by a summary of its shape. Query the elements directly if you "
+    "need them."
+)
 
 def load_neo4j_config_from_settings() -> Neo4jConfig:
     settings = get_settings()
@@ -36,9 +77,14 @@ def make_driver(neo4j_config: Neo4jConfig) -> GraphDatabase | None:
     )
     return driver_instance
 
-def sanitize(cypher_name: str) -> str:
-    """Very basic string sanitization when a query param is not possible."""
-    return re.sub("[.,-:$()><{}[\]'\"`\s]", '', cypher_name)
+# NOTE: a `sanitize()` helper used to live here -- a character-class strip for
+# "when a query param is not possible". It had no callers, and stripping unsafe
+# characters is the wrong shape for this codebase anyway: identifiers are now
+# either validated and rejected (cypher_identifiers.checked(), for
+# model-supplied names) or backtick-quoted and preserved
+# (graph_profile.quote(), for names read out of the database). Silently
+# rewriting a name is neither. Removed rather than kept as a template.
+
 
 def is_symbol(symbol: str) -> bool:
     """Validate that a string is a valid Neo4j symbol (no spaces, not a Cypher keyword).
@@ -72,9 +118,21 @@ def is_symbol(symbol: str) -> bool:
 
 
 def is_write_query(query: str) -> bool:
-    """Check if the Cypher query performs any write operations."""
+    """Heuristic write detection, used ONLY as a cache-invalidation hint.
+
+    This is deliberately not a security boundary and must never be used as
+    one. It matches text, so it cannot tell a keyword from a string literal
+    ("... CONTAINS 'set forth' ..." reads as a write) and it misses camelCase
+    procedure calls (\\bMERGE\\b finds no boundary inside `mergeNodes`, which is
+    what apoc.refactor.mergeNodes is). Read-only enforcement is the server's
+    job via default_access_mode -- see send_read_query.
+
+    As a cache hint both error directions are benign: a false positive costs
+    one recomputation, and a false negative is caught by the fingerprint layer
+    in graph_profile.
+    """
     return (
-        re.search(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD)\b", query, re.IGNORECASE)
+        re.search(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD|DROP)\b", query, re.IGNORECASE)
         is not None
     )
 
@@ -120,6 +178,42 @@ def to_python(value):
         return value
 
 
+def _summarise(value, omitted: list):
+    """Recursive worker for summarise_long_lists.
+
+    Appends the length of each list it replaces to `omitted`, so the caller can
+    tell the difference between "nothing was withheld" and "something was
+    withheld silently". Without that signal the payload reports
+    truncated: false while data has in fact been dropped -- the payload
+    positively asserting completeness it cannot back up, which is the failure
+    class this whole module exists to prevent.
+
+    The caller uses both parts: truthiness decides the `values_summarised`
+    flag, and the sum is logged, so how much was dropped is recoverable from
+    the logs without re-running the query.
+    """
+    if isinstance(value, dict):
+        return {k: _summarise(v, omitted) for k, v in value.items()}
+    if isinstance(value, list):
+        if len(value) > MAX_INLINE_LIST_LENGTH:
+            # No empty-list guard needed: len > MAX_INLINE_LIST_LENGTH (>= 1)
+            # already guarantees value[0] exists.
+            omitted.append(len(value))
+            return f"<list of {len(value)} {type(value[0]).__name__} values, omitted>"
+        return [_summarise(v, omitted) for v in value]
+    return value
+
+
+def summarise_long_lists(value):
+    """Replace oversized lists with a description of their shape.
+
+    to_python recurses into lists, so `MATCH (c:Chunk) RETURN c` would return a
+    full embedding vector. get_structured_schema's `sanitize` does not reach
+    this path -- it only covers the library's own query family.
+    """
+    return _summarise(value, [])
+
+
 class Neo4jForADK:
     """
     A wrapper for querying Neo4j which returns ADK-friendly responses.
@@ -135,6 +229,11 @@ class Neo4jForADK:
         self._driver = make_driver(self._neo4j_config)
         logger.debug(f"Neo4j driver initialized at {self._neo4j_config.uri}")
 
+        # Bumped by send_query on every successful write. graph_profile's cache
+        # reads this to invalidate without a round-trip. It counts in-process
+        # writes only; writes from elsewhere are caught by the fingerprint.
+        self.write_count = 0
+
     def get_driver(self):
         return self._driver
 
@@ -145,17 +244,101 @@ class Neo4jForADK:
         return self._driver.close()
 
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
-        session = self._driver.session(database=self._neo4j_config.database)
+        # Session creation sits INSIDE the try deliberately. With it outside,
+        # a driver that cannot open a session raises straight out of this
+        # method instead of returning a structured error -- which in ADK
+        # surfaces as an unhandled exception mid-turn rather than a message the
+        # agent can react to. The counter is bumped only after result_to_adk
+        # returns, so a write that fails never counts.
+        session = None
         try:
-            result = session.run(
-                cypher_query,
-                parameters or {}
-            )
-            return result_to_adk(result)
+            session = self._driver.session(database=self._neo4j_config.database)
+            result = session.run(cypher_query, parameters or {})
+            adk_result = result_to_adk(result)
+            if is_write_query(cypher_query):
+                self.write_count += 1
+            return adk_result
         except Exception as e:
             return tool_error(str(e))
         finally:
-            session.close()
+            if session is not None:
+                session.close()
+
+    def send_read_query(
+        self,
+        cypher_query,
+        parameters=None,
+        max_rows: Optional[int] = MAX_RETURNED_ROWS,
+    ) -> Dict[str, Any]:
+        """Run a query read-only, timed, and with bounded row retention.
+
+        Read-only is enforced by the *server* through default_access_mode, not
+        by inspecting the query text -- text matching cannot distinguish a
+        keyword from a string literal, and misses camelCase procedure calls
+        like apoc.refactor.mergeNodes.
+
+        Rows are streamed rather than materialised, so memory is bounded by
+        max_rows instead of by the size of the result. Counting continues past
+        max_rows up to ROW_COUNT_CEILING; beyond that the payload reports
+        row_count_at_least rather than inventing an exact total.
+
+        Pass max_rows=None to retain every row (used for internal aggregate
+        queries whose results are already small).
+        """
+        session = None
+        try:
+            # Inside the try, for the same reason as send_query: a failure to
+            # open the session must return a structured error, not raise.
+            session = self._driver.session(
+                database=self._neo4j_config.database,
+                default_access_mode=READ_ACCESS,
+            )
+            query = Query(cypher_query, timeout=QUERY_TIMEOUT_SECONDS)
+            result = session.run(query, parameters or {})
+
+            records = []
+            counted = 0
+            hit_ceiling = False
+            omitted: list = []
+            for record in result:
+                counted += 1
+                if max_rows is None or len(records) < max_rows:
+                    records.append(_summarise(to_python(record.data()), omitted))
+                if counted >= ROW_COUNT_CEILING:
+                    hit_ceiling = True
+                    break
+
+            # Rows were dropped either because the retention cap bit, or
+            # because we stopped counting at the ceiling.
+            truncated = (max_rows is not None and counted > len(records)) or hit_ceiling
+            payload: Dict[str, Any] = {
+                "records": records,
+                "truncated": truncated,
+                # Separate from `truncated`, which is strictly about ROWS. A
+                # result can be complete in rows while an oversized list inside
+                # one of them was replaced by a summary; reporting only
+                # `truncated: false` there would assert a completeness the
+                # payload does not have.
+                "values_summarised": bool(omitted),
+            }
+            if hit_ceiling:
+                payload["row_count_at_least"] = counted
+            else:
+                payload["row_count"] = counted
+            if truncated:
+                payload["note"] = _TRUNCATION_NOTE
+            elif omitted:
+                payload["note"] = _SUMMARY_NOTE
+            if omitted:
+                logger.debug(
+                    "Summarised %d oversized list value(s) totalling %d elements",
+                    len(omitted), sum(omitted))
+            return tool_success("query_result", payload)
+        except Exception as e:
+            return tool_error(str(e))
+        finally:
+            if session is not None:
+                session.close()
 
 # Lazy singleton for the Neo4j client
 _graphdb_singleton: Optional[Neo4jForADK] = None

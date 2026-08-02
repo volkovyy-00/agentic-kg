@@ -11,8 +11,15 @@ parentheses, braces, a leading digit or a backtick all pass it and can escape
 the identifier position. Requiring a bare identifier via regex, in addition
 to the keyword check, is what makes the interpolation safe.
 
-Every caller that interpolates a label, relationship type or property/column
-name into Cypher must validate it with `checked()` first.
+Every caller that interpolates a *model-supplied* label, relationship type or
+property/column name into Cypher must validate it with `checked()` first.
+
+Names read back out of the database are a different case and must NOT use
+`checked()`: Neo4j accepts labels this validator rejects (`Legal Entity`,
+`10-K`), so validating them would raise on data the graph legitimately
+contains. Those callers backtick-quote instead -- see `graph_profile.quote()`.
+The distinction is provenance, not syntax: `checked()` guards against
+injection from an untrusted source, and the database is not one.
 """
 import re
 
