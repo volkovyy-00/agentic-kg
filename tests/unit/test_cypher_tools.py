@@ -9,13 +9,10 @@ import pytest
 from agentic_kg.tools import cypher_tools
 
 
-class FakeGraphDb:
-    def __init__(self):
-        self.queries = []
+from fakes import RecordingGraphDb
 
-    def send_query(self, query, parameters=None):
-        self.queries.append((query, parameters or {}))
-        return {"status": "success", "records": []}
+# Shared with the rest of the unit suite; see tests/unit/fakes.py.
+FakeGraphDb = RecordingGraphDb
 
 
 @pytest.fixture
@@ -55,18 +52,12 @@ from agentic_kg.common.neo4j_for_adk import MAX_RETURNED_ROWS
 
 
 class FakeReadDb(FakeGraphDb):
+    """Returns one fixed payload from every read. get_driver/get_config come
+    from the shared base, which provides them for exactly this reason."""
+
     def __init__(self, payload=None):
         super().__init__()
         self.payload = payload or {"records": [], "row_count": 0, "truncated": False}
-        self.read_queries = []
-
-    # _physical_schema reads both of these before its try block, so a fake
-    # without them raises AttributeError rather than exercising the tool.
-    def get_driver(self):
-        return object()
-
-    def get_config(self):
-        return type("Cfg", (), {"database": "neo4j"})()
 
     def send_read_query(self, query, parameters=None, max_rows=MAX_RETURNED_ROWS):
         self.read_queries.append((query, parameters, max_rows))

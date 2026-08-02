@@ -77,18 +77,14 @@ def make_driver(neo4j_config: Neo4jConfig) -> GraphDatabase | None:
     )
     return driver_instance
 
-def sanitize(cypher_name: str) -> str:
-    """Very basic string sanitization when a query param is not possible.
+# NOTE: a `sanitize()` helper used to live here -- a character-class strip for
+# "when a query param is not possible". It had no callers, and stripping unsafe
+# characters is the wrong shape for this codebase anyway: identifiers are now
+# either validated and rejected (cypher_identifiers.checked(), for
+# model-supplied names) or backtick-quoted and preserved
+# (graph_profile.quote(), for names read out of the database). Silently
+# rewriting a name is neither. Removed rather than kept as a template.
 
-    Currently unused -- callers that interpolate identifiers go through
-    cypher_identifiers.checked() (model-supplied names) or graph_profile.quote()
-    (database-supplied names) instead.
-    """
-    # Raw string: '\]' and '\s' are not valid escapes in a regular string, so
-    # this emitted a SyntaxWarning on every fresh compile and would become a
-    # SyntaxError in a later Python. Pre-existing; the character class is
-    # unchanged.
-    return re.sub(r"[.,-:$()><{}[\]'\"`\s]", '', cypher_name)
 
 def is_symbol(symbol: str) -> bool:
     """Validate that a string is a valid Neo4j symbol (no spaces, not a Cypher keyword).

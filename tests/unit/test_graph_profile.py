@@ -137,26 +137,10 @@ from agentic_kg.common import graph_profile
 from agentic_kg.common.graph_profile import build_profile, quote
 
 
-class FakeGraphDbForProfile:
-    """Answers profile queries from a scripted table keyed by substring."""
+from fakes import ScriptedGraphDb
 
-    def __init__(self, responses=None, fail_on=None):
-        self.responses = responses or {}
-        self.fail_on = fail_on or ()
-        self.queries = []
-
-    def send_read_query(self, query, parameters=None, max_rows=None):
-        self.queries.append(query)
-        for needle in self.fail_on:
-            if needle in query:
-                return {"status": "error", "error_message": "boom"}
-        for needle, records in self.responses.items():
-            if needle in query:
-                return {"status": "success",
-                        "query_result": {"records": records, "row_count": len(records),
-                                         "truncated": False}}
-        return {"status": "success",
-                "query_result": {"records": [], "row_count": 0, "truncated": False}}
+# Shared with the rest of the unit suite; see tests/unit/fakes.py.
+FakeGraphDbForProfile = ScriptedGraphDb
 
 
 @pytest.fixture
