@@ -82,3 +82,37 @@ def test_reset_cache_forces_recompute(db):
     graph_profile.reset_cache()
     graph_profile.get_cached_profile(_loader(calls))
     assert len(calls) == 2
+
+
+def test_unreadable_fingerprint_does_not_poison_the_cache(db, monkeypatch):
+    """Would catch: caching an entry whose fingerprint is None.
+
+    Storing None makes the NEXT call miss too, because a real fingerprint tuple
+    never equals None -- so one transient failure on the fingerprint query costs
+    two full cold rebuilds (hundreds of queries) for a graph that never changed.
+    Recomputing once during the outage is correct; recomputing again afterwards,
+    when the graph is provably unchanged, is the regression.
+    """
+    calls = []
+    graph_profile.get_cached_profile(_loader(calls))
+    assert len(calls) == 1                      # cold build, cache now warm
+
+    # One transient failure: the fingerprint query returns no rows.
+    real_send = db.send_read_query
+
+    def blip(query, parameters=None, max_rows=None):
+        if "AS nodes" in query:
+            db.fingerprint_calls += 1
+            return {"status": "error", "error_message": "transient"}
+        return real_send(query, parameters, max_rows)
+
+    monkeypatch.setattr(db, "send_read_query", blip)
+    graph_profile.get_cached_profile(_loader(calls))
+    assert len(calls) == 2, "an unreadable fingerprint must force a recompute"
+
+    # Blip over, graph provably unchanged -- this must be served from cache.
+    monkeypatch.setattr(db, "send_read_query", real_send)
+    graph_profile.get_cached_profile(_loader(calls))
+    assert len(calls) == 2, (
+        "the failed call cached fingerprint=None, so the recovered call missed "
+        "and rebuilt a second time")

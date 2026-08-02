@@ -151,6 +151,20 @@ def _records(result) -> list:
     return result.get("query_result", {}).get("records", [])
 
 
+def _payload_or_raise(result) -> Dict[str, Any]:
+    """Strict accessor returning the WHOLE payload, not just its rows.
+
+    send_read_query reports more than records -- notably `values_summarised`,
+    which says whether an oversized list value was replaced by a placeholder.
+    Anything that shows real property VALUES to the model has to look at that
+    flag; unwrapping straight to `records` throws it away and reintroduces
+    exactly the silent-omission problem the flag exists to signal.
+    """
+    if not is_success(result):
+        raise ProfileQueryError(result.get("error_message", "profile query failed"))
+    return result.get("query_result", {})
+
+
 def _records_or_raise(result) -> list:
     """Strict accessor: a failure raises so per-entity isolation can act.
 
@@ -159,25 +173,54 @@ def _records_or_raise(result) -> list:
     like an empty result, which is the opposite of the requirement that one
     failing entity degrade only itself.
     """
-    if not is_success(result):
-        raise ProfileQueryError(result.get("error_message", "profile query failed"))
-    return result.get("query_result", {}).get("records", [])
+    return _payload_or_raise(result).get("records", [])
 
 
-def _entity_counts(labels, rel_types) -> Dict[str, Optional[int]]:
-    """One grouped query per direction rather than one query per entity."""
-    counts: Dict[str, Optional[int]] = {name: None for name in [*labels, *rel_types]}
+def _entity_counts(labels, rel_types) -> Dict[tuple, Optional[int]]:
+    """One grouped query per direction rather than one query per entity.
+
+    Keyed on (is_relationship, name), NOT on bare name. Neo4j keeps node
+    labels and relationship types in separate namespaces, so a graph may hold
+    both a `FOLLOWS` label and a `FOLLOWS` relationship type. Keyed on name
+    alone the relationship pass -- which runs second -- would overwrite the
+    label's node count, and annotate_property would then be handed an EDGE
+    count as the entity count for a LABEL's properties, silently producing a
+    wrong `uniqueness` verdict that prompt rule 4 acts on.
+    """
+    counts: Dict[tuple, Optional[int]] = {(False, name): None for name in labels}
+    counts.update({(True, name): None for name in rel_types})
 
     for row in _records(graphdb.send_read_query(
         "MATCH (n) UNWIND labels(n) AS label "
         "RETURN label AS name, count(*) AS n", max_rows=None)):
-        counts[row["name"]] = row["n"]
+        counts[(False, row["name"])] = row["n"]
 
     for row in _records(graphdb.send_read_query(
         "MATCH ()-[r]->() RETURN type(r) AS name, count(r) AS n", max_rows=None)):
-        counts[row["name"]] = row["n"]
+        counts[(True, row["name"])] = row["n"]
 
     return counts
+
+
+def _display_keys(counts: Dict[tuple, Optional[int]]) -> Dict[tuple, str]:
+    """Map each (is_relationship, name) to the key used in the output.
+
+    Bare `name` when it is unambiguous -- which is every real graph seen so far,
+    and what every consumer and test expects. Only when the SAME name exists in
+    both namespaces are both sides suffixed, so a collision is visible rather
+    than silently dropping one entity's profile.
+    """
+    colliding = {
+        name for (_, name) in counts
+        if (False, name) in counts and (True, name) in counts
+    }
+    return {
+        (is_rel, name): (
+            f"{name} ({'relationship' if is_rel else 'node'})"
+            if name in colliding else name
+        )
+        for (is_rel, name) in counts
+    }
 
 
 def _pattern_degree(start: str, rel_type: str, end: str) -> Dict[str, Any]:
@@ -241,10 +284,26 @@ def _value_counts(entity: str, prop_name: str, is_relationship: bool) -> Any:
             f"WITH n.{quote(prop_name)} AS value, count(*) AS n "
             "WHERE value IS NOT NULL RETURN value, n ORDER BY n DESC"
         )
-    rows = _records_or_raise(graphdb.send_read_query(query, max_rows=None))
-    if not rows:
-        return "unknown"
-    return {str(r["value"]): r["n"] for r in rows}
+    payload = _payload_or_raise(graphdb.send_read_query(query, max_rows=None))
+    rows = payload.get("records", [])
+    # A LIST of {value, count}, not a dict keyed by str(value). Neo4j allows
+    # heterogeneous types on one property key, so integer 1 and string "1"
+    # are two distinct values that str() collapses onto one key -- the second
+    # silently overwriting the first, leaving a distribution whose counts do
+    # not sum to the entity count and whose missing value is invisible.
+    #
+    # An empty list is a real answer ("no non-null values"), not "unknown": the
+    # query succeeded. A query that FAILS raises out of the strict accessor
+    # above and degrades the whole entity to "profile_error", so absence of
+    # information is reported there rather than mislabelled here.
+    counts = [{"value": r["value"], "count": r["n"]} for r in rows]
+
+    # A property value can itself be a list long enough that send_read_query
+    # replaced it with a placeholder string. Say so rather than presenting the
+    # placeholder as the value: "complete" here means every value shown is the
+    # real one, not a summary of it.
+    complete = "no" if payload.get("values_summarised") else "yes"
+    return counts, complete
 
 
 def _profile_entity(entity, props, entity_count, is_relationship):
@@ -253,10 +312,14 @@ def _profile_entity(entity, props, entity_count, is_relationship):
         out = annotate_property(prop, entity_count)
         distinct_count = prop.get("distinct_count")
         if distinct_count is not None and distinct_count <= VALUE_COUNT_MAX_DISTINCT:
-            out["value_counts"] = _value_counts(
+            out["value_counts"], out["value_counts_complete"] = _value_counts(
                 entity, prop["property"], is_relationship)
         else:
             out["value_counts"] = "unknown"
+            # Same tri-state vocabulary as the other annotations: no counts
+            # were computed, so whether they would have been complete is
+            # unknowable -- never silently "yes".
+            out["value_counts_complete"] = "unknown"
         annotated.append(out)
     return annotated
 
@@ -272,28 +335,41 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
     rel_props = schema.get("rel_props", {}) or {}
     relationships = schema.get("relationships", []) or []
 
+    # Keyed on (is_relationship, name) so a label and a relationship type
+    # sharing a name cannot overwrite one another. `display` maps those keys
+    # back to the output keys, which stay bare names unless they actually
+    # collide.
     counts = _entity_counts(list(node_props), list(rel_props))
+    display = _display_keys(counts)
 
     entities = [(name, props, False) for name, props in node_props.items()]
     entities += [(name, props, True) for name, props in rel_props.items()]
-    # Largest first, so a budget cut drops the entities we could say least
-    # about anyway rather than an arbitrary slice.
-    entities.sort(key=lambda e: counts.get(e[0]) or 0, reverse=True)
+    # Largest first, so a budget cut spends what it has on the entities most
+    # likely to dominate an answer rather than on an arbitrary slice.
+    #
+    # Note the trade-off this makes: the entities dropped are the SMALL ones,
+    # which are also the ones the library scanned exhaustively and can
+    # therefore say the most about (only they carry a distinct_count, so only
+    # they generate value-count queries at all). Largest-first is a judgement
+    # about consequence, not about how much is knowable.
+    entities.sort(key=lambda e: counts.get((e[2], e[0])) or 0, reverse=True)
 
     properties: Dict[str, Any] = {}
     profiled = 0
     for name, props, is_rel in entities:
+        key = display[(is_rel, name)]
         if profiled >= MAX_PROFILED_ENTITIES:
-            properties[name] = "not_profiled"
+            properties[key] = "not_profiled"
             continue
         try:
-            properties[name] = _profile_entity(name, props, counts.get(name), is_rel)
+            properties[key] = _profile_entity(
+                name, props, counts.get((is_rel, name)), is_rel)
         except Exception:
             # Includes ProfileQueryError. Deliberately broad: a profile is a
             # convenience, and no failure inside it may take down the schema
             # tool that graphrag is instructed to call first.
-            logger.exception("Profiling failed for entity %s; continuing", name)
-            properties[name] = "profile_error"
+            logger.exception("Profiling failed for entity %s; continuing", key)
+            properties[key] = "profile_error"
         profiled += 1
 
     # The budget covers patterns too. Gating only the property loop would leave
@@ -302,7 +378,7 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
     # first, by the edge count of their relationship type.
     ranked = [r for r in relationships
               if r.get("start") and r.get("type") and r.get("end")]
-    ranked.sort(key=lambda r: counts.get(r["type"]) or 0, reverse=True)
+    ranked.sort(key=lambda r: counts.get((True, r["type"])) or 0, reverse=True)
 
     patterns = []
     for index, rel in enumerate(ranked):
@@ -323,11 +399,16 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
         patterns.append(entry)
 
     return {
-        "entity_counts": counts,
+        # Re-keyed from (is_relationship, name) back to the display key, so the
+        # payload keeps bare names for every non-colliding graph.
+        "entity_counts": {display[k]: v for k, v in counts.items()},
         "patterns": patterns,
         "properties": properties,
         "budget": {
-            "entities_profiled": min(profiled, MAX_PROFILED_ENTITIES),
+            # No min() needed: the loop above stops incrementing `profiled` the
+            # moment it reaches the cap, so it cannot overshoot. (`patterns_profiled`
+            # below DOES need one -- len(ranked) is not bounded by the cap.)
+            "entities_profiled": profiled,
             "entities_skipped": max(0, len(entities) - MAX_PROFILED_ENTITIES),
             "entity_limit": MAX_PROFILED_ENTITIES,
             "patterns_profiled": min(len(ranked), MAX_PROFILED_PATTERNS),
@@ -389,6 +470,18 @@ def get_cached_profile(schema_loader) -> Dict[str, Any]:
 
     schema = schema_loader()
     value = {"schema": schema, "profile": build_profile(schema)}
+
+    if fingerprint is None:
+        # The fingerprint could not be read, so this result's freshness is
+        # unverifiable and must not be cached. Critically, we also leave any
+        # EXISTING entry alone rather than overwriting it with None: storing
+        # None would guarantee a miss on the next call too (a real fingerprint
+        # never equals None), turning one transient blip into two full cold
+        # rebuilds of hundreds of queries for a graph that never changed.
+        # Leaving the old entry means the next successful fingerprint can still
+        # match it and serve a hit.
+        return value
+
     _cache.clear()
     _cache.update(
         {"write_count": write_count, "fingerprint": fingerprint, "value": value}

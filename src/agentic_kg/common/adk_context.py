@@ -50,6 +50,21 @@ def drop_foreign_context(callback_context: Any, llm_request: Any) -> Optional[No
 
     kept = [c for c in contents if not _is_foreign(c)]
     dropped = len(contents) - len(kept)
+
+    if dropped and not kept:
+        # Filtering everything would hand the model an empty `contents`, which
+        # most backends reject outright -- an unhandled exception mid-turn,
+        # the failure mode send_query and send_read_query go out of their way
+        # to avoid. Leaving the request untouched is the lesser harm: the model
+        # sees context it should not have, rather than the turn dying.
+        #
+        # Not reachable through the coordinator today, where a real user turn
+        # always survives the filter. This is a guard, not a code path in use.
+        logger.warning(
+            "Every message looked like foreign context; leaving the request "
+            "unfiltered rather than sending an empty one")
+        return None
+
     if dropped:
         logger.debug("Dropped %d foreign-context message(s) before model call", dropped)
         llm_request.contents = kept

@@ -5,13 +5,13 @@ This module defines functions that return instruction prompts for the cypher age
 These instructions guide the agent's behavior, workflow, and tool usage.
 """
 from agentic_kg.tools.cypher_tools import (
-    get_physical_schema, 
+    get_graph_schema_with_profile,
+    get_physical_schema,
     read_neo4j_cypher,
 )
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.tools.cypher_tools import get_graph_schema_with_profile
 
 finished = make_finished(MULTI_AGENT_COORDINATOR)
 

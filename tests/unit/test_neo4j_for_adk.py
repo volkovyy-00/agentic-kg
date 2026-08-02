@@ -196,3 +196,27 @@ def test_long_lists_are_summarised_not_returned_whole(db):
     assert record["name"] == "x"
     assert isinstance(record["embedding"], str)
     assert "1536" in record["embedding"]
+
+
+def test_summarised_values_are_declared_not_silently_omitted(db):
+    """Would catch: reporting a payload as complete while data was withheld.
+
+    Every row fits under the cap, so `truncated` is legitimately False -- but a
+    1536-element list inside one of them was replaced by a summary. Without a
+    separate signal the payload positively asserts a completeness it does not
+    have, which is the exact failure class this work exists to remove.
+    """
+    db._driver = FakeDriver([{"embedding": [0.1] * 1536, "name": "x"}])
+    payload = db.send_read_query("MATCH (c) RETURN c")["query_result"]
+    assert payload["truncated"] is False, "no ROWS were dropped"
+    assert payload["values_summarised"] is True
+    assert "note" in payload
+
+
+def test_values_summarised_is_false_when_nothing_was_omitted(db):
+    """The negative control: the flag must not be always-on."""
+    db._driver = FakeDriver([{"name": "x", "tags": ["a", "b"]}])
+    payload = db.send_read_query("MATCH (c) RETURN c")["query_result"]
+    assert payload["values_summarised"] is False
+    assert payload["records"][0]["tags"] == ["a", "b"]
+    assert "note" not in payload

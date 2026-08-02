@@ -17,9 +17,15 @@ from .tool_result import tool_success, tool_error
 
 logger = logging.getLogger(__name__)
 
-# Bound on how long any single agent-issued query may run. A hung tool call in
-# `adk web` is indistinguishable from a routing bug, which this project has
-# been burned by before.
+# Bound on how long a query issued through the READ path may run. A hung tool
+# call in `adk web` is indistinguishable from a routing bug, which this project
+# has been burned by before.
+#
+# Applied by send_read_query only. send_query -- the write path -- is
+# deliberately left unbounded for now: bulk loads and reset_neo4j_data's
+# `DETACH DELETE ... IN TRANSACTIONS` legitimately run past 30s, so timing it
+# needs its own limit rather than this one. That gap is real and open, not an
+# oversight; a runaway write can still hang a turn.
 QUERY_TIMEOUT_SECONDS = 30
 
 # How many rows are retained and shown. Not a tuned constant -- a judgement
@@ -39,6 +45,15 @@ MAX_INLINE_LIST_LENGTH = 32
 _TRUNCATION_NOTE = (
     "Records are capped. Counts, rankings and superlatives must come from a "
     "Cypher aggregation, never from counting these rows."
+)
+
+# Every row was returned, but at least one oversized list inside them was
+# replaced by a summary. Stated separately so a complete-in-rows result cannot
+# silently imply complete-in-values.
+_SUMMARY_NOTE = (
+    "All rows were returned, but at least one oversized list value was "
+    "replaced by a summary of its shape. Query the elements directly if you "
+    "need them."
 )
 
 def load_neo4j_config_from_settings() -> Neo4jConfig:
@@ -63,8 +78,17 @@ def make_driver(neo4j_config: Neo4jConfig) -> GraphDatabase | None:
     return driver_instance
 
 def sanitize(cypher_name: str) -> str:
-    """Very basic string sanitization when a query param is not possible."""
-    return re.sub("[.,-:$()><{}[\]'\"`\s]", '', cypher_name)
+    """Very basic string sanitization when a query param is not possible.
+
+    Currently unused -- callers that interpolate identifiers go through
+    cypher_identifiers.checked() (model-supplied names) or graph_profile.quote()
+    (database-supplied names) instead.
+    """
+    # Raw string: '\]' and '\s' are not valid escapes in a regular string, so
+    # this emitted a SyntaxWarning on every fresh compile and would become a
+    # SyntaxError in a later Python. Pre-existing; the character class is
+    # unchanged.
+    return re.sub(r"[.,-:$()><{}[\]'\"`\s]", '', cypher_name)
 
 def is_symbol(symbol: str) -> bool:
     """Validate that a string is a valid Neo4j symbol (no spaces, not a Cypher keyword).
@@ -158,6 +182,32 @@ def to_python(value):
         return value
 
 
+def _summarise(value, omitted: list):
+    """Recursive worker for summarise_long_lists.
+
+    Appends the length of each list it replaces to `omitted`, so the caller can
+    tell the difference between "nothing was withheld" and "something was
+    withheld silently". Without that signal the payload reports
+    truncated: false while data has in fact been dropped -- the payload
+    positively asserting completeness it cannot back up, which is the failure
+    class this whole module exists to prevent.
+
+    The caller uses both parts: truthiness decides the `values_summarised`
+    flag, and the sum is logged, so how much was dropped is recoverable from
+    the logs without re-running the query.
+    """
+    if isinstance(value, dict):
+        return {k: _summarise(v, omitted) for k, v in value.items()}
+    if isinstance(value, list):
+        if len(value) > MAX_INLINE_LIST_LENGTH:
+            # No empty-list guard needed: len > MAX_INLINE_LIST_LENGTH (>= 1)
+            # already guarantees value[0] exists.
+            omitted.append(len(value))
+            return f"<list of {len(value)} {type(value[0]).__name__} values, omitted>"
+        return [_summarise(v, omitted) for v in value]
+    return value
+
+
 def summarise_long_lists(value):
     """Replace oversized lists with a description of their shape.
 
@@ -165,14 +215,7 @@ def summarise_long_lists(value):
     full embedding vector. get_structured_schema's `sanitize` does not reach
     this path -- it only covers the library's own query family.
     """
-    if isinstance(value, dict):
-        return {k: summarise_long_lists(v) for k, v in value.items()}
-    if isinstance(value, list):
-        if len(value) > MAX_INLINE_LIST_LENGTH:
-            kind = type(value[0]).__name__ if value else "unknown"
-            return f"<list of {len(value)} {kind} values, omitted>"
-        return [summarise_long_lists(v) for v in value]
-    return value
+    return _summarise(value, [])
 
 
 class Neo4jForADK:
@@ -205,11 +248,12 @@ class Neo4jForADK:
         return self._driver.close()
 
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
-        # Session creation must sit INSIDE the try. It is currently outside
-        # (line 148), so a driver that cannot open a session raises straight
-        # out of this method instead of returning a structured error -- which
-        # in ADK surfaces as an unhandled exception mid-turn rather than a
-        # message the agent can react to.
+        # Session creation sits INSIDE the try deliberately. With it outside,
+        # a driver that cannot open a session raises straight out of this
+        # method instead of returning a structured error -- which in ADK
+        # surfaces as an unhandled exception mid-turn rather than a message the
+        # agent can react to. The counter is bumped only after result_to_adk
+        # returns, so a write that fails never counts.
         session = None
         try:
             session = self._driver.session(database=self._neo4j_config.database)
@@ -259,25 +303,40 @@ class Neo4jForADK:
             records = []
             counted = 0
             hit_ceiling = False
+            omitted: list = []
             for record in result:
                 counted += 1
                 if max_rows is None or len(records) < max_rows:
-                    records.append(summarise_long_lists(to_python(record.data())))
+                    records.append(_summarise(to_python(record.data()), omitted))
                 if counted >= ROW_COUNT_CEILING:
                     hit_ceiling = True
                     break
 
-            truncated = max_rows is not None and counted > len(records)
+            # Rows were dropped either because the retention cap bit, or
+            # because we stopped counting at the ceiling.
+            truncated = (max_rows is not None and counted > len(records)) or hit_ceiling
             payload: Dict[str, Any] = {
                 "records": records,
-                "truncated": truncated or hit_ceiling,
+                "truncated": truncated,
+                # Separate from `truncated`, which is strictly about ROWS. A
+                # result can be complete in rows while an oversized list inside
+                # one of them was replaced by a summary; reporting only
+                # `truncated: false` there would assert a completeness the
+                # payload does not have.
+                "values_summarised": bool(omitted),
             }
             if hit_ceiling:
                 payload["row_count_at_least"] = counted
             else:
                 payload["row_count"] = counted
-            if payload["truncated"]:
+            if truncated:
                 payload["note"] = _TRUNCATION_NOTE
+            elif omitted:
+                payload["note"] = _SUMMARY_NOTE
+            if omitted:
+                logger.debug(
+                    "Summarised %d oversized list value(s) totalling %d elements",
+                    len(omitted), sum(omitted))
             return tool_success("query_result", payload)
         except Exception as e:
             return tool_error(str(e))

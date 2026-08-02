@@ -25,16 +25,43 @@ def _request(*contents):
     return LlmRequest(contents=list(contents))
 
 
+def _human_turn():
+    """A real user message, which must always survive the filter.
+
+    Several tests need one purely so the request is not ALL foreign: the
+    all-foreign guard deliberately leaves such a request untouched, so a
+    drop-test built from foreign content alone would assert nothing.
+    """
+    return _content("user", types.Part(text="which countries dominate sourcing?"))
+
+
 def test_drops_content_carrying_the_sentinel():
     foreign = _content("user", types.Part(text=FOREIGN_CONTEXT_SENTINEL),
                        types.Part(text="[other_agent] said: 4 suppliers are orphaned"))
+    human = _human_turn()
+    req = _request(foreign, human)
+    drop_foreign_context(None, req)
+    assert req.contents == [human]
+
+
+def test_all_foreign_request_is_left_unfiltered_rather_than_emptied():
+    """Would catch: filtering a request down to zero contents.
+
+    Most model backends reject an empty `contents` outright, which surfaces as
+    an unhandled exception mid-turn -- the failure mode the rest of this
+    codebase works to avoid. Leaving the request unfiltered is the deliberate
+    lesser harm. Unreachable through the coordinator, where a real user turn
+    always survives; this is a guard, not a live path.
+    """
+    foreign = _content("user", types.Part(text=FOREIGN_CONTEXT_SENTINEL),
+                       types.Part(text="[other_agent] said: anything"))
     req = _request(foreign)
     drop_foreign_context(None, req)
-    assert req.contents == []
+    assert req.contents == [foreign], "an empty contents must never be sent"
 
 
 def test_keeps_real_user_message():
-    human = _content("user", types.Part(text="which countries dominate sourcing?"))
+    human = _human_turn()
     req = _request(human)
     drop_foreign_context(None, req)
     assert req.contents == [human]
@@ -88,6 +115,9 @@ def test_canary_adk_still_marks_foreign_events_with_our_sentinel():
         "google-adk version against the >=1.10,<2 pin in pyproject.toml."
     )
 
-    req = _request(converted.content)
+    # Paired with a surviving human turn: an all-foreign request is
+    # deliberately left unfiltered, so the drop needs something to keep.
+    human = _human_turn()
+    req = _request(converted.content, human)
     drop_foreign_context(None, req)
-    assert req.contents == []
+    assert req.contents == [human]

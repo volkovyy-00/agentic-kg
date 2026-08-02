@@ -5,14 +5,13 @@ from google.adk.tools import ToolContext
 from neo4j_graphrag.schema import get_structured_schema
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
-from agentic_kg.common.graph_profile import get_cached_profile
+from agentic_kg.common.graph_profile import get_cached_profile, quote
 from agentic_kg.common.neo4j_for_adk import (
     get_graphdb,
-    is_write_query,
     close_graphdb,
     QUERY_TIMEOUT_SECONDS,
 )
-from agentic_kg.common.tool_result import tool_success, tool_error
+from agentic_kg.common.tool_result import tool_success, tool_error, is_error
 
 graphdb = get_graphdb()
 
@@ -107,8 +106,11 @@ def read_neo4j_cypher(
         A dictionary with "status" and, on success, "query_result" holding:
         - "records": the rows, capped in number
         - "row_count" (or "row_count_at_least" for very large results)
-        - "truncated": whether records were capped
-        - "note": present when truncated
+        - "truncated": whether ROWS were dropped
+        - "values_summarised": whether an oversized list value inside a row was
+          replaced by a summary of its shape. Independent of "truncated": a
+          result can return every row while still withholding part of one.
+        - "note": present when either of those is true, explaining which
 
         Counts and rankings must come from a Cypher aggregation, never from
         counting the returned records.
@@ -144,31 +146,47 @@ def reset_neo4j_data() -> Dict[str, Any]:
     """
     # First, remove all nodes and relationships in batches
     data_removed = graphdb.send_query("""MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS""")
-    if (data_removed["status"] == "error") :
+    if is_error(data_removed):
         return data_removed
+
+    # Constraint and index names are interpolated, not parameterised: Cypher
+    # does not accept a parameter in a DDL name position, so `DROP CONSTRAINT
+    # $constraint_name` is rejected by the server every time -- this function
+    # previously dropped nothing at all. The names come from SHOW
+    # CONSTRAINTS/INDEXES, i.e. from the database rather than from a model, so
+    # they are backtick-quoted the way graph_profile does it rather than passed
+    # through checked(), which rejects legal generated names.
+    #
+    # The status checks below compare result["status"], not the result dict
+    # itself; `result == "error"` compares a dict to a string and is never true,
+    # so a failed listing used to fall through into a TypeError on ["records"].
 
     # remove all constraints
     list_constraints = graphdb.send_query(
         """SHOW CONSTRAINTS YIELD name"""
     )
-    if (list_constraints == "error"):
+    if is_error(list_constraints):
         return list_constraints
     constraint_names = [row["name"] for row in list_constraints["records"]]
     for constraint_name in constraint_names:
-        dropped_constraint = graphdb.send_query("""DROP CONSTRAINT $constraint_name""", {"constraint_name": constraint_name})
-        if (dropped_constraint["status"] == "error"):
+        dropped_constraint = graphdb.send_query(
+            f"""DROP CONSTRAINT {quote(constraint_name)}"""
+        )
+        if is_error(dropped_constraint):
             return dropped_constraint
 
     # remove all indexes
     list_indexes = graphdb.send_query(
         """SHOW INDEXES YIELD name"""
     )
-    if (list_indexes == "error"):
+    if is_error(list_indexes):
         return list_indexes
     index_names = [row["name"] for row in list_indexes["records"]]
     for index_name in index_names:
-        dropped_index = graphdb.send_query("""DROP INDEX $index_name""", {"index_name": index_name})
-        if (dropped_index["status"] == "error"):
+        dropped_index = graphdb.send_query(
+            f"""DROP INDEX {quote(index_name)}"""
+        )
+        if is_error(dropped_index):
             return dropped_index
 
     return tool_success("message", "Neo4j database has been reset.")

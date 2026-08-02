@@ -289,3 +289,143 @@ def test_budget_also_caps_the_pattern_loop(monkeypatch):
     degrees = [p["start_degree"] for p in profile["patterns"]]
     assert "not_profiled" in degrees
     assert profile["budget"]["patterns_profiled"] == 1
+
+
+def test_label_and_relationship_type_sharing_a_name_do_not_overwrite(monkeypatch):
+    """Would catch: keying entity counts and profiles on the bare name.
+
+    Neo4j keeps node labels and relationship types in separate namespaces, so
+    a graph may hold both a `FOLLOWS` label and a `FOLLOWS` relationship type.
+    Keyed on name alone the relationship pass runs second and overwrites the
+    label's node count, so annotate_property receives an EDGE count as the
+    entity count for a LABEL's properties -- a wrong `uniqueness` verdict that
+    prompt rule 4 then acts on -- and one entity's profile vanishes from the
+    output entirely while budget.entities_profiled still counts both.
+    """
+    db = FakeGraphDbForProfile(responses={
+        "UNWIND labels(n)": [{"name": "FOLLOWS", "n": 7}],
+        "type(r) AS name": [{"name": "FOLLOWS", "n": 900}],
+    })
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    schema = {
+        "node_props": {"FOLLOWS": [{"property": "a", "type": "STRING"}]},
+        "rel_props": {"FOLLOWS": [{"property": "b", "type": "STRING"}]},
+        "relationships": [],
+    }
+    profile = build_profile(schema)
+
+    counts = profile["entity_counts"]
+    assert counts["FOLLOWS (node)"] == 7
+    assert counts["FOLLOWS (relationship)"] == 900
+
+    props = profile["properties"]
+    assert props["FOLLOWS (node)"][0]["property"] == "a"
+    assert props["FOLLOWS (relationship)"][0]["property"] == "b"
+    assert profile["budget"]["entities_profiled"] == 2
+
+
+def test_non_colliding_names_keep_their_bare_keys(fake_profile_db):
+    """The disambiguation must not fire on ordinary graphs.
+
+    Every consumer -- and the integration suite's ground-truth assertions --
+    indexes entity_counts and properties by the bare name.
+    """
+    profile = build_profile(SCHEMA)
+    assert "Alpha" in profile["properties"]
+    assert "LINKS" in profile["properties"]
+    assert not [k for k in profile["entity_counts"] if "(" in k]
+
+
+def test_value_counts_keep_distinct_values_of_different_types_apart(monkeypatch):
+    """Would catch: keying the distribution on str(value).
+
+    Neo4j allows heterogeneous types on one property key. With str() keys the
+    integer 1 and the string "1" collapse onto a single entry, the second
+    silently overwriting the first -- leaving a distribution whose counts do
+    not sum to the entity count and whose missing value is invisible.
+    """
+    # Needle is the quoted property name, which appears only in the
+    # value-counts query. "count(*)" would also match the entity-count query,
+    # whose rows carry different columns.
+    db = FakeGraphDbForProfile(responses={
+        "`status`": [{"value": 1, "n": 700}, {"value": "1", "n": 300}],
+    })
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    schema = {
+        "node_props": {"Thing": [{"property": "status", "type": "STRING",
+                                  "values": ["1"], "distinct_count": 2}]},
+        "rel_props": {}, "relationships": [],
+    }
+    counts = build_profile(schema)["properties"]["Thing"][0]["value_counts"]
+    assert counts == [{"value": 1, "count": 700}, {"value": "1", "count": 300}]
+    assert sum(c["count"] for c in counts) == 1000
+
+
+def test_value_counts_empty_result_is_an_empty_distribution_not_unknown(fake_profile_db):
+    """A successful query returning no rows means "no non-null values" -- a
+    real answer. Reporting it as "unknown" conflates it with "could not
+    determine", which is what a FAILED query yields (profile_error)."""
+    schema = {
+        "node_props": {"Thing": [{"property": "flag", "type": "STRING",
+                                  "values": [], "distinct_count": 1}]},
+        "rel_props": {}, "relationships": [],
+    }
+    profile = build_profile(schema)
+    assert profile["properties"]["Thing"][0]["value_counts"] == []
+
+
+class FakeSummarisingDb(FakeGraphDbForProfile):
+    """Reports values_summarised on the value-counts query, as send_read_query
+    does when a property value is a list longer than MAX_INLINE_LIST_LENGTH."""
+
+    def send_read_query(self, query, parameters=None, max_rows=None):
+        result = super().send_read_query(query, parameters, max_rows)
+        if "`tags`" in query:
+            result["query_result"]["values_summarised"] = True
+        return result
+
+
+def test_summarised_property_values_are_declared_in_the_profile(monkeypatch):
+    """Would catch: unwrapping send_read_query straight to `records`.
+
+    send_read_query reports values_summarised when it replaces an oversized
+    list value with a placeholder string. If the profile discards that flag,
+    the model is shown "<list of N str values, omitted>" inside value_counts
+    as though it were the real value -- the same silent-omission failure the
+    flag exists to signal, reappearing one layer up in the tool graphrag is
+    told to call first.
+    """
+    db = FakeSummarisingDb(responses={
+        "`tags`": [{"value": "<list of 40 str values, omitted>", "n": 5}],
+    })
+    monkeypatch.setattr(graph_profile, "graphdb", db)
+    schema = {
+        "node_props": {"Thing": [{"property": "tags", "type": "LIST",
+                                  "values": [], "distinct_count": 1}]},
+        "rel_props": {}, "relationships": [],
+    }
+    prop = build_profile(schema)["properties"]["Thing"][0]
+    assert prop["value_counts_complete"] == "no"
+
+
+def test_value_counts_complete_is_yes_when_nothing_was_summarised(fake_profile_db):
+    """Negative control: the annotation must not be always-'no'."""
+    schema = {
+        "node_props": {"Thing": [{"property": "flag", "type": "STRING",
+                                  "values": ["a"], "distinct_count": 2}]},
+        "rel_props": {}, "relationships": [],
+    }
+    prop = build_profile(schema)["properties"]["Thing"][0]
+    assert prop["value_counts_complete"] == "yes"
+
+
+def test_value_counts_complete_is_unknown_when_counts_were_not_computed(fake_profile_db):
+    """Never silently 'yes' for a property the profile did not count."""
+    schema = {
+        "node_props": {"Thing": [{"property": "big", "type": "STRING",
+                                  "values": ["a"], "distinct_count": 900}]},
+        "rel_props": {}, "relationships": [],
+    }
+    prop = build_profile(schema)["properties"]["Thing"][0]
+    assert prop["value_counts"] == "unknown"
+    assert prop["value_counts_complete"] == "unknown"

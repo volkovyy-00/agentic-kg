@@ -156,3 +156,77 @@ def test_no_tool_exposes_the_profile_flag_to_a_model(tool_name):
     declared = FunctionTool(fn)._get_declaration()
     props = (declared.parameters.properties or {}) if declared.parameters else {}
     assert "include_data_profile" not in props
+
+
+class FakeDdlDb(FakeGraphDb):
+    """Records queries and answers the SHOW CONSTRAINTS/INDEXES listings."""
+
+    def __init__(self, constraints=(), indexes=()):
+        super().__init__()
+        self.constraints = list(constraints)
+        self.indexes = list(indexes)
+
+    def send_query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if "SHOW CONSTRAINTS" in query:
+            return {"status": "success",
+                    "records": [{"name": n} for n in self.constraints]}
+        if "SHOW INDEXES" in query:
+            return {"status": "success",
+                    "records": [{"name": n} for n in self.indexes]}
+        return {"status": "success", "records": []}
+
+
+def test_reset_drops_ddl_by_name_not_by_parameter(monkeypatch):
+    """Would catch: `DROP CONSTRAINT $name`.
+
+    Cypher does not accept a parameter in a DDL name position, so the
+    parameterised form is rejected by the server on every call -- meaning
+    reset_neo4j_data reported success while dropping nothing at all. The name
+    must be interpolated (backtick-quoted, since it comes from the database).
+    """
+    db = FakeDdlDb(constraints=["unique_person_id"], indexes=["idx_person_name"])
+    monkeypatch.setattr(cypher_tools, "graphdb", db)
+
+    result = cypher_tools.reset_neo4j_data()
+    assert result["status"] == "success"
+
+    drops = [q for q, _ in db.queries if q.startswith("DROP")]
+    assert "DROP CONSTRAINT `unique_person_id`" in drops
+    assert "DROP INDEX `idx_person_name`" in drops
+    for query, params in db.queries:
+        if query.startswith("DROP"):
+            assert not params, "DDL names cannot be passed as query parameters"
+            assert "$" not in query
+
+
+def test_reset_quotes_ddl_names_that_are_not_bare_identifiers(monkeypatch):
+    """Generated constraint names can contain characters a bare identifier
+    cannot; unquoted interpolation would produce a syntax error."""
+    db = FakeDdlDb(constraints=["constraint 1-of 2"])
+    monkeypatch.setattr(cypher_tools, "graphdb", db)
+    cypher_tools.reset_neo4j_data()
+    assert "DROP CONSTRAINT `constraint 1-of 2`" in [q for q, _ in db.queries]
+
+
+def test_reset_surfaces_a_failed_listing_instead_of_crashing(monkeypatch):
+    """Would catch: `if (list_constraints == "error")`.
+
+    That compares a dict to a string and is never true, so a failed listing
+    fell through to result["records"] and raised KeyError/TypeError inside the
+    tool instead of returning the error to the agent.
+    """
+    db = FakeDdlDb()
+
+    def failing(query, parameters=None):
+        db.queries.append((query, parameters or {}))
+        if "SHOW CONSTRAINTS" in query:
+            return {"status": "error", "error_message": "boom"}
+        return {"status": "success", "records": []}
+
+    monkeypatch.setattr(db, "send_query", failing)
+    monkeypatch.setattr(cypher_tools, "graphdb", db)
+
+    result = cypher_tools.reset_neo4j_data()
+    assert result["status"] == "error"
+    assert result["error_message"] == "boom"
