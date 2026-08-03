@@ -1,6 +1,6 @@
 # Agentic Knowledge Graph Construction
 
-Agentic Knowledge Graph is a multi-agent system for constructing knowledge graphs, built on Google ADK (Agent Driver Kit) and designed to interact with Neo4j databases. It's a companion project to the deeplearning.ai course on agentic knowledge graph construction.
+Agentic Knowledge Graph is a multi-agent system for constructing knowledge graphs, built on Google ADK (Agent Development Kit) and designed to interact with Neo4j databases. It was originally forked from the companion project to the deeplearning.ai course on agentic knowledge graph construction, but is now developed as an independent project, not a teaching artifact.
 
 Always reference these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.
 
@@ -18,17 +18,18 @@ Always reference these instructions first and fallback to search or bash command
 ### Environment Configuration
 - Copy `.env.example` to `.env` and configure as needed
 - Key variables:
-  - `OPENAI_API_KEY=` -- required for full LLM functionality
-  - `LLM_MODEL=openai/gpt-4o` -- default model configuration
-  - `NEO4J_DSN=bolt://neo4j:secret@localhost:7687/neo4j` -- Neo4j connection
+  - `OPENROUTER_API_KEY=` -- required, one key covers every model call (routed via LiteLLM/OpenRouter)
+  - `LLM_MODEL_CONVERSATIONAL=openai/gpt-4o-mini` -- conversational model configuration
+  - `LLM_MODEL_REASONING=openai/gpt-4o` -- reasoning model configuration
+  - `NEO4J_DSN=bolt://neo4j:secret@localhost:7687/neo4j` -- Neo4j connection (local or `neo4j+s://` for Aura)
+  - `SOURCE_URI=./data/bom` -- where source files live (local path, `s3://`, or `https://`)
   - `LOGLEVEL=INFO` -- logging configuration
 
 ### Testing
-- Unit tests (fast, no external dependencies): `uv run pytest -q` -- takes ~1.5 seconds. NEVER CANCEL. Set timeout to 30+ minutes.
-  - NOTE: Some unit tests in test_tool_result.py currently fail due to existing codebase issues. This is expected.
-  - Working unit tests: `uv run pytest tests/unit/test_pydantic_neo4j.py -v` -- passes in ~0.08 seconds
-- Integration tests (requires Docker): `uv run pytest -q -m integration` -- takes ~50 seconds. NEVER CANCEL. Set timeout to 120+ minutes.
-  - NOTE: Integration tests may fail with authentication errors in some environments. This is expected behavior.
+- Unit tests (fast, no external dependencies): `uv run pytest -q` -- 253 tests, all passing. NEVER CANCEL. Set timeout to 30+ minutes.
+  - Single file/test: `uv run pytest tests/unit/test_pydantic_neo4j.py -v`
+- Integration tests (requires Docker): `uv run pytest -q -m integration` -- 20 tests, spins up Neo4j via Testcontainers. NEVER CANCEL. Set timeout to 120+ minutes.
+  - If using colima instead of Docker Desktop: `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true` first.
 
 ### Running the Agentic System
 - Start the ADK web interface: `uv run adk web src/agentic_kg/coordinators/` -- starts on port 8000 by default
@@ -36,8 +37,10 @@ Always reference these instructions first and fallback to search or bash command
   - Takes ~5 seconds to start. NEVER CANCEL. Set timeout to 60+ minutes.
   - Access at http://localhost:8000 (or configured port)
 - Two available coordinators/agents:
-  1. `single_agent` - uses a single sub-agent that interfaces with Neo4j directly
-  2. `multi_agent` - hierarchical system with specialized sub-agents for different phases
+  1. `multi_agent` - the product. Hierarchical system with five specialized sub-agents (user_intent,
+     file_suggestion, schema_proposal, graph_construction, graphrag) collaborating through approval-gated phases.
+  2. `single_agent` - a frozen legacy exercise carried over from the original course: a single agent that
+     talks to Neo4j directly via Cypher. Not under active development.
 - Web interface allows agent selection and interactive chat
 - Full functionality requires LLM API keys configured in .env
 
@@ -50,10 +53,9 @@ Always reference these instructions first and fallback to search or bash command
 
 ## Build and Test Validation
 - The project builds successfully with `uv sync`
-- Unit tests run but some fail due to existing codebase issues (not your responsibility to fix)
-- Integration tests may fail in environments without proper Neo4j testcontainer setup
+- Unit tests pass cleanly (253 tests); integration tests require Docker and a reachable Neo4j
 - The ADK web interface loads and displays both agents correctly
-- No linting or formatting tools are currently configured in the project
+- No linting or formatting tools, and no CI, are currently configured in the project
 
 ## Common Tasks
 
@@ -112,6 +114,6 @@ During startup, you may see these warnings which are normal:
 ### Troubleshooting
 - If `uv` command not found: `pip3 install uv`
 - If port 8000 in use: use `--port 8001` flag with adk web command
-- If tests fail with authentication errors: expected in some environments, not your responsibility
+- If integration tests fail to reach Docker: see the colima workaround in the Testing section above
 - If LLM connection errors: configure API keys in .env file for full functionality
 - If ADK web shows blank agents: ensure coordinators directory structure is correct
