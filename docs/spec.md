@@ -31,8 +31,10 @@ program rather than a teaching artifact. What makes that true, concretely, rathe
 
 Course-shaped structure survives in the code — most visibly the `variants` dicts, where each agent's
 prompt/tool wiring lives in a sibling `variants.py` keyed by version-suffixed names. That is inherited
-history, not a constraint to preserve. Four of the seven agents now have only a single variant;
-the surviving `_v1`/`_v2` pairs are deliberate A/B retentions, not course chapters.
+history, not a constraint to preserve. Four of the seven agents now have only a single variant. Of the
+three `_v1`/`_v2` pairs that remain, `graphrag_agent` selects v2 and keeps v1 unchanged for an explicit
+A/B comparison — the one pair documented as a deliberate retention; `user_intent_agent` selects v2; and
+`cypher_agent` selects v1, leaving its v2 unselected.
 
 > Known inconsistency: `README.md:9` still describes the project as "a reference implementation for
 > learning and experimentation, not a production tool," which contradicts this section, `CLAUDE.md`, and
