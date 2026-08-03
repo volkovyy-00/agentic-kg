@@ -1,6 +1,8 @@
 # agentic-kg — living spec
 
-**Status:** current as of 0.4.0 (2026-08-03). This is the "what is this and why does it exist" document.
+**Status:** living document. Every claim below was verified against the code and git state at the 0.4.0
+release (2026-08-03); for anything that landed since, check `CHANGELOG.md`'s `[Unreleased]` section and
+treat this document as the thing to update. This is the "what is this and why does it exist" document.
 For the architecture map you need while editing code, read `CLAUDE.md`. For the PR/branch/CHANGELOG
 workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate either.
 
@@ -38,8 +40,8 @@ A/B comparison — the one pair documented as a deliberate retention; `user_inte
 
 > Known inconsistency: `README.md:9` still describes the project as "a reference implementation for
 > learning and experimentation, not a production tool," which contradicts this section, `CLAUDE.md`, and
-> `CONTRIBUTING.md`. `.github/copilot-instructions.md:3` carries the same stale framing. The README has
-> not been revised since 2026-07-29.
+> `CONTRIBUTING.md`. `.github/copilot-instructions.md:3` does not make that claim, but still calls the
+> project a companion to the course. The README has not been revised since 2026-07-29.
 
 ---
 
