@@ -209,7 +209,8 @@ in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
 
-Current models: reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash`. The reasoning
+Current models: reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash-0731` (DeepSeek's
+official V4-Flash release, 2026-07-31, superseding the preview build previously pinned here). The reasoning
 slot moved off `openai/gpt-5` (2026-07-31) because its workload — `schema_proposal_agent`'s propose/critique/refine
 trio and `graph_construction_agent` — is many small tool-orchestration steps at `reasoning_effort="low"`, which is
 exactly Luna's target profile, at ~1/16th the output cost. LiteLLM has no `openrouter/openai/gpt-5.6-luna` entry in
