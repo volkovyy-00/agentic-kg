@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- **Living spec (#6)**: `docs/spec.md`, a verified orientation document covering what the project is, the two
+  entry points and why only one is maintained, the construction workflow as it actually runs, what retrieval
+  grounding does and does not guard against, and the current shipped/next state.
+
 ## [0.4.0] - 2026-08-03
 
 ### Added
