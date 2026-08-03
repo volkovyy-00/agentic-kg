@@ -51,9 +51,9 @@ Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Ass
 Between Foundation and sub-projects 2/3, a separate effort — grounding `graphrag_agent` in the graph instead
 of conversational recall — was designed, implemented, and merged as `0.3.0` (2026-08-02, PR #4). It is **not**
 part of the 3-sub-project plan above; it jumped the queue. See Architecture's *`graphrag_agent_v2`* subsection
-for what shipped, and `docs/superpowers/specs/2026-08-01-graphrag-grounding-design.md` /
-`docs/superpowers/plans/2026-08-01-graphrag-grounding.md` for the design record. Sub-projects 2 and 3 remain
-the actual next work and are still unstarted.
+for what shipped, and [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s `0.3.0`
+entry for the design record — the underlying spec/plan are gitignored local notes, not something a fresh
+clone has. Sub-projects 2 and 3 remain the actual next work and are still unstarted.
 
 ## Commands
 
@@ -197,8 +197,8 @@ from conversational recall. Three pieces make that possible:
   `_physical_schema(include_data_profile: bool)`.
 
 `graphrag_agent_v1` is kept unchanged alongside v2 for an A/B comparison; `agent.py` selects v2 via
-`AGENT_NAME`. Design record: `docs/superpowers/specs/2026-08-01-graphrag-grounding-design.md` /
-`docs/superpowers/plans/2026-08-01-graphrag-grounding.md`.
+`AGENT_NAME`. Design record: [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s
+`0.3.0` entry — the underlying spec/plan are gitignored local notes, not present in a fresh clone.
 
 ### LLM selection
 
