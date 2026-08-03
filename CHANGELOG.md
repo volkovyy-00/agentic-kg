@@ -7,9 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
 ### Added
-- `CONTRIBUTING.md`: contributor workflow, testing requirements, and design-decision/CHANGELOG conventions.
-- `CHANGELOG.md` (this file): backfilled release history and the ongoing entry policy.
+- **Contributor workflow (#5)**: `CONTRIBUTING.md` (PR/branch conventions, testing requirements, design-decision
+  and CHANGELOG policy) and `CHANGELOG.md` (this file, with backfilled release history).
+
+### Changed
+- `.gitignore` narrowed from ignoring all of `docs/` to just `docs/superpowers/` (design specs/plans) and
+  `docs/backlog/` (defect/follow-up notes) (#5) — a prior blanket ignore had silently untracked two design
+  specs during the 0.3.0 merge, recovered from git history rather than lost.
+- Conversational model bumped to DeepSeek V4-Flash's official `0731` release, superseding the preview build.
 
 ## [0.3.0] - 2026-08-02
 
@@ -59,7 +67,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Documentation of the colima/Testcontainers `DOCKER_HOST` + Ryuk workaround needed to run integration
   tests locally (#1).
 
-[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/volkovyy-00/agentic-kg/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.1.0...v0.2.0
