@@ -42,8 +42,8 @@ only with a stated reason (e.g. "covered by the existing fake in `tests/unit/fak
 ## Documenting significant design decisions
 
 This project doesn't use a separate ADR directory. `docs/superpowers/` (specs and plans) and `docs/backlog/`
-(defect/follow-up notes) are gitignored by deliberate policy (`e02de39`: "keep design docs and plans local,
-out of the published repo") — nothing under either is shared via git. The rest of `docs/` is tracked normally;
+(defect/follow-up notes) are gitignored by deliberate policy (see `.gitignore`: "keep design docs and plans
+local, out of the published repo") — nothing under either is shared via git. The rest of `docs/` is tracked normally;
 that's where a durable, shared project doc (e.g. the living spec) belongs. If you write a design spec before
 implementing a decision with long-term impact (new sub-agent architecture, a change to state-passing
 conventions, a new external dependency, a retrieval/construction behavior change with user-visible
