@@ -17,10 +17,46 @@ from agentic_kg.tools.cypher_tools import (
 )
 from agentic_kg.tools.file_tools import get_approved_files
 from agentic_kg.tools.kg_construction_tools import build_graph_from_construction_rules
-from agentic_kg.tools.adk_tools import make_finished
-from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from typing import Any, Dict
 
-finished = make_finished(MULTI_AGENT_COORDINATOR)
+from google.adk.tools import ToolContext
+
+from agentic_kg.common.tool_result import tool_error
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.tools.construction_handoff_tools import (
+    HANDOFF_CONFIRMED_KEY, confirm_construction_handoff,
+)
+# Imported live rather than copied: only the selected variant is built into an
+# Agent and registered in the tree, and this project already runs two A/B
+# sub-agents on different generations (cypher_agent on v1, graphrag_agent on
+# v2). A duplicated name that went stale would make find_agent raise inside the
+# transfer chain -- no trace span, indistinguishable from a hang. One
+# definition, imported. This is the first sub-agent -> sub-agent import in the
+# tree; graphrag_agent/agent.py imports nothing that leads back here.
+from ..graphrag_agent.agent import AGENT_NAME as GRAPHRAG_AGENT_NAME
+
+# Construction hands the user straight to retrieval, not back to the
+# coordinator: the coordinator has no new information at that point, and
+# routing the user's just-confirmed decision through another model is the
+# inference this gate exists to remove.
+_transfer_to_retrieval = make_finished(GRAPHRAG_AGENT_NAME)
+
+
+def finished(tool_context: ToolContext) -> Dict[str, Any]:
+    """Finish construction and hand the user to the retrieval agent.
+
+    Refuses unless 'confirm_construction_handoff' recorded the user's explicit
+    agreement in this same turn. Returns a bare {} on success, matching every
+    other 'finished' in this codebase; the error path is the only one that
+    speaks ToolResult.
+    """
+    if not tool_context.state.get(HANDOFF_CONFIRMED_KEY):
+        return tool_error(
+            "no confirmation recorded this turn -- if the user already agreed, "
+            "ask them to confirm once more, then call "
+            "'confirm_construction_handoff' and 'finished' in the same reply."
+        )
+    return _transfer_to_retrieval(tool_context)
 
 variants = {
     "graph_construction_agent_v1": {

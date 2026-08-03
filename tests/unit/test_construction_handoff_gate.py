@@ -8,7 +8,12 @@ unit-testable and is verified by hand (see the plan's Task 5).
 """
 import inspect
 
-from agentic_kg.common.tool_result import is_success
+from agentic_kg.common.tool_result import is_error, is_success
+from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
+from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
+    GRAPHRAG_AGENT_NAME,
+    finished,
+)
 from agentic_kg.tools.construction_handoff_tools import (
     HANDOFF_CONFIRMED_KEY,
     confirm_construction_handoff,
@@ -57,3 +62,45 @@ def test_confirm_takes_no_arguments_beyond_context():
     the same reasoning make_finished documents for itself."""
     parameters = list(inspect.signature(confirm_construction_handoff).parameters)
     assert parameters == ["tool_context"]
+
+
+def test_finished_refuses_without_confirmation():
+    """Catches the gate being absent or inverted: an unconfirmed 'finished'
+    must neither report success nor set a transfer, or the phase ends on the
+    model's inference exactly as it did before."""
+    context = FakeToolContext()
+    result = finished(context)
+    assert is_error(result)
+    assert context.actions.transfer_to_agent is None
+
+
+def test_refusal_message_scopes_the_failure_to_this_turn():
+    """Catches a generic 'call confirm first' message. The likely cause of a
+    refusal is a confirmation from an earlier turn cleared by the per-turn
+    reset, so a message implying the user never agreed would relocate this
+    ticket's ambiguity into the error string."""
+    result = finished(FakeToolContext())
+    assert "this turn" in result["error_message"]
+
+
+def test_finished_transfers_to_retrieval_when_confirmed():
+    """Catches a transfer back to the coordinator, which would strand the user
+    one hop short of the retrieval agent -- the failure the ticket's fourth
+    acceptance criterion names."""
+    context = FakeToolContext({HANDOFF_CONFIRMED_KEY: True})
+    result = finished(context)
+    assert result == {}
+    assert context.actions.transfer_to_agent == GRAPHRAG_AGENT_NAME
+
+
+def test_the_retrieval_agent_resolves_in_the_agent_tree():
+    """Catches graphrag_agent dropping out of full_workflow_agent.sub_agents in
+    a future refactor while its module still defines AGENT_NAME correctly.
+
+    It does NOT guard against a stale copy of the name -- the live import made
+    that structurally impossible, since there is only one definition to read.
+    Do not delete this as redundant with that: the failure it catches is a
+    correct name pointing at an agent no longer in the tree, which makes
+    find_agent raise inside a transfer chain with no trace span.
+    """
+    assert full_workflow_agent.find_agent(GRAPHRAG_AGENT_NAME) is not None
