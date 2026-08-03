@@ -13,6 +13,9 @@ the code (the `variants` dicts of successive chapter iterations, the "Difference
 is inherited history, not a constraint to preserve — prefer the choice that makes a working program over the one
 that mirrors the course. Reproducibility for students is not a design goal.
 
+See `CONTRIBUTING.md` for the PR workflow, testing expectations, and CHANGELOG conventions to follow when
+making changes here.
+
 ## Current work: unstructured ingestion (3 sub-projects)
 
 Adding ingestion of unstructured documents (PDF/Markdown) alongside the existing CSV path, generic
@@ -40,7 +43,17 @@ the Foundation spec's *Follow-on work* section.
 Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Asset_Manager_Holdings.csv`.
 **Those files are not in this repo and must be sourced.** The bundled furniture example must keep working throughout.
 
-**Write specs 2 and 3 against the post-Foundation codebase**, not against descriptions written before it landed.
+**Write specs 2 and 3 against the post-Foundation codebase** — which now also includes graphrag grounding
+(below), merged after Foundation and before either spec was written.
+
+### Interleaved and already shipped: graphrag grounding
+
+Between Foundation and sub-projects 2/3, a separate effort — grounding `graphrag_agent` in the graph instead
+of conversational recall — was designed, implemented, and merged as `0.3.0` (2026-08-02, PR #4). It is **not**
+part of the 3-sub-project plan above; it jumped the queue. See Architecture's *`graphrag_agent_v2`* subsection
+for what shipped, and `docs/superpowers/specs/2026-08-01-graphrag-grounding-design.md` /
+`docs/superpowers/plans/2026-08-01-graphrag-grounding.md` for the design record. Sub-projects 2 and 3 remain
+the actual next work and are still unstarted.
 
 ## Commands
 
@@ -164,6 +177,28 @@ dynamic labels, which cannot use a uniqueness index. The loaders' `ToolResult`s 
 `relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
 collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
 wrote, so a re-run against a non-empty graph will include prior data too.
+
+### Grounding: `graphrag_agent_v2`
+
+`graphrag_agent_v2` (shipped as `0.3.0`, PR #4) answers only from graph queries made in the current turn, not
+from conversational recall. Three pieces make that possible:
+
+- `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
+  from the request. ADK rewrites another agent's output into a user-role message carrying a `"For context:"`
+  sentinel before this callback ever sees it, so role alone can't distinguish it from a real user turn — the
+  filter keys on the sentinel instead.
+- `common/graph_profile.py`: turns `neo4j_graphrag`'s enriched schema into tri-state, always-present
+  annotations (completeness, uniqueness, per-pattern degree, per-value distribution), cached via
+  `get_cached_profile` — because the library's own report doesn't say whether a sampled property list is
+  exhaustive or not.
+- `tools/cypher_tools.py`: `get_physical_schema()` (no profile — output must stay byte-identical to before,
+  since the coordinator, `graph_construction_agent`, and `single_agent`'s `cypher_agent` all depend on that
+  exact shape) vs. `get_graph_schema_with_profile()` (adds the profile), both built on the shared
+  `_physical_schema(include_data_profile: bool)`.
+
+`graphrag_agent_v1` is kept unchanged alongside v2 for an A/B comparison; `agent.py` selects v2 via
+`AGENT_NAME`. Design record: `docs/superpowers/specs/2026-08-01-graphrag-grounding-design.md` /
+`docs/superpowers/plans/2026-08-01-graphrag-grounding.md`.
 
 ### LLM selection
 
