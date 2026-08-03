@@ -13,6 +13,9 @@ the code (the `variants` dicts of successive chapter iterations, the "Difference
 is inherited history, not a constraint to preserve — prefer the choice that makes a working program over the one
 that mirrors the course. Reproducibility for students is not a design goal.
 
+See `CONTRIBUTING.md` for the PR workflow, testing expectations, and CHANGELOG conventions to follow when
+making changes here.
+
 ## Current work: unstructured ingestion (3 sub-projects)
 
 Adding ingestion of unstructured documents (PDF/Markdown) alongside the existing CSV path, generic
@@ -40,7 +43,17 @@ the Foundation spec's *Follow-on work* section.
 Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Asset_Manager_Holdings.csv`.
 **Those files are not in this repo and must be sourced.** The bundled furniture example must keep working throughout.
 
-**Write specs 2 and 3 against the post-Foundation codebase**, not against descriptions written before it landed.
+**Write specs 2 and 3 against the post-Foundation codebase** — which now also includes graphrag grounding
+(below), merged after Foundation and before either spec was written.
+
+### Interleaved and already shipped: graphrag grounding
+
+Between Foundation and sub-projects 2/3, a separate effort — grounding `graphrag_agent` in the graph instead
+of conversational recall — was designed, implemented, and merged as `0.3.0` (2026-08-02, PR #4). It is **not**
+part of the 3-sub-project plan above; it jumped the queue. See Architecture's *`graphrag_agent_v2`* subsection
+for what shipped, and [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s `0.3.0`
+entry for the design record — the underlying spec/plan are gitignored local notes, not something a fresh
+clone has. Sub-projects 2 and 3 remain the actual next work and are still unstarted.
 
 ## Commands
 
@@ -165,6 +178,28 @@ dynamic labels, which cannot use a uniqueness index. The loaders' `ToolResult`s 
 collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
 wrote, so a re-run against a non-empty graph will include prior data too.
 
+### Grounding: `graphrag_agent_v2`
+
+`graphrag_agent_v2` (shipped as `0.3.0`, PR #4) answers only from graph queries made in the current turn, not
+from conversational recall. Three pieces make that possible:
+
+- `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
+  from the request. ADK rewrites another agent's output into a user-role message carrying a `"For context:"`
+  sentinel before this callback ever sees it, so role alone can't distinguish it from a real user turn — the
+  filter keys on the sentinel instead.
+- `common/graph_profile.py`: turns `neo4j_graphrag`'s enriched schema into tri-state, always-present
+  annotations (completeness, uniqueness, per-pattern degree, per-value distribution), cached via
+  `get_cached_profile` — because the library's own report doesn't say whether a sampled property list is
+  exhaustive or not.
+- `tools/cypher_tools.py`: `get_physical_schema()` (no profile — output must stay byte-identical to before,
+  since the coordinator, `graph_construction_agent`, and `single_agent`'s `cypher_agent` all depend on that
+  exact shape) vs. `get_graph_schema_with_profile()` (adds the profile), both built on the shared
+  `_physical_schema(include_data_profile: bool)`.
+
+`graphrag_agent_v1` is kept unchanged alongside v2 for an A/B comparison; `agent.py` selects v2 via
+`AGENT_NAME`. Design record: [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s
+`0.3.0` entry — the underlying spec/plan are gitignored local notes, not present in a fresh clone.
+
 ### LLM selection
 
 `common/llm_catalog.get_llm(kind: LlmKind)` returns a lazily-constructed `LiteLlm` instance, cached per `LlmKind`
@@ -174,7 +209,8 @@ in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
 
-Current models: reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash`. The reasoning
+Current models: reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash-0731` (DeepSeek's
+official V4-Flash release, 2026-07-31, superseding the preview build previously pinned here). The reasoning
 slot moved off `openai/gpt-5` (2026-07-31) because its workload — `schema_proposal_agent`'s propose/critique/refine
 trio and `graph_construction_agent` — is many small tool-orchestration steps at `reasoning_effort="low"`, which is
 exactly Luna's target profile, at ~1/16th the output cost. LiteLLM has no `openrouter/openai/gpt-5.6-luna` entry in

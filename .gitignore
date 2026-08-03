@@ -23,4 +23,7 @@ prototype/
 .superpowers/
 
 # Design docs and plans -- kept locally, not published
-docs/
+docs/superpowers/
+
+# Local defect/follow-up notes, not a committed project artifact
+docs/backlog/
