@@ -198,8 +198,8 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
   push URL. Work goes to `origin`. `gh` resolves to the wrong repo without an explicit `--repo`.
 - **Design notes are local-only.** `.gitignore:26` and `:29` exclude `docs/superpowers/` and
   `docs/backlog/`. Documents there are absent from a fresh clone — do not cite those paths as if a
-  reader can open them. The rest of `docs/` is not ignored — but note that nothing under `docs/` is
-  tracked yet, so this file must be committed before a fresh clone will have it.
+  reader can open them. Only those two subdirectories are excluded; the rest of `docs/`, including this
+  file, is tracked normally and is where a durable, shared project doc belongs.
 - **Tests.** `uv run pytest` defaults to `-m 'not integration'`, so it never touches Docker; integration
   tests are opt-in with `-m integration` and skip cleanly when no Docker daemon is reachable.
 - No linter or formatter, and no CI, are configured.
@@ -218,7 +218,8 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 | 0.2.0 | 2026-07-29 | Foundation: `fsspec` file sources, driver-side CSV loading, OpenRouter + per-job models (#2) |
 | 0.1.0 | 2026-07-26 | Test-suite fixes (#1) |
 
-`## [Unreleased]` in `CHANGELOG.md` is empty.
+`## [Unreleased]` in `CHANGELOG.md` accumulates merged-but-unreleased changes; check it for anything
+landed since 0.4.0.
 
 **Next**, in order — designs are settled and recorded in local notes; specs are not yet written:
 
