@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Living spec (#6)**: `docs/spec.md`, a verified orientation document covering what the project is, the two
   entry points and why only one is maintained, the construction workflow as it actually runs, what retrieval
   grounding does and does not guard against, and the current shipped/next state.
+- **Explicit construction handoff (#8)**: the post-construction question window now states which agent
+  is answering, keeps the continue-or-hand-off choice on screen, and ends only on the user's explicit
+  confirmation — recorded by a tool call and enforced by a session-state gate, not inferred from tone.
+  Confirming transfers straight to the retrieval agent rather than stalling at the coordinator.
 
 ## [0.4.0] - 2026-08-03
 
