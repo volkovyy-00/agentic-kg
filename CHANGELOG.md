@@ -33,9 +33,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Foundation (#2)**: file sources via `fsspec`, driver-side CSV loading, and OpenRouter with per-job
   model selection.
 
+### Security
+- **Path traversal in file source resolution (#2)**: an unchecked relative path (e.g. `"../.env"`) could
+  escape the configured source root and read arbitrary files, including the OpenRouter key and Neo4j
+  credentials in `.env`.
+
 ### Fixed
 - Driver-side CSV loading replaces `LOAD CSV FROM file:///`, which Neo4j Aura rejects (#2).
 - `finished()`'s private-API parent-agent lookup, replaced with a documented public-API path (#2).
+- A ragged CSV row could silently erase properties an earlier row had already loaded onto the same
+  entity (#2).
+- `schema_refinement_loop` could silently revert a user-requested schema fix with no error surfaced (#2).
+- File reads defaulted to the platform's locale encoding instead of `utf-8`, and OpenRouter calls with no
+  `max_tokens` cap could pre-authorize against the full token ceiling and fail with an opaque 402 (#2).
 
 ## [0.1.0] - 2026-07-26
 
