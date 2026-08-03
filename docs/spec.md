@@ -101,14 +101,15 @@ coordinator's prose, is what actually enforces the ordering.
    with `join_preview` / `column_stats` / `collapse_check` and returns `valid` or `retry`. Writes
    `proposed_construction_plan`, `feedback`, `approved_construction_plan`.
 4. **`graph_construction_agent_v1`** — reads the approved plan, creates uniqueness constraints, and runs
-   `build_graph_from_construction_rules`. Writes **nothing** to session state.
+   `build_graph_from_construction_rules`. Writes one key, `construction_handoff_confirmed`, a
+   per-turn flag gating the explicit handoff to stage 5.
 5. **`graphrag_agent_v2`** — answers questions over the finished graph. Reads and writes nothing.
 
 In the traced run this produced Supplier 20 / Part 88 / Product 10 / Assembly 64 nodes and SUPPLIES 176
-/ PART_OF 88 / ASSEMBLY_OF 64 relationships from the bundled `data/bom` example. Final state held nine
+/ PART_OF 88 / ASSEMBLY_OF 64 relationships from the bundled `data/bom` example. Final state held ten
 keys: `perceived_user_goal`, `approved_user_goal`, `all_available_files`, `suggested_file_list`,
 `approved_file_list`, `schema_refinement_calls_this_turn`, `feedback`, `proposed_construction_plan`,
-`approved_construction_plan`.
+`approved_construction_plan`, `construction_handoff_confirmed`.
 
 Source files are read by the application (via `fsspec`, `common/file_source.py`) and loaded with
 parameterised `UNWIND` batches — never by the database. There is no Neo4j import directory to manage,
@@ -120,8 +121,9 @@ which is what makes the whole path work unchanged on Aura.
   invocation, the second call short-circuited with `stopped: …`, and the coordinator correctly fell back
   to asking the user to decide. Note the key is zeroed on every entry to the stage coordinator, so its
   stored value tells you nothing about earlier turns.
-- **Stages 4 and 5 leave no trace in session state.** Whether a graph was built, and what it contains,
-  is recoverable only from the event transcript or by querying Neo4j. A resumed session cannot tell.
+- **Stage 4 writes one flow-control flag; neither stage records what it did.** Whether a graph was
+  built, and what it contains, is still recoverable only from the event transcript or by querying
+  Neo4j. A resumed session cannot tell.
 - The coordinator's `get_physical_schema` check is framed as "is the database empty," but **nothing
   gates on the answer**. Construction MERGEs into whatever is already there, and the retrieval stage
   will then profile those foreign labels as part of the graph.
