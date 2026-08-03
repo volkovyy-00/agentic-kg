@@ -10,6 +10,10 @@ import inspect
 
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
+from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.agent import (
+    graph_construction_agent,
+    reset_construction_handoff_confirmation,
+)
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
     GRAPHRAG_AGENT_NAME,
     finished,
@@ -104,3 +108,37 @@ def test_the_retrieval_agent_resolves_in_the_agent_tree():
     find_agent raise inside a transfer chain with no trace span.
     """
     assert full_workflow_agent.find_agent(GRAPHRAG_AGENT_NAME) is not None
+
+
+class FakeCallbackContext:
+    """A callback context carrying state only -- callbacks never touch .actions."""
+
+    def __init__(self, state=None):
+        self.state = dict(state or {})
+
+
+def test_reset_clears_a_previous_confirmation():
+    """Catches a reset that only initialises a missing key. A confirmation from
+    an earlier turn -- or from an earlier graph built in the same session --
+    would otherwise let 'finished' transfer on the model's judgment alone."""
+    context = FakeCallbackContext({HANDOFF_CONFIRMED_KEY: True})
+    reset_construction_handoff_confirmation(context)
+    assert context.state[HANDOFF_CONFIRMED_KEY] is False
+
+
+def test_reset_is_wired_onto_the_construction_agent():
+    """Catches the callback being defined but never attached, which leaves the
+    flag sticky for the whole session and silently disables the gate after the
+    first successful handoff."""
+    callbacks = graph_construction_agent.canonical_before_agent_callbacks
+    assert reset_construction_handoff_confirmation in callbacks
+
+
+def test_reset_parameter_is_named_callback_context():
+    """Catches a rename. ADK invokes these callbacks by keyword
+    (base_agent.py:385-387), so a different parameter name fails at request
+    time with a TypeError rather than at import."""
+    parameters = list(
+        inspect.signature(reset_construction_handoff_confirmation).parameters
+    )
+    assert parameters == ["callback_context"]
