@@ -10,9 +10,9 @@ that mirrors the deeplearning.ai course structure it was forked from.
   via ADK session state, tool result conventions) and the current work-in-progress section. Don't re-derive
   decisions that are already recorded there.
 - Set up the project per `README.md` (`uv venv && uv sync`, `.env` from `.env.example`).
-- `docs/superpowers/specs/` and `docs/superpowers/plans/` hold the design record for past and current
-  sub-projects — read the relevant spec before touching an area it covers, rather than reverse-engineering
-  intent from the code alone.
+- `docs/superpowers/specs/` and `docs/superpowers/plans/` may hold design notes for past and current
+  sub-projects, but they're gitignored local scratch (see "Documenting significant design decisions" below)
+  — don't expect them in a fresh clone, and don't rely on them being there.
 
 ## Branches and PRs
 
@@ -41,9 +41,10 @@ only with a stated reason (e.g. "covered by the existing fake in `tests/unit/fak
 
 ## Documenting significant design decisions
 
-This project doesn't use a separate ADR directory, and `docs/` as a whole is gitignored by deliberate policy
-(`e02de39`: "keep design docs and plans local, out of the published repo") — nothing under it is shared via
-git, including `docs/superpowers/specs/` and `docs/superpowers/plans/`. If you write a design spec before
+This project doesn't use a separate ADR directory. `docs/superpowers/` (specs and plans) and `docs/backlog/`
+(defect/follow-up notes) are gitignored by deliberate policy (`e02de39`: "keep design docs and plans local,
+out of the published repo") — nothing under either is shared via git. The rest of `docs/` is tracked normally;
+that's where a durable, shared project doc (e.g. the living spec) belongs. If you write a design spec before
 implementing a decision with long-term impact (new sub-agent architecture, a change to state-passing
 conventions, a new external dependency, a retrieval/construction behavior change with user-visible
 consequences), treat it as your own local working notes, not a shared project record: a fresh clone will not
@@ -53,14 +54,13 @@ merge into `main`'s history. Skip writing a spec at all for tactical bug fixes, 
 rationale fits directly in the PR description.
 
 The same applies to defect write-ups: if you hit something real but out of scope for the PR you're in, a
-handoff note under `docs/` is fine as your own scratch reference or as a draft to paste into an external
-tracker, but it will not be visible to anyone else from the repo. Anything another contributor needs to see
-belongs in an issue, not a local file.
+handoff note under `docs/backlog/` is fine as your own scratch reference or as a draft to paste into an
+external tracker, but it will not be visible to anyone else from the repo. Anything another contributor needs
+to see belongs in an issue, not a local file.
 
 ## CHANGELOG
 
-Once `CHANGELOG.md` exists (it does not yet — the PR that adds it should also add the first entry),
-every PR that adds, changes, or fixes user-visible behavior updates it:
+Every PR that adds, changes, or fixes user-visible behavior updates `CHANGELOG.md`:
 
 - Semantic versioning, three segments only (`MAJOR.MINOR.PATCH`) — no `0.1.3.1`.
   - Patch: bug fixes, small internal changes.
@@ -82,5 +82,5 @@ Example:
 
 ## Getting help
 
-Open an issue, or check `CLAUDE.md`'s architecture section and the relevant `docs/superpowers/specs/` entry
-first — most "why does this work this way" questions are already answered there.
+Open an issue, or check `CLAUDE.md`'s architecture section first — most "why does this work this way"
+questions are already answered there.
