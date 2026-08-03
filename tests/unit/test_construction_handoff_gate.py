@@ -142,3 +142,16 @@ def test_reset_parameter_is_named_callback_context():
         inspect.signature(reset_construction_handoff_confirmation).parameters
     )
     assert parameters == ["callback_context"]
+
+
+def test_confirm_tool_is_wired_into_the_construction_variant():
+    """Catches an instruction that tells the model to call
+    'confirm_construction_handoff' when the tool was never added to the
+    variant's tools list -- the model would then be unable to end the phase at
+    all, since 'finished' refuses without it."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
+        variants,
+    )
+    tools = variants["graph_construction_agent_v1"]["tools"]
+    assert confirm_construction_handoff in tools
+    assert finished in tools

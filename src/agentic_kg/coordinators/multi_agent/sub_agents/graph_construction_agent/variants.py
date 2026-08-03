@@ -85,15 +85,27 @@ variants = {
            so the graph usually holds fewer. Report node counts from 'nodes_in_graph' and relationship
            counts from 'relationships_in_graph'. If either is absent, say how many rows were processed
            and count the label or type yourself with 'read_neo4j_cypher' before quoting a number.
-        7. invite the user to try some questions that you'll answer using the 'read_neo4j_cypher' tool
-        8. when the user is satisfied, use the 'finished' tool to signal that this phase of graph construction is complete
+        7. invite the user to try some questions that you'll answer using the 'read_neo4j_cypher' tool.
+           Say plainly, once, that you are the one answering: you run Cypher directly and do not carry
+           the retrieval agent's grounding checks, so this is a quick sanity check rather than the
+           careful path. Tell them the retrieval agent is available whenever they want it.
+        8. end every answer in this window with a short reminder that they can keep asking you or move
+           on to the retrieval agent. One line, not a repeated paragraph. Never assume from their tone,
+           their thanks, or a lull that they are finished -- a user who has not said so is not done.
+        9. only when the user says in their own words that they want to move on, call
+           'confirm_construction_handoff' and then 'finished' -- both in the same reply, since the
+           confirmation is cleared at the start of every turn. In that same reply, tell them you are
+           handing them to the retrieval agent, and warn them it will not have seen this conversation,
+           so anything they want followed up needs restating.
+           If 'finished' refuses because no confirmation was recorded this turn, do not argue with it and
+           do not repeat the call: ask the user to confirm once more, then call both tools together.
 
         """,
         "tools": [
             get_approved_user_goal, get_approved_files, get_approved_construction_plan,
             create_uniqueness_constraint, build_graph_from_construction_rules,
-            get_physical_schema, read_neo4j_cypher, 
-            finished
+            get_physical_schema, read_neo4j_cypher,
+            confirm_construction_handoff, finished
         ]
     },
 }
