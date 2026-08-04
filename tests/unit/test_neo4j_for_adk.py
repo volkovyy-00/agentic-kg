@@ -329,3 +329,38 @@ def test_get_driver_reconnects_after_close(db, monkeypatch):
 
     assert db.get_driver() is rebuilt
     assert db._closed is False
+
+
+def test_close_graphdb_keeps_the_singleton(monkeypatch):
+    """The five module-level `graphdb = get_graphdb()` bindings are what makes
+    discarding the singleton a defect. Preserving identity is the whole fix."""
+    monkeypatch.setattr(neo4j_for_adk, "_graphdb_singleton", None)
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    first = neo4j_for_adk.get_graphdb()
+    neo4j_for_adk.close_graphdb()
+
+    assert neo4j_for_adk.get_graphdb() is first
+    assert first.send_query("RETURN 1")["status"] == "success"
+
+
+def test_exit_handlers_do_not_accumulate_across_close_cycles(monkeypatch):
+    registered = []
+    monkeypatch.setattr(neo4j_for_adk, "_graphdb_singleton", None)
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+    monkeypatch.setattr(
+        neo4j_for_adk.atexit, "register", lambda fn: registered.append(fn))
+
+    neo4j_for_adk.get_graphdb()
+    after_one = len(registered)
+
+    for _ in range(10):
+        neo4j_for_adk.close_graphdb()
+        neo4j_for_adk.get_graphdb()
+
+    assert after_one == 1
+    assert len(registered) == after_one

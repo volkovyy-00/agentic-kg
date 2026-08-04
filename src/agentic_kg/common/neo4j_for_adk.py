@@ -414,8 +414,13 @@ def get_graphdb() -> Neo4jForADK:
     return _graphdb_singleton
 
 def close_graphdb():
-    global _graphdb_singleton
+    """Close the shared client's connection without discarding the client.
+
+    Discarding it was KG-1: five modules bind `graphdb = get_graphdb()` at
+    import time and never re-read the name, so a discarded singleton left every
+    one of them holding a closed driver for the life of the process. The
+    instance now reopens on next use instead.
+    """
     if _graphdb_singleton is not None:
         _graphdb_singleton.close()
-        _graphdb_singleton = None
     
