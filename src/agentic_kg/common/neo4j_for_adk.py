@@ -5,6 +5,7 @@ import atexit
 import logging
 
 from neo4j import (
+    Driver,
     GraphDatabase,
     Query,
     READ_ACCESS,
@@ -64,7 +65,7 @@ def load_neo4j_config_from_settings() -> Neo4jConfig:
 
     return neo4j_config
 
-def make_driver(neo4j_config: Neo4jConfig) -> GraphDatabase | None:
+def make_driver(neo4j_config: Neo4jConfig) -> Driver:
     """
     Connects to a Neo4j Graph Database according to the provided configuration.
     """
@@ -260,6 +261,35 @@ class Neo4jForADK:
             self._driver.close()
         self._closed = True
 
+    def _ensure_connected(self):
+        """Rebuild the driver if close() has run. No-op otherwise.
+
+        Config is re-derived from settings rather than reusing
+        self._neo4j_config: tests/integration/conftest.py points NEO4J_DSN at a
+        test container and calls reset_settings() before closing, and reusing
+        the captured config would silently reconnect to the old database. In
+        production this is a no-op -- get_settings() is a cached singleton that
+        production code never resets.
+
+        Deliberate narrowing: an instance built with an explicit config,
+        Neo4jForADK(cfg), loses that config here in favour of ambient settings.
+        The repo's only such construction
+        (tests/integration/test_neo4j_for_adk_integration.py) closes in a
+        finally and never reuses the instance, so nothing depends on it. This
+        is intended, not an oversight -- do not "fix" it by tracking whether
+        the config was overridden.
+
+        Two concurrent tool calls can both observe _closed and both build a
+        driver; one wins and the other is garbage-collected. Harmless, and left
+        unguarded on purpose: a lock here would be connection-health policy,
+        which KG-1 puts out of scope.
+        """
+        if not self._closed:
+            return
+        self._neo4j_config = load_neo4j_config_from_settings()
+        self._driver = make_driver(self._neo4j_config)
+        self._closed = False
+
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
         # Session creation sits INSIDE the try deliberately. With it outside,
         # a driver that cannot open a session raises straight out of this
@@ -269,6 +299,7 @@ class Neo4jForADK:
         # returns, so a write that fails never counts.
         session = None
         try:
+            self._ensure_connected()
             session = self._driver.session(database=self._neo4j_config.database)
             result = session.run(cypher_query, parameters or {})
             adk_result = result_to_adk(result)
@@ -304,6 +335,7 @@ class Neo4jForADK:
         """
         session = None
         try:
+            self._ensure_connected()
             # Inside the try, for the same reason as send_query: a failure to
             # open the session must return a structured error, not raise.
             session = self._driver.session(

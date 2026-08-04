@@ -74,6 +74,13 @@ class FakeDriver:
         self.closed += 1
 
 
+class FakeConfig:
+    """Stands in for Neo4jConfig. `uri` exists because the reconnect log line
+    (Task 5) reads it; `database` because send_query passes it to session()."""
+    database = "neo4j"
+    uri = "bolt://fake:7687"
+
+
 @pytest.fixture
 def db(monkeypatch):
     monkeypatch.setattr(Neo4jForADK, "__init__", lambda self: None)
@@ -239,3 +246,71 @@ def test_close_twice_does_not_close_the_driver_twice(db):
     db.close()
     assert db._driver.closed == 1
     assert db._closed is True
+
+
+def test_send_query_reconnects_after_close(db, monkeypatch):
+    rebuilt = FakeDriver()
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    result = db.send_query("MATCH (n) RETURN n")
+
+    assert result["status"] == "success", result.get("error_message")
+    assert db._driver is rebuilt
+    assert db._closed is False
+
+
+def test_send_read_query_reconnects_after_close(db, monkeypatch):
+    rebuilt = FakeDriver()
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    result = db.send_read_query("MATCH (n) RETURN n")
+
+    assert result["status"] == "success", result.get("error_message")
+    assert db._driver is rebuilt
+
+
+def test_reconnect_rederives_config_instead_of_reusing_it(db, monkeypatch):
+    """The integration fixture swaps NEO4J_DSN and calls reset_settings()
+    before closing. Reusing the config captured at construction would silently
+    reconnect to the old database -- see the spec's "Config is re-derived"
+    section."""
+    calls = []
+    fresh = FakeConfig()
+    fresh.database = "swapped"
+
+    def load():
+        calls.append(1)
+        return fresh
+
+    monkeypatch.setattr(neo4j_for_adk, "load_neo4j_config_from_settings", load)
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+
+    db.close()
+    db.send_query("RETURN 1")
+
+    assert calls == [1]
+    assert db._neo4j_config is fresh
+    # The re-derived config is the one actually used, not just stored.
+    assert db._driver.sessions[0]["database"] == "swapped"
+
+
+def test_a_failed_reconnect_returns_a_tool_error_rather_than_raising(db, monkeypatch):
+    """_ensure_connected sits INSIDE the existing try, for the reason those
+    methods already document for session creation: a failure must reach the
+    agent as a structured error, not raise mid-turn."""
+    def boom():
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr(neo4j_for_adk, "load_neo4j_config_from_settings", boom)
+
+    db.close()
+    result = db.send_query("RETURN 1")
+
+    assert result["status"] == "error"
+    assert "settings unavailable" in result["error_message"]
