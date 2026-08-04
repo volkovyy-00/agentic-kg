@@ -11,6 +11,9 @@ def _neo4j_graph(monkeypatch, container):
     with container as container:
         url = container.get_connection_url()
         host_port = url.split("//")[1]
+        # The DSN below is still built from container.username/container.password
+        # rather than written as a literal, so the two can never drift even though
+        # we know their values -- don't "simplify" this back to a literal DSN.
         monkeypatch.setenv(
             "NEO4J_DSN",
             f"bolt://{container.username}:{container.password}@{host_port}/neo4j",
@@ -41,9 +44,7 @@ def neo4j_graph(monkeypatch):
     # os.environ mid-test-session (e.g. a transitively-imported library calling
     # dotenv.load_dotenv() at import time) -- so a container left to pick its own default
     # can silently come up with a password other than "password". Pinning here removes
-    # that dependency entirely. The DSN below is still built from container.username/
-    # container.password rather than written as a literal, so the two can never drift
-    # even though we know their values -- don't "simplify" this back to a literal DSN.
+    # that dependency entirely.
     container = Neo4jContainer(image="neo4j:5", username="neo4j", password="password")
     yield from _neo4j_graph(monkeypatch, container)
 
@@ -59,9 +60,7 @@ def neo4j_graph_with_apoc(monkeypatch):
     # os.environ mid-test-session (e.g. a transitively-imported library calling
     # dotenv.load_dotenv() at import time) -- so a container left to pick its own default
     # can silently come up with a password other than "password". Pinning here removes
-    # that dependency entirely. The DSN below is still built from container.username/
-    # container.password rather than written as a literal, so the two can never drift
-    # even though we know their values -- don't "simplify" this back to a literal DSN.
+    # that dependency entirely.
     #
     # APOC-enabled, unlike `neo4j_graph`: every neo4j_graphrag.get_structured_schema
     # path is APOC-only (CALL apoc.meta.data / apoc.meta.graph), so any test that reads

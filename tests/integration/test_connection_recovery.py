@@ -107,7 +107,19 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(neo4j_graph_with
     # a hard error on all four production call paths this test exercises, so
     # asserting its absence now is what actually catches a regressed
     # reconnection call site rather than the driver's own leniency.
-    closed_warnings = [w for w in caught if "closed" in str(w.message).lower()]
+    #
+    # Matched narrowly on category plus the driver's exact phrase, not a bare
+    # "closed" substring: warnings.simplefilter("always") above also lifts
+    # Python's default ResourceWarning suppression, and this block drives a
+    # live Bolt pool and re-runs both CSV loaders, so an incidental
+    # "unclosed <socket...>" ResourceWarning from GC is a real possibility --
+    # its message also contains "closed" and would fail this assertion for a
+    # reason that has nothing to do with the defect under test.
+    closed_warnings = [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning)
+        and "after it has been closed" in str(w.message).lower()
+    ]
     assert not closed_warnings, [str(w.message) for w in closed_warnings]
 
 
@@ -128,6 +140,13 @@ def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph_with_apoc):
     # test_every_graph_tool_works_after_a_close_and_recover_cycle: neo4j 5.x's
     # Driver tolerates use after close() and only warns, so a passing
     # assertion above proves nothing about whether reconnection actually ran
-    # -- only the absence of this warning does.
-    closed_warnings = [w for w in caught if "closed" in str(w.message).lower()]
+    # -- only the absence of this warning does. Matched on category plus the
+    # driver's exact phrase, not a bare "closed" substring, since
+    # simplefilter("always") also surfaces ResourceWarning ("unclosed
+    # <socket...>") from this loop's own live connections.
+    closed_warnings = [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning)
+        and "after it has been closed" in str(w.message).lower()
+    ]
     assert not closed_warnings, [str(w.message) for w in closed_warnings]
