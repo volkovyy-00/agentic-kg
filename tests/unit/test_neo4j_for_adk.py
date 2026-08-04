@@ -61,11 +61,17 @@ class FakeDriver:
     def __init__(self, records=()):
         self.sessions = []
         self.queries = []
+        # Counts close() calls, so a test can tell "closed once" from
+        # "closed twice" -- which is the whole point of close() being idempotent.
+        self.closed = 0
         self._records = [FakeRecord(r) for r in records]
 
     def session(self, **config):
         self.sessions.append(config)
         return FakeSession(self.queries, self._records)
+
+    def close(self):
+        self.closed += 1
 
 
 @pytest.fixture
@@ -220,3 +226,16 @@ def test_values_summarised_is_false_when_nothing_was_omitted(db):
     assert payload["values_summarised"] is False
     assert payload["records"][0]["tags"] == ["a", "b"]
     assert "note" not in payload
+
+
+def test_close_shuts_the_driver_and_marks_the_instance_closed(db):
+    db.close()
+    assert db._driver.closed == 1
+    assert db._closed is True
+
+
+def test_close_twice_does_not_close_the_driver_twice(db):
+    db.close()
+    db.close()
+    assert db._driver.closed == 1
+    assert db._closed is True

@@ -220,6 +220,11 @@ class Neo4jForADK:
     """
     _driver = None
     _neo4j_config: Neo4jConfig = None
+    # Class-level, not set in __init__: two test fixtures build instances that
+    # never run __init__ (a stubbed __init__ in tests/unit/test_neo4j_for_adk.py
+    # and Neo4jForADK.__new__ in tests/integration/test_graph_profile_shapes.py).
+    # A class default makes both read as open.
+    _closed = False
 
     def __init__(self, neo4j_config: Neo4jConfig = None):
         if neo4j_config is None:
@@ -241,7 +246,19 @@ class Neo4jForADK:
         return self._neo4j_config
 
     def close(self):
-        return self._driver.close()
+        """Shut the driver. The instance stays usable: the next call to
+        send_query, send_read_query or get_driver rebuilds the connection.
+
+        Named `close` because its callers -- atexit and close_graphdb -- mean
+        "release the connection now". It is not a teardown: this object's
+        identity is what five modules hold at import time, so discarding it is
+        exactly the defect KG-1 fixes. Idempotent.
+
+        Returns None; the driver's own close() return value was never consumed.
+        """
+        if self._driver is not None and not self._closed:
+            self._driver.close()
+        self._closed = True
 
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
         # Session creation sits INSIDE the try deliberately. With it outside,
