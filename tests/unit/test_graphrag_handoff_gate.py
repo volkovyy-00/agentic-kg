@@ -2,10 +2,10 @@
 
 The gate exists because `graphrag_agent_v2` used to decide for itself when the
 user was finished asking questions, ejecting them back to the coordinator after
-a single answer (`docs/backlog/graphrag-agent-exits-unasked.md`). These tests
-cover the mechanism only -- whether the model actually stays and invites the
-next question is not unit-testable and is verified by hand (see the plan's
-Task 5).
+a single answer (see CHANGELOG.md's "Explicit retrieval handoff (#9)" entry).
+These tests cover the mechanism only -- whether the model actually stays and
+invites the next question is not unit-testable and is verified by hand (see
+PR #9's description for the verification steps).
 """
 import inspect
 

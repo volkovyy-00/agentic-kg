@@ -1,7 +1,8 @@
 """Module for storing and retrieving agent instructions.
 
-This module defines functions that return instruction prompts for the cypher agent.
-These instructions guide the agent's behavior, workflow, and tool usage.
+This module defines functions that return instruction prompts for the graphrag
+(retrieval) agent. These instructions guide the agent's behavior, workflow, and
+tool usage.
 """
 from typing import Any, Dict
 

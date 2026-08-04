@@ -103,7 +103,7 @@ coordinator's prose, is what actually enforces the ordering.
 4. **`graph_construction_agent_v1`** — reads the approved plan, creates uniqueness constraints, and runs
    `build_graph_from_construction_rules`. Writes one key, `construction_handoff_confirmed`, a
    per-turn flag gating the explicit handoff to stage 5.
-5. **`graphrag_agent_v2`** — answers questions over the finished graph. Reads nothing; writes one key,
+5. **`graphrag_agent_v2`** — answers questions over the finished graph. Reads and writes one key,
    `graphrag_handoff_confirmed`, a per-turn flag gating the explicit handoff back to the coordinator.
 
 In the traced run this produced Supplier 20 / Part 88 / Product 10 / Assembly 64 nodes and SUPPLIES 176

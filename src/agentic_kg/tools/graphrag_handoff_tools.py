@@ -3,10 +3,10 @@
 `graphrag_agent_v2` answers questions over the finished graph, and used to
 decide for itself when that window was over -- ejecting the user back to the
 coordinator after a single answer, without ever being told they were done
-(`docs/backlog/graphrag-agent-exits-unasked.md`). Leaving the end of that
-window to the model's reading of "the user seems satisfied" is what this module
-removes: the flag below is set only by an explicit tool call, and the retrieval
-agent's own `finished` wrapper refuses to transfer without it.
+(see CHANGELOG.md's "Explicit retrieval handoff (#9)" entry). Leaving the end
+of that window to the model's reading of "the user seems satisfied" is what
+this module removes: the flag below is set only by an explicit tool call, and
+the retrieval agent's own `finished` wrapper refuses to transfer without it.
 
 This deliberately duplicates `construction_handoff_tools.py` rather than
 sharing with it. The two gates' `finished` wrappers differ in transfer
