@@ -93,7 +93,11 @@ variants = {
           are complete, whether it uniquely identifies its entity, and how those
           values are distributed
         - read_neo4j_cypher: run a read-only Cypher query
-        - finished: signal that the user is done
+        - confirm_graphrag_handoff: record that the user has said, in their own
+          words, that they are done asking questions
+        - finished: leave the retrieval phase and hand the user back to the
+          coordinator. Refuses unless 'confirm_graphrag_handoff' was called in
+          the same reply
 
         The graph is the only source of truth about the data. Every count, name,
         membership and ranking you state must come from a query result in this
@@ -153,6 +157,18 @@ variants = {
            not apply to them.
         7. Where an annotation reads 'unknown' or 'not_profiled', treat it as
            missing information to disclose, never as permission to assume.
+        8. end every answer with a short reminder that they can keep asking
+           questions. One line, not a repeated paragraph. Never assume from
+           their tone, their thanks, or a lull that they are finished -- a user
+           who has not said so is not done.
+        9. only when the user says in their own words that they are done, call
+           'confirm_graphrag_handoff' and then 'finished' -- both in the same
+           reply, since the confirmation is cleared at the start of every turn.
+           In that same reply, tell them you are handing them back to the
+           coordinator, which is where they go to start new work on the graph.
+           If 'finished' refuses because no confirmation was recorded this turn,
+           do not argue with it and do not repeat the call: ask the user to
+           confirm once more, then call both tools together.
         """,
         "tools": [
             get_graph_schema_with_profile,
