@@ -57,9 +57,9 @@ clone has. Sub-projects 2 and 3 remain the actual next work and are still unstar
 
 Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
 spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
-of it), a README rewrite (PR #7), and explicit construction-handoff confirmation (PR #8, most recent on
-`main`) — see Architecture's *Construction handoff confirmation* subsection. None of these touch sub-projects
-2/3, which remain unstarted.
+of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), and the same gate
+applied to the retrieval phase (PR #9, most recent on `main`) — see Architecture's *Handoff confirmation
+gates* subsection. None of these touch sub-projects 2/3, which remain unstarted.
 
 ## Commands
 
@@ -82,6 +82,8 @@ uv run pytest -q -m integration
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
+- Pinned to `google-adk>=1.10,<2` (`pyproject.toml`) — ADK 2.x is a breaking rewrite; check which major
+  version any ADK doc, sample, or blog post is describing before trusting it against this code.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
 - If using colima instead of Docker Desktop, integration tests need:
@@ -165,11 +167,24 @@ invocation per user turn (deliberate, not an unexplained restriction): `reset_sc
 (coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
 `before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
 
-`graph_construction_agent` uses the same state-gate shape for a different purpose: `HANDOFF_CONFIRMED_KEY`
-(`tools/construction_handoff_tools.py`) must be set by an explicit `confirm_construction_handoff` tool call
-before its `finished` wrapper will transfer control — never inferred from tone. `reset_construction_handoff_confirmation`
-(a `before_agent_callback`) clears the flag every turn. On confirmation, transfer goes directly to
-`graphrag_agent_v2`, not back through the coordinator — the numbered sequence above simplifies this one step.
+### Handoff confirmation gates
+
+Two phase transitions reuse the same state-gate shape as `schema_refinement_loop`'s turn cap above, but to
+gate a `finished` transfer behind an explicit tool call instead of the model's own reading of the conversation:
+
+- **Construction → retrieval** (PR #8): `graph_construction_agent`'s `finished` wrapper refuses to transfer
+  until `HANDOFF_CONFIRMED_KEY` (`tools/construction_handoff_tools.py`) is set by an explicit
+  `confirm_construction_handoff` tool call — never inferred from tone. `reset_construction_handoff_confirmation`
+  (a `before_agent_callback`) clears the flag every turn. On confirmation, transfer goes directly to
+  `graphrag_agent_v2`, not back through the coordinator — the numbered sequence above simplifies this one step.
+- **Retrieval → coordinator** (PR #9): the same shape on `graphrag_agent_v2`, so it stays in the retrieval
+  phase across multiple questions instead of ejecting the user after a single answer.
+  `GRAPHRAG_HANDOFF_CONFIRMED_KEY` (`tools/graphrag_handoff_tools.py`) is set by `confirm_graphrag_handoff`;
+  `finished` refuses to transfer without it; `reset_graphrag_handoff_confirmation` clears it every turn.
+  Deliberately not factored into a shared helper with the construction gate — the two `finished` wrappers
+  differ in transfer topology (sideways to a live-imported sibling vs. up to a plain constant), so a shared
+  factory would need to parametrise over more than a state key. `graphrag_agent_v1` has no gate and keeps
+  its original single-answer-then-eject behavior, for the A/B comparison described below.
 
 ### Tool results
 
