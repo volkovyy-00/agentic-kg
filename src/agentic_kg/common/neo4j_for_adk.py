@@ -226,6 +226,10 @@ class Neo4jForADK:
     # and Neo4jForADK.__new__ in tests/integration/test_graph_profile_shapes.py).
     # A class default makes both read as open.
     _closed = False
+    # Set when a rebuild happens, cleared by the first query that succeeds
+    # afterwards. Does not expire: a heal seen only through get_driver stays
+    # unconfirmed until some query proves the connection works.
+    _reconnected_unconfirmed = False
 
     def __init__(self, neo4j_config: Neo4jConfig = None):
         if neo4j_config is None:
@@ -298,6 +302,18 @@ class Neo4jForADK:
         self._neo4j_config = load_neo4j_config_from_settings()
         self._driver = make_driver(self._neo4j_config)
         self._closed = False
+        self._reconnected_unconfirmed = True
+        # States what was done, not that the database is reachable:
+        # GraphDatabase.driver() does not touch the network, so no recovery
+        # claim can honestly be made until a query succeeds.
+        logger.info(
+            "Neo4j driver was closed; rebuilding for %s", self._neo4j_config.uri)
+
+    def _confirm_reconnect(self):
+        """Report a recovery once, after evidence for it exists."""
+        if self._reconnected_unconfirmed:
+            self._reconnected_unconfirmed = False
+            logger.info("Neo4j reconnected successfully")
 
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
         # Session creation sits INSIDE the try deliberately. With it outside,
@@ -314,6 +330,7 @@ class Neo4jForADK:
             adk_result = result_to_adk(result)
             if is_write_query(cypher_query):
                 self.write_count += 1
+            self._confirm_reconnect()
             return adk_result
         except Exception as e:
             return tool_error(str(e))
@@ -391,6 +408,7 @@ class Neo4jForADK:
                 logger.debug(
                     "Summarised %d oversized list value(s) totalling %d elements",
                     len(omitted), sum(omitted))
+            self._confirm_reconnect()
             return tool_success("query_result", payload)
         except Exception as e:
             return tool_error(str(e))

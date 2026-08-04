@@ -5,6 +5,8 @@ binding, which bypasses send_query entirely -- so it can never verify the
 counter that lives inside it. These tests fake one level lower, at the
 driver/session boundary, so the real send_query body runs.
 """
+import logging
+
 import pytest
 
 from agentic_kg.common import neo4j_for_adk
@@ -364,3 +366,36 @@ def test_exit_handlers_do_not_accumulate_across_close_cycles(monkeypatch):
 
     assert after_one == 1
     assert len(registered) == after_one
+
+
+def test_reconnect_logs_the_rebuild_then_confirms_on_first_success(db, monkeypatch, caplog):
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    with caplog.at_level(logging.INFO, logger="agentic_kg.common.neo4j_for_adk"):
+        db.send_query("RETURN 1")
+        db.send_query("RETURN 1")
+        db.send_query("RETURN 1")
+
+    messages = [record.getMessage() for record in caplog.records]
+    # Once per heal, not once per query: a healthy connection must not become
+    # a noise source.
+    assert sum("rebuilding" in m for m in messages) == 1
+    assert sum("reconnected successfully" in m for m in messages) == 1
+
+
+def test_a_heal_seen_only_through_get_driver_stays_unconfirmed(db, monkeypatch):
+    """get_driver hands the driver to neo4j_graphrag and never reports back, so
+    the confirmation waits for a query. A known timing gap, not a defect."""
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    db.get_driver()
+    assert db._reconnected_unconfirmed is True
+
+    db.send_query("RETURN 1")
+    assert db._reconnected_unconfirmed is False
