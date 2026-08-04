@@ -55,6 +55,12 @@ for what shipped, and [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) 
 entry for the design record — the underlying spec/plan are gitignored local notes, not something a fresh
 clone has. Sub-projects 2 and 3 remain the actual next work and are still unstarted.
 
+Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
+spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
+of it), a README rewrite (PR #7), and explicit construction-handoff confirmation (PR #8, most recent on
+`main`) — see Architecture's *Construction handoff confirmation* subsection. None of these touch sub-projects
+2/3, which remain unstarted.
+
 ## Commands
 
 ```bash
@@ -96,7 +102,9 @@ uv run pytest -q -m integration
 
 - **`single_agent`** (`coordinators/single_agent/`) — one agent that talks to Neo4j directly via Cypher, delegating
   to `agents/cypher_agent` as a sub-agent for query execution.
-- **`multi_agent`** (`coordinators/multi_agent/`) — a hierarchical `LlmAgent` (`full_workflow_agent`) that delegates,
+- **`multi_agent`** (`coordinators/multi_agent/`) — a hierarchical `LlmAgent` (`full_workflow_agent`),
+  registered as `kg_construction_agent_v1` (`MULTI_AGENT_COORDINATOR` in `common/agent_names.py` — this is the
+  name to use when polling the ADK API, per the debugging steps below), that delegates,
   in strict sequence, through five sub-agents defined in `coordinators/multi_agent/sub_agents/`:
   1. `user_intent_agent` — establishes `kind_of_graph` / `graph_description`
   2. `file_suggestion_agent` — requires an approved user goal; suggests input files
@@ -113,7 +121,9 @@ place a swallowed exception actually surfaces. Never reload the tab while a turn
 
 Note there are **two separate implementations of similarly-named agents**: `src/agentic_kg/agents/` (standalone
 versions, e.g. `cypher_agent` — the one actually wired into `single_agent` — plus `user_intent_agent`, which is not
-currently used by either coordinator) vs. `src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired
+used by either coordinator, but is still imported by `src/agentic_kg/agent.py` — an orphaned top-level `root_agent`
+left over from the original course backport, not reachable via the documented `adk web` command and not part of
+either coordinator) vs. `src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired
 into the full workflow, with richer instructions/tools). They are not interchangeable — check which coordinator
 you're editing before reusing code between them. `agents/file_suggestion_agent/` used to be a third standalone
 implementation here; Foundation deleted it (see the *variants* section below).
@@ -154,6 +164,12 @@ control flow is the issue.
 invocation per user turn (deliberate, not an unexplained restriction): `reset_schema_refinement_turn_budget`
 (coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
 `before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
+
+`graph_construction_agent` uses the same state-gate shape for a different purpose: `HANDOFF_CONFIRMED_KEY`
+(`tools/construction_handoff_tools.py`) must be set by an explicit `confirm_construction_handoff` tool call
+before its `finished` wrapper will transfer control — never inferred from tone. `reset_construction_handoff_confirmation`
+(a `before_agent_callback`) clears the flag every turn. On confirmation, transfer goes directly to
+`graphrag_agent_v2`, not back through the coordinator — the numbered sequence above simplifies this one step.
 
 ### Tool results
 
