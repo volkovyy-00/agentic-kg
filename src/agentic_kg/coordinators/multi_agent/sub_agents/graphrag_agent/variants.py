@@ -47,9 +47,12 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
     """
     if not tool_context.state.get(GRAPHRAG_HANDOFF_CONFIRMED_KEY):
         return tool_error(
-            "no confirmation recorded this turn -- if the user already agreed, "
-            "ask them to confirm once more, then call "
-            "'confirm_graphrag_handoff' and 'finished' in the same reply."
+            "no confirmation recorded this turn -- if you called "
+            "'confirm_graphrag_handoff' later in this same reply, it has been "
+            "recorded now: call 'finished' once more and it will succeed. "
+            "Otherwise, if the user already agreed, ask them to confirm once "
+            "more, then call 'confirm_graphrag_handoff' and 'finished' in the "
+            "same reply, confirming first."
         )
     return _transfer_to_coordinator(tool_context)
 
@@ -167,8 +170,11 @@ variants = {
            In that same reply, tell them you are handing them back to the
            coordinator, which is where they go to start new work on the graph.
            If 'finished' refuses because no confirmation was recorded this turn,
-           do not argue with it and do not repeat the call: ask the user to
-           confirm once more, then call both tools together.
+           check whether you called 'confirm_graphrag_handoff' in that same
+           reply. If you did, the confirmation is recorded now -- just call
+           'finished' again. If you did not, do not argue with it and do not
+           repeat the call: ask the user to confirm once more, then call both
+           tools together, confirming first.
         """,
         "tools": [
             get_graph_schema_with_profile,
