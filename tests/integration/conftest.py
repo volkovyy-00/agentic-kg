@@ -7,21 +7,8 @@ test.
 import pytest
 
 
-@pytest.fixture
-def neo4j_graph(monkeypatch):
-    from testcontainers.neo4j import Neo4jContainer
-
-    # Pin credentials explicitly rather than letting testcontainers fall back to
-    # NEO4J_USER/NEO4J_PASSWORD from the ambient environment. Neo4jContainer's own
-    # default is `password or os.environ.get("NEO4J_PASSWORD", "password")`, and this
-    # repo's .env sets a real NEO4J_PASSWORD (for the Aura instance) that can leak into
-    # os.environ mid-test-session (e.g. a transitively-imported library calling
-    # dotenv.load_dotenv() at import time) -- so a container left to pick its own default
-    # can silently come up with a password other than "password". Pinning here removes
-    # that dependency entirely. The DSN below is still built from container.username/
-    # container.password rather than written as a literal, so the two can never drift
-    # even though we know their values -- don't "simplify" this back to a literal DSN.
-    with Neo4jContainer(image="neo4j:5", username="neo4j", password="password") as container:
+def _neo4j_graph(monkeypatch, container):
+    with container as container:
         url = container.get_connection_url()
         host_port = url.split("//")[1]
         monkeypatch.setenv(
@@ -41,3 +28,47 @@ def neo4j_graph(monkeypatch):
         yield neo4j_for_adk.get_graphdb()
 
         neo4j_for_adk.close_graphdb()
+
+
+@pytest.fixture
+def neo4j_graph(monkeypatch):
+    from testcontainers.neo4j import Neo4jContainer
+
+    # Pin credentials explicitly rather than letting testcontainers fall back to
+    # NEO4J_USER/NEO4J_PASSWORD from the ambient environment. Neo4jContainer's own
+    # default is `password or os.environ.get("NEO4J_PASSWORD", "password")`, and this
+    # repo's .env sets a real NEO4J_PASSWORD (for the Aura instance) that can leak into
+    # os.environ mid-test-session (e.g. a transitively-imported library calling
+    # dotenv.load_dotenv() at import time) -- so a container left to pick its own default
+    # can silently come up with a password other than "password". Pinning here removes
+    # that dependency entirely. The DSN below is still built from container.username/
+    # container.password rather than written as a literal, so the two can never drift
+    # even though we know their values -- don't "simplify" this back to a literal DSN.
+    container = Neo4jContainer(image="neo4j:5", username="neo4j", password="password")
+    yield from _neo4j_graph(monkeypatch, container)
+
+
+@pytest.fixture
+def neo4j_graph_with_apoc(monkeypatch):
+    from testcontainers.neo4j import Neo4jContainer
+
+    # Pin credentials explicitly rather than letting testcontainers fall back to
+    # NEO4J_USER/NEO4J_PASSWORD from the ambient environment. Neo4jContainer's own
+    # default is `password or os.environ.get("NEO4J_PASSWORD", "password")`, and this
+    # repo's .env sets a real NEO4J_PASSWORD (for the Aura instance) that can leak into
+    # os.environ mid-test-session (e.g. a transitively-imported library calling
+    # dotenv.load_dotenv() at import time) -- so a container left to pick its own default
+    # can silently come up with a password other than "password". Pinning here removes
+    # that dependency entirely. The DSN below is still built from container.username/
+    # container.password rather than written as a literal, so the two can never drift
+    # even though we know their values -- don't "simplify" this back to a literal DSN.
+    #
+    # APOC-enabled, unlike `neo4j_graph`: every neo4j_graphrag.get_structured_schema
+    # path is APOC-only (CALL apoc.meta.data / apoc.meta.graph), so any test that reads
+    # the physical or profiled schema needs it. See
+    # tests/integration/test_graph_profile_shapes.py, which documents and relies on the
+    # same constraint with its own APOC-enabled container.
+    container = Neo4jContainer(
+        image="neo4j:5", username="neo4j", password="password"
+    ).with_env("NEO4J_PLUGINS", '["apoc"]')
+    yield from _neo4j_graph(monkeypatch, container)
