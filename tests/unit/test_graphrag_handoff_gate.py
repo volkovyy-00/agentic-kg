@@ -9,10 +9,16 @@ Task 5).
 """
 import inspect
 
-from agentic_kg.common.tool_result import is_success
+from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.tools.graphrag_handoff_tools import (
     GRAPHRAG_HANDOFF_CONFIRMED_KEY,
     confirm_graphrag_handoff,
+)
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
+    _transfer_to_coordinator,
+    finished,
+    variants,
 )
 
 
@@ -58,3 +64,63 @@ def test_confirm_takes_no_arguments_beyond_context():
     the same reasoning make_finished documents for itself."""
     parameters = list(inspect.signature(confirm_graphrag_handoff).parameters)
     assert parameters == ["tool_context"]
+
+
+def test_finished_refuses_without_confirmation():
+    """Catches the gate being absent or inverted: an unconfirmed 'finished'
+    must neither report success nor set a transfer, or the phase ends on the
+    model's inference exactly as it did before."""
+    context = FakeToolContext()
+    result = finished(context)
+    assert is_error(result)
+    assert context.actions.transfer_to_agent is None
+
+
+def test_refusal_message_scopes_the_failure_to_this_turn():
+    """Catches a generic 'call confirm first' message. The likely cause of a
+    refusal is a confirmation from an earlier turn cleared by the per-turn
+    reset, so a message implying the user never agreed would relocate this
+    ticket's ambiguity into the error string."""
+    result = finished(FakeToolContext())
+    assert "this turn" in result["error_message"]
+
+
+def test_finished_transfers_to_the_coordinator_when_confirmed():
+    """Catches a gate that refuses even when confirmed, or a transfer target
+    changed while copying the construction gate -- whose wrapper deliberately
+    transfers sideways to a sibling instead of up to the coordinator."""
+    context = FakeToolContext({GRAPHRAG_HANDOFF_CONFIRMED_KEY: True})
+    result = finished(context)
+    assert result == {}
+    assert context.actions.transfer_to_agent == MULTI_AGENT_COORDINATOR
+
+
+def test_confirm_and_gated_finished_are_wired_into_v2():
+    """Catches an instruction that tells the model to call
+    'confirm_graphrag_handoff' when the tool was never added to the variant's
+    tools list -- the model would then be unable to end the phase at all,
+    since 'finished' refuses without it."""
+    tools = variants["graphrag_agent_v2"]["tools"]
+    assert confirm_graphrag_handoff in tools
+    assert finished in tools
+
+
+def test_v1_keeps_the_ungated_exit():
+    """Catches the two variants sharing one 'finished' object again. Gating
+    the module-level closure in place would leave v1 holding a gate with no
+    confirm tool beside it -- unable to end its phase at all -- and would stay
+    invisible until someone flips AGENT_NAME to _v1. Identity, not name: a
+    same-named-but-gated function must fail this."""
+    tools = variants["graphrag_agent_v1"]["tools"]
+    assert any(tool is _transfer_to_coordinator for tool in tools)
+    assert all(tool is not finished for tool in tools)
+
+
+def test_v1_exit_still_presents_to_the_model_as_finished():
+    """Catches a refactor of make_finished to a lambda or functools.partial.
+    ADK derives the model-facing tool name from __name__, so such a change
+    would silently rename v1's exit tool and falsify v1's own instruction line
+    ('finished: signal that the user is done with the graphrag agent') without
+    failing any other test. No other agent lists a renamed make_finished
+    result as a tool, so nothing else covers this."""
+    assert _transfer_to_coordinator.__name__ == "finished"

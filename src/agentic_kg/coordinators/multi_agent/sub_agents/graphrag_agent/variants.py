@@ -1,9 +1,12 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the cypher agent.
 These instructions guide the agent's behavior, workflow, and tool usage.
 """
+from typing import Any, Dict
+
+from google.adk.tools import ToolContext
+
 from agentic_kg.tools.cypher_tools import (
     get_graph_schema_with_profile,
     get_physical_schema,
@@ -12,8 +15,43 @@ from agentic_kg.tools.cypher_tools import (
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.adk_context import drop_foreign_context
+from agentic_kg.common.tool_result import tool_error
+from agentic_kg.tools.graphrag_handoff_tools import (
+    GRAPHRAG_HANDOFF_CONFIRMED_KEY, confirm_graphrag_handoff,
+)
 
-finished = make_finished(MULTI_AGENT_COORDINATOR)
+# v1's exit, ungated and unchanged in behaviour. v1 is a controlled A/B
+# variable (see agent.py) -- gating its exit would add handoff mechanics as a
+# second variable to a comparison whose point is isolating one.
+#
+# The rename matters: this used to be called 'finished' and was the SAME OBJECT
+# in both variants' tools lists, so gating it in place would have left v1 with
+# a gate and no confirm tool, unable to end its phase at all.
+#
+# It still presents to the model as a tool named 'finished' -- make_finished
+# returns a closure literally defined as 'def finished(...)', and ADK reads
+# __name__. That is pinned by a test, because no other agent in this tree lists
+# a renamed make_finished result as a tool.
+_transfer_to_coordinator = make_finished(MULTI_AGENT_COORDINATOR)
+
+
+def finished(tool_context: ToolContext) -> Dict[str, Any]:
+    """Finish retrieval and hand the user back to the coordinator.
+
+    Refuses unless 'confirm_graphrag_handoff' recorded the user's explicit
+    agreement in this same turn. Returns a bare {} on success, matching every
+    other 'finished' in this codebase; the error path is the only one that
+    speaks ToolResult.
+
+    v2 only. v1 holds '_transfer_to_coordinator' directly.
+    """
+    if not tool_context.state.get(GRAPHRAG_HANDOFF_CONFIRMED_KEY):
+        return tool_error(
+            "no confirmation recorded this turn -- if the user already agreed, "
+            "ask them to confirm once more, then call "
+            "'confirm_graphrag_handoff' and 'finished' in the same reply."
+        )
+    return _transfer_to_coordinator(tool_context)
 
 variants = {
 
@@ -37,7 +75,7 @@ variants = {
         "tools": [
             get_physical_schema, 
             read_neo4j_cypher,
-            finished
+            _transfer_to_coordinator
         ]
     },
 
@@ -119,6 +157,7 @@ variants = {
         "tools": [
             get_graph_schema_with_profile,
             read_neo4j_cypher,
+            confirm_graphrag_handoff,
             finished,
         ],
         "before_model_callback": drop_foreign_context,
