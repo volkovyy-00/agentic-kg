@@ -1,9 +1,13 @@
-
 """Module for storing and retrieving agent instructions.
 
-This module defines functions that return instruction prompts for the cypher agent.
-These instructions guide the agent's behavior, workflow, and tool usage.
+This module defines functions that return instruction prompts for the graphrag
+(retrieval) agent. These instructions guide the agent's behavior, workflow, and
+tool usage.
 """
+from typing import Any, Dict
+
+from google.adk.tools import ToolContext
+
 from agentic_kg.tools.cypher_tools import (
     get_graph_schema_with_profile,
     get_physical_schema,
@@ -12,8 +16,46 @@ from agentic_kg.tools.cypher_tools import (
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.adk_context import drop_foreign_context
+from agentic_kg.common.tool_result import tool_error
+from agentic_kg.tools.graphrag_handoff_tools import (
+    GRAPHRAG_HANDOFF_CONFIRMED_KEY, confirm_graphrag_handoff,
+)
 
-finished = make_finished(MULTI_AGENT_COORDINATOR)
+# v1's exit, ungated and unchanged in behaviour. v1 is a controlled A/B
+# variable (see agent.py) -- gating its exit would add handoff mechanics as a
+# second variable to a comparison whose point is isolating one.
+#
+# The rename matters: this used to be called 'finished' and was the SAME OBJECT
+# in both variants' tools lists, so gating it in place would have left v1 with
+# a gate and no confirm tool, unable to end its phase at all.
+#
+# It still presents to the model as a tool named 'finished' -- make_finished
+# returns a closure literally defined as 'def finished(...)', and ADK reads
+# __name__. That is pinned by a test, because no other agent in this tree lists
+# a renamed make_finished result as a tool.
+_transfer_to_coordinator = make_finished(MULTI_AGENT_COORDINATOR)
+
+
+def finished(tool_context: ToolContext) -> Dict[str, Any]:
+    """Finish retrieval and hand the user back to the coordinator.
+
+    Refuses unless 'confirm_graphrag_handoff' recorded the user's explicit
+    agreement in this same turn. Returns a bare {} on success, matching every
+    other 'finished' in this codebase; the error path is the only one that
+    speaks ToolResult.
+
+    v2 only. v1 holds '_transfer_to_coordinator' directly.
+    """
+    if not tool_context.state.get(GRAPHRAG_HANDOFF_CONFIRMED_KEY):
+        return tool_error(
+            "no confirmation recorded this turn -- if you called "
+            "'confirm_graphrag_handoff' later in this same reply, it has been "
+            "recorded now: call 'finished' once more and it will succeed. "
+            "Otherwise, if the user already agreed, ask them to confirm once "
+            "more, then call 'confirm_graphrag_handoff' and 'finished' in the "
+            "same reply, confirming first."
+        )
+    return _transfer_to_coordinator(tool_context)
 
 variants = {
 
@@ -37,7 +79,7 @@ variants = {
         "tools": [
             get_physical_schema, 
             read_neo4j_cypher,
-            finished
+            _transfer_to_coordinator
         ]
     },
 
@@ -55,7 +97,11 @@ variants = {
           are complete, whether it uniquely identifies its entity, and how those
           values are distributed
         - read_neo4j_cypher: run a read-only Cypher query
-        - finished: signal that the user is done
+        - confirm_graphrag_handoff: record that the user has said, in their own
+          words, that they are done asking questions
+        - finished: leave the retrieval phase and hand the user back to the
+          coordinator. Refuses unless 'confirm_graphrag_handoff' was called in
+          the same reply
 
         The graph is the only source of truth about the data. Every count, name,
         membership and ranking you state must come from a query result in this
@@ -115,10 +161,26 @@ variants = {
            not apply to them.
         7. Where an annotation reads 'unknown' or 'not_profiled', treat it as
            missing information to disclose, never as permission to assume.
+        8. end every answer with a short reminder that they can keep asking
+           questions. One line, not a repeated paragraph. Never assume from
+           their tone, their thanks, or a lull that they are finished -- a user
+           who has not said so is not done.
+        9. only when the user says in their own words that they are done, call
+           'confirm_graphrag_handoff' and then 'finished' -- both in the same
+           reply, since the confirmation is cleared at the start of every turn.
+           In that same reply, tell them you are handing them back to the
+           coordinator, which is where they go to start new work on the graph.
+           If 'finished' refuses because no confirmation was recorded this turn,
+           check whether you called 'confirm_graphrag_handoff' in that same
+           reply. If you did, the confirmation is recorded now -- just call
+           'finished' again. If you did not, do not argue with it and do not
+           repeat the call: ask the user to confirm once more, then call both
+           tools together, confirming first.
         """,
         "tools": [
             get_graph_schema_with_profile,
             read_neo4j_cypher,
+            confirm_graphrag_handoff,
             finished,
         ],
         "before_model_callback": drop_foreign_context,
