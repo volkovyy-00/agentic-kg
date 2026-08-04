@@ -241,6 +241,15 @@ class Neo4jForADK:
         self.write_count = 0
 
     def get_driver(self):
+        """Return the driver, reconnecting first if close() has run.
+
+        RAISES: unlike the pre-KG-1 version, this can raise -- reconnection
+        loads settings and constructs a driver. Its only production caller,
+        cypher_tools._physical_schema, already wraps it in try/except ->
+        tool_error. Any new caller must do the same: an unhandled exception
+        mid-turn is indistinguishable from a hang in `adk web` (see CLAUDE.md).
+        """
+        self._ensure_connected()
         return self._driver
 
     def get_config(self):

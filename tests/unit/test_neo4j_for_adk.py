@@ -314,3 +314,18 @@ def test_a_failed_reconnect_returns_a_tool_error_rather_than_raising(db, monkeyp
 
     assert result["status"] == "error"
     assert "settings unavailable" in result["error_message"]
+
+
+def test_get_driver_reconnects_after_close(db, monkeypatch):
+    """_physical_schema hands this driver straight to neo4j_graphrag, so it
+    never passes through send_query. Covering only the query methods would
+    leave the profiling path broken."""
+    rebuilt = FakeDriver()
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+
+    assert db.get_driver() is rebuilt
+    assert db._closed is False
