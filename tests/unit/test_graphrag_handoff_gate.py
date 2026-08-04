@@ -20,6 +20,10 @@ from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants impo
     finished,
     variants,
 )
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import (
+    graphrag_agent,
+    reset_graphrag_handoff_confirmation,
+)
 
 
 class FakeActions:
@@ -124,3 +128,38 @@ def test_v1_exit_still_presents_to_the_model_as_finished():
     failing any other test. No other agent lists a renamed make_finished
     result as a tool, so nothing else covers this."""
     assert _transfer_to_coordinator.__name__ == "finished"
+
+
+class FakeCallbackContext:
+    """A callback context carrying state only -- callbacks never touch .actions."""
+
+    def __init__(self, state=None):
+        self.state = dict(state or {})
+
+
+def test_reset_clears_a_previous_confirmation():
+    """Catches a reset that only initialises a missing key. A confirmation from
+    an earlier turn would otherwise let 'finished' transfer on the model's
+    judgment alone -- the exact defect this ticket is about."""
+    context = FakeCallbackContext({GRAPHRAG_HANDOFF_CONFIRMED_KEY: True})
+    reset_graphrag_handoff_confirmation(context)
+    assert context.state[GRAPHRAG_HANDOFF_CONFIRMED_KEY] is False
+
+
+def test_reset_is_wired_onto_the_graphrag_agent():
+    """Catches the callback being defined but never attached, which leaves the
+    flag sticky for the whole session and silently disables the gate after the
+    first successful handoff. Also catches an AGENT_NAME/condition mismatch
+    that leaves the shipped v2 agent unwired."""
+    callbacks = graphrag_agent.canonical_before_agent_callbacks
+    assert reset_graphrag_handoff_confirmation in callbacks
+
+
+def test_reset_parameter_is_named_callback_context():
+    """Catches a rename. ADK invokes these callbacks by keyword
+    (base_agent.py:385-387), so a different parameter name fails at request
+    time with a TypeError rather than at import."""
+    parameters = list(
+        inspect.signature(reset_graphrag_handoff_confirmation).parameters
+    )
+    assert parameters == ["callback_context"]
