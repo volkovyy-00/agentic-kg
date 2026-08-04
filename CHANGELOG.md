@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   is answering, keeps the continue-or-hand-off choice on screen, and ends only on the user's explicit
   confirmation — recorded by a tool call and enforced by a session-state gate, not inferred from tone.
   Confirming transfers straight to the retrieval agent rather than stalling at the coordinator.
+- **Explicit retrieval handoff (#9)**: the retrieval agent now stays until the user says they are
+  finished, inviting the next question after each answer instead of ending the phase on its own
+  judgment after a single one. Leaving is recorded by a tool call and enforced by a session-state
+  gate, the same mechanism the construction handoff uses.
 
 ## [0.4.0] - 2026-08-03
 
