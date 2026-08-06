@@ -35,7 +35,9 @@ def _pinned_container(*, apoc=False):
 
 
 def _neo4j_graph(monkeypatch, container):
-    with container as container:
+    # No `as`: DockerContainer.__enter__ returns self, so binding it would just
+    # shadow the parameter with the identical object.
+    with container:
         url = container.get_connection_url()
         host_port = url.split("//")[1]
         # The DSN below is still built from container.username/container.password

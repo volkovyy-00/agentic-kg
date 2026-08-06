@@ -219,8 +219,10 @@ class Neo4jForADK:
     """
     A wrapper for querying Neo4j which returns ADK-friendly responses.
     """
-    _driver = None
-    _neo4j_config: Neo4jConfig = None
+    # Optional because both are None until __init__ runs -- and the fixtures
+    # noted below never run it, so None is a state real instances are read in.
+    _driver: Optional[Driver] = None
+    _neo4j_config: Optional[Neo4jConfig] = None
     # Class-level, not set in __init__: two test fixtures build instances that
     # never run __init__ (a stubbed __init__ in tests/unit/test_neo4j_for_adk.py
     # and Neo4jForADK.__new__ in tests/integration/test_graph_profile_shapes.py).
