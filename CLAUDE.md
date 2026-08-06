@@ -77,7 +77,7 @@ uv run pytest -q
 uv run pytest tests/unit/test_pydantic_neo4j.py -v   # single file
 uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # single test
 
-# Integration tests (require Docker; spins up Neo4j via Testcontainers)
+# Integration tests (require Docker; spins up Neo4j via Testcontainers; ~4 min, function-scoped containers)
 uv run pytest -q -m integration
 ```
 
@@ -86,6 +86,9 @@ uv run pytest -q -m integration
   version any ADK doc, sample, or blog post is describing before trusting it against this code.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
+- `tests/integration/conftest.py` has two fixtures: `neo4j_graph` (plain container) and `neo4j_graph_with_apoc`.
+  Use the APOC one for anything touching physical/profiled schema — `neo4j_graphrag.get_structured_schema` is
+  APOC-only (`apoc.meta.data`/`apoc.meta.graph`), and a stock `neo4j:5` image doesn't have it.
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - No linter/formatter is configured in this project.
@@ -196,7 +199,14 @@ shapes for new tools.
 ### Neo4j access
 
 All Cypher execution goes through the `Neo4jForADK` singleton (`common/neo4j_for_adk.get_graphdb()`), which wraps
-the driver and returns `ToolResult`s via `result_to_adk`. Config comes from `Neo4jDsn`/`Neo4jConfig`
+the driver and returns `ToolResult`s via `result_to_adk`. The singleton's identity is permanent — the five
+`graphdb = get_graphdb()` bindings taken at import time (one per module) stay valid forever, including across a
+`close_graphdb()` or a transient outage, because `_ensure_connected()` transparently rebuilds the driver on next
+use rather than requiring callers to re-fetch the singleton. Gotcha this depends on: `neo4j` 5.x's `Driver` does
+*not* raise on use of a closed driver (`Driver._check_state` only emits a `DeprecationWarning`, with a literal
+`# TODO: 6.0 - raise the error`) — verified for both `bolt://` and Aura `neo4j://`. A use-after-close bug is
+therefore invisible to ordinary assertions; `tests/integration/test_connection_recovery.py` asserts the *absence*
+of that warning, and this class of bug becomes a hard error at the deferred neo4j 5→6 bump. Config comes from `Neo4jDsn`/`Neo4jConfig`
 (`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var (local `bolt://` and Aura `neo4j+s://` DSNs both
 work — see `.env.example` for the full list of allowed schemes). `tools/cypher_tools.py` builds on this for
 higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no
