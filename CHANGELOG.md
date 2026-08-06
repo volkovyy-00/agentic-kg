@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   gate, the same mechanism the construction handoff uses.
 
 ### Fixed
-- **Neo4j connection recovery (#PR)**: a brief database outage no longer disables every graph tool for the
+- **Neo4j connection recovery (#10)**: a brief database outage no longer disables every graph tool for the
   life of the process. The shared client now reopens its own connection on next use instead of being
   discarded while five modules still held it, so once the database is healthy the next tool call succeeds
   without a restart. Reconnections are logged, and a recovery is reported only after a query has actually
