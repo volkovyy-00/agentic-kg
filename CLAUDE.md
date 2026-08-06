@@ -57,9 +57,9 @@ clone has. Sub-projects 2 and 3 remain the actual next work and are still unstar
 
 Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
 spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
-of it), a README rewrite (PR #7), and explicit construction-handoff confirmation (PR #8, most recent on
-`main`) — see Architecture's *Construction handoff confirmation* subsection. None of these touch sub-projects
-2/3, which remain unstarted.
+of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), and the same gate
+applied to the retrieval phase (PR #9, most recent on `main`) — see Architecture's *Handoff confirmation
+gates* subsection. None of these touch sub-projects 2/3, which remain unstarted.
 
 ## Commands
 
@@ -77,13 +77,18 @@ uv run pytest -q
 uv run pytest tests/unit/test_pydantic_neo4j.py -v   # single file
 uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # single test
 
-# Integration tests (require Docker; spins up Neo4j via Testcontainers)
+# Integration tests (require Docker; spins up Neo4j via Testcontainers; ~4 min, function-scoped containers)
 uv run pytest -q -m integration
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
+- Pinned to `google-adk>=1.10,<2` (`pyproject.toml`) — ADK 2.x is a breaking rewrite; check which major
+  version any ADK doc, sample, or blog post is describing before trusting it against this code.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
+- `tests/integration/conftest.py` has two fixtures: `neo4j_graph` (plain container) and `neo4j_graph_with_apoc`.
+  Use the APOC one for anything touching physical/profiled schema — `neo4j_graphrag.get_structured_schema` is
+  APOC-only (`apoc.meta.data`/`apoc.meta.graph`), and a stock `neo4j:5` image doesn't have it.
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - No linter/formatter is configured in this project.
@@ -165,11 +170,24 @@ invocation per user turn (deliberate, not an unexplained restriction): `reset_sc
 (coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
 `before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
 
-`graph_construction_agent` uses the same state-gate shape for a different purpose: `HANDOFF_CONFIRMED_KEY`
-(`tools/construction_handoff_tools.py`) must be set by an explicit `confirm_construction_handoff` tool call
-before its `finished` wrapper will transfer control — never inferred from tone. `reset_construction_handoff_confirmation`
-(a `before_agent_callback`) clears the flag every turn. On confirmation, transfer goes directly to
-`graphrag_agent_v2`, not back through the coordinator — the numbered sequence above simplifies this one step.
+### Handoff confirmation gates
+
+Two phase transitions reuse the same state-gate shape as `schema_refinement_loop`'s turn cap above, but to
+gate a `finished` transfer behind an explicit tool call instead of the model's own reading of the conversation:
+
+- **Construction → retrieval** (PR #8): `graph_construction_agent`'s `finished` wrapper refuses to transfer
+  until `HANDOFF_CONFIRMED_KEY` (`tools/construction_handoff_tools.py`) is set by an explicit
+  `confirm_construction_handoff` tool call — never inferred from tone. `reset_construction_handoff_confirmation`
+  (a `before_agent_callback`) clears the flag every turn. On confirmation, transfer goes directly to
+  `graphrag_agent_v2`, not back through the coordinator — the numbered sequence above simplifies this one step.
+- **Retrieval → coordinator** (PR #9): the same shape on `graphrag_agent_v2`, so it stays in the retrieval
+  phase across multiple questions instead of ejecting the user after a single answer.
+  `GRAPHRAG_HANDOFF_CONFIRMED_KEY` (`tools/graphrag_handoff_tools.py`) is set by `confirm_graphrag_handoff`;
+  `finished` refuses to transfer without it; `reset_graphrag_handoff_confirmation` clears it every turn.
+  Deliberately not factored into a shared helper with the construction gate — the two `finished` wrappers
+  differ in transfer topology (sideways to a live-imported sibling vs. up to a plain constant), so a shared
+  factory would need to parametrise over more than a state key. `graphrag_agent_v1` has no gate and keeps
+  its original single-answer-then-eject behavior, for the A/B comparison described below.
 
 ### Tool results
 
@@ -181,7 +199,14 @@ shapes for new tools.
 ### Neo4j access
 
 All Cypher execution goes through the `Neo4jForADK` singleton (`common/neo4j_for_adk.get_graphdb()`), which wraps
-the driver and returns `ToolResult`s via `result_to_adk`. Config comes from `Neo4jDsn`/`Neo4jConfig`
+the driver and returns `ToolResult`s via `result_to_adk`. The singleton's identity is permanent — the five
+`graphdb = get_graphdb()` bindings taken at import time (one per module) stay valid forever, including across a
+`close_graphdb()` or a transient outage, because `_ensure_connected()` transparently rebuilds the driver on next
+use rather than requiring callers to re-fetch the singleton. Gotcha this depends on: `neo4j` 5.x's `Driver` does
+*not* raise on use of a closed driver (`Driver._check_state` only emits a `DeprecationWarning`, with a literal
+`# TODO: 6.0 - raise the error`) — verified for both `bolt://` and Aura `neo4j://`. A use-after-close bug is
+therefore invisible to ordinary assertions; `tests/integration/test_connection_recovery.py` asserts the *absence*
+of that warning, and this class of bug becomes a hard error at the deferred neo4j 5→6 bump. Config comes from `Neo4jDsn`/`Neo4jConfig`
 (`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var (local `bolt://` and Aura `neo4j+s://` DSNs both
 work — see `.env.example` for the full list of allowed schemes). `tools/cypher_tools.py` builds on this for
 higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no

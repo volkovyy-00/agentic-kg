@@ -5,6 +5,7 @@ import atexit
 import logging
 
 from neo4j import (
+    Driver,
     GraphDatabase,
     Query,
     READ_ACCESS,
@@ -64,7 +65,7 @@ def load_neo4j_config_from_settings() -> Neo4jConfig:
 
     return neo4j_config
 
-def make_driver(neo4j_config: Neo4jConfig) -> GraphDatabase | None:
+def make_driver(neo4j_config: Neo4jConfig) -> Driver:
     """
     Connects to a Neo4j Graph Database according to the provided configuration.
     """
@@ -218,8 +219,19 @@ class Neo4jForADK:
     """
     A wrapper for querying Neo4j which returns ADK-friendly responses.
     """
-    _driver = None
-    _neo4j_config: Neo4jConfig = None
+    # Optional because both are None until __init__ runs -- and the fixtures
+    # noted below never run it, so None is a state real instances are read in.
+    _driver: Optional[Driver] = None
+    _neo4j_config: Optional[Neo4jConfig] = None
+    # Class-level, not set in __init__: two test fixtures build instances that
+    # never run __init__ (a stubbed __init__ in tests/unit/test_neo4j_for_adk.py
+    # and Neo4jForADK.__new__ in tests/integration/test_graph_profile_shapes.py).
+    # A class default makes both read as open.
+    _closed = False
+    # Set when a rebuild happens, cleared by the first query that succeeds
+    # afterwards. Does not expire: a heal seen only through get_driver stays
+    # unconfirmed until some query proves the connection works.
+    _reconnected_unconfirmed = False
 
     def __init__(self, neo4j_config: Neo4jConfig = None):
         if neo4j_config is None:
@@ -235,13 +247,91 @@ class Neo4jForADK:
         self.write_count = 0
 
     def get_driver(self):
+        """Return the driver, reconnecting first if close() has run.
+
+        RAISES: unlike the pre-KG-1 version, this can raise -- reconnection
+        loads settings and constructs a driver. Its only production caller,
+        cypher_tools._physical_schema, already wraps it in try/except ->
+        tool_error. Any new caller must do the same: an unhandled exception
+        mid-turn is indistinguishable from a hang in `adk web` (see CLAUDE.md).
+        """
+        self._ensure_connected()
         return self._driver
 
     def get_config(self):
+        """Return the current config, reconnecting first if close() has run.
+
+        Heals for the same reason get_driver does, even though it hands back no
+        driver: _ensure_connected re-derives the config, so without this a
+        caller reading the config before anything else healed the connection
+        would silently get the pre-close one. That used to be safe only by the
+        ordering its single caller happened to use -- and a stale config
+        returns success-shaped data, so getting it wrong would fail quietly
+        rather than loudly.
+
+        RAISES: like get_driver, and for the same reason -- reconnection loads
+        settings and constructs a driver. Its only production caller,
+        cypher_tools._physical_schema, already wraps it in try/except ->
+        tool_error.
+        """
+        self._ensure_connected()
         return self._neo4j_config
 
     def close(self):
-        return self._driver.close()
+        """Shut the driver. The instance stays usable: the next call to
+        send_query, send_read_query or get_driver rebuilds the connection.
+
+        Named `close` because its callers -- atexit and close_graphdb -- mean
+        "release the connection now". It is not a teardown: this object's
+        identity is what five modules hold at import time, so discarding it is
+        exactly the defect KG-1 fixes. Idempotent.
+
+        Returns None; the driver's own close() return value was never consumed.
+        """
+        if self._driver is not None and not self._closed:
+            self._driver.close()
+        self._closed = True
+
+    def _ensure_connected(self):
+        """Rebuild the driver if close() has run. No-op otherwise.
+
+        Config is re-derived from settings rather than reusing
+        self._neo4j_config: tests/integration/conftest.py points NEO4J_DSN at a
+        test container and calls reset_settings() before closing, and reusing
+        the captured config would silently reconnect to the old database. In
+        production this is a no-op -- get_settings() is a cached singleton that
+        production code never resets.
+
+        Deliberate narrowing: an instance built with an explicit config,
+        Neo4jForADK(cfg), loses that config here in favour of ambient settings.
+        The repo's only such construction
+        (tests/integration/test_neo4j_for_adk_integration.py) closes in a
+        finally and never reuses the instance, so nothing depends on it. This
+        is intended, not an oversight -- do not "fix" it by tracking whether
+        the config was overridden.
+
+        Two concurrent tool calls can both observe _closed and both build a
+        driver; one wins and the other is garbage-collected. Harmless, and left
+        unguarded on purpose: a lock here would be connection-health policy,
+        which KG-1 puts out of scope.
+        """
+        if not self._closed:
+            return
+        self._neo4j_config = load_neo4j_config_from_settings()
+        self._driver = make_driver(self._neo4j_config)
+        self._closed = False
+        self._reconnected_unconfirmed = True
+        # States what was done, not that the database is reachable:
+        # GraphDatabase.driver() does not touch the network, so no recovery
+        # claim can honestly be made until a query succeeds.
+        logger.info(
+            "Neo4j driver was closed; rebuilding for %s", self._neo4j_config.uri)
+
+    def _confirm_reconnect(self):
+        """Report a recovery once, after evidence for it exists."""
+        if self._reconnected_unconfirmed:
+            self._reconnected_unconfirmed = False
+            logger.info("Neo4j reconnected successfully")
 
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
         # Session creation sits INSIDE the try deliberately. With it outside,
@@ -252,11 +342,13 @@ class Neo4jForADK:
         # returns, so a write that fails never counts.
         session = None
         try:
+            self._ensure_connected()
             session = self._driver.session(database=self._neo4j_config.database)
             result = session.run(cypher_query, parameters or {})
             adk_result = result_to_adk(result)
             if is_write_query(cypher_query):
                 self.write_count += 1
+            self._confirm_reconnect()
             return adk_result
         except Exception as e:
             return tool_error(str(e))
@@ -287,6 +379,7 @@ class Neo4jForADK:
         """
         session = None
         try:
+            self._ensure_connected()
             # Inside the try, for the same reason as send_query: a failure to
             # open the session must return a structured error, not raise.
             session = self._driver.session(
@@ -333,6 +426,7 @@ class Neo4jForADK:
                 logger.debug(
                     "Summarised %d oversized list value(s) totalling %d elements",
                     len(omitted), sum(omitted))
+            self._confirm_reconnect()
             return tool_success("query_result", payload)
         except Exception as e:
             return tool_error(str(e))
@@ -356,8 +450,13 @@ def get_graphdb() -> Neo4jForADK:
     return _graphdb_singleton
 
 def close_graphdb():
-    global _graphdb_singleton
+    """Close the shared client's connection without discarding the client.
+
+    Discarding it was KG-1: five modules bind `graphdb = get_graphdb()` at
+    import time and never re-read the name, so a discarded singleton left every
+    one of them holding a closed driver for the life of the process. The
+    instance now reopens on next use instead.
+    """
     if _graphdb_singleton is not None:
         _graphdb_singleton.close()
-        _graphdb_singleton = None
     

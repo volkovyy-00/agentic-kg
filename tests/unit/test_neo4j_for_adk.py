@@ -5,6 +5,8 @@ binding, which bypasses send_query entirely -- so it can never verify the
 counter that lives inside it. These tests fake one level lower, at the
 driver/session boundary, so the real send_query body runs.
 """
+import logging
+
 import pytest
 
 from agentic_kg.common import neo4j_for_adk
@@ -61,11 +63,24 @@ class FakeDriver:
     def __init__(self, records=()):
         self.sessions = []
         self.queries = []
+        # Counts close() calls, so a test can tell "closed once" from
+        # "closed twice" -- which is the whole point of close() being idempotent.
+        self.closed = 0
         self._records = [FakeRecord(r) for r in records]
 
     def session(self, **config):
         self.sessions.append(config)
         return FakeSession(self.queries, self._records)
+
+    def close(self):
+        self.closed += 1
+
+
+class FakeConfig:
+    """Stands in for Neo4jConfig. `uri` exists because the reconnect log line
+    (Task 5) reads it; `database` because send_query passes it to session()."""
+    database = "neo4j"
+    uri = "bolt://fake:7687"
 
 
 @pytest.fixture
@@ -220,3 +235,185 @@ def test_values_summarised_is_false_when_nothing_was_omitted(db):
     assert payload["values_summarised"] is False
     assert payload["records"][0]["tags"] == ["a", "b"]
     assert "note" not in payload
+
+
+def test_close_shuts_the_driver_and_marks_the_instance_closed(db):
+    db.close()
+    assert db._driver.closed == 1
+    assert db._closed is True
+
+
+def test_close_twice_does_not_close_the_driver_twice(db):
+    db.close()
+    db.close()
+    assert db._driver.closed == 1
+    assert db._closed is True
+
+
+def test_send_query_reconnects_after_close(db, monkeypatch):
+    rebuilt = FakeDriver()
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    result = db.send_query("MATCH (n) RETURN n")
+
+    assert result["status"] == "success", result.get("error_message")
+    assert db._driver is rebuilt
+    assert db._closed is False
+
+
+def test_send_read_query_reconnects_after_close(db, monkeypatch):
+    rebuilt = FakeDriver()
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    result = db.send_read_query("MATCH (n) RETURN n")
+
+    assert result["status"] == "success", result.get("error_message")
+    assert db._driver is rebuilt
+
+
+def test_reconnect_rederives_config_instead_of_reusing_it(db, monkeypatch):
+    """The integration fixture swaps NEO4J_DSN and calls reset_settings()
+    before closing. Reusing the config captured at construction would silently
+    reconnect to the old database -- see the spec's "Config is re-derived"
+    section."""
+    calls = []
+    fresh = FakeConfig()
+    fresh.database = "swapped"
+
+    def load():
+        calls.append(1)
+        return fresh
+
+    monkeypatch.setattr(neo4j_for_adk, "load_neo4j_config_from_settings", load)
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+
+    db.close()
+    db.send_query("RETURN 1")
+
+    assert calls == [1]
+    assert db._neo4j_config is fresh
+    # The re-derived config is the one actually used, not just stored.
+    assert db._driver.sessions[0]["database"] == "swapped"
+
+
+def test_a_failed_reconnect_returns_a_tool_error_rather_than_raising(db, monkeypatch):
+    """_ensure_connected sits INSIDE the existing try, for the reason those
+    methods already document for session creation: a failure must reach the
+    agent as a structured error, not raise mid-turn."""
+    def boom():
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr(neo4j_for_adk, "load_neo4j_config_from_settings", boom)
+
+    db.close()
+    result = db.send_query("RETURN 1")
+
+    assert result["status"] == "error"
+    assert "settings unavailable" in result["error_message"]
+
+
+def test_get_driver_reconnects_after_close(db, monkeypatch):
+    """_physical_schema hands this driver straight to neo4j_graphrag, so it
+    never passes through send_query. Covering only the query methods would
+    leave the profiling path broken."""
+    rebuilt = FakeDriver()
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+
+    assert db.get_driver() is rebuilt
+    assert db._closed is False
+
+
+def test_close_graphdb_keeps_the_singleton(monkeypatch):
+    """The five module-level `graphdb = get_graphdb()` bindings are what makes
+    discarding the singleton a defect. Preserving identity is the whole fix."""
+    monkeypatch.setattr(neo4j_for_adk, "_graphdb_singleton", None)
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+    monkeypatch.setattr(neo4j_for_adk.atexit, "register", lambda fn: None)
+
+    first = neo4j_for_adk.get_graphdb()
+    neo4j_for_adk.close_graphdb()
+
+    assert neo4j_for_adk.get_graphdb() is first
+    assert first.send_query("RETURN 1")["status"] == "success"
+
+
+def test_exit_handlers_do_not_accumulate_across_close_cycles(monkeypatch):
+    registered = []
+    monkeypatch.setattr(neo4j_for_adk, "_graphdb_singleton", None)
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+    monkeypatch.setattr(
+        neo4j_for_adk.atexit, "register", lambda fn: registered.append(fn))
+
+    neo4j_for_adk.get_graphdb()
+    after_one = len(registered)
+
+    for _ in range(10):
+        neo4j_for_adk.close_graphdb()
+        neo4j_for_adk.get_graphdb()
+
+    assert after_one == 1
+    assert len(registered) == after_one
+
+
+def test_reconnect_logs_the_rebuild_then_confirms_on_first_success(db, monkeypatch, caplog):
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    with caplog.at_level(logging.INFO, logger="agentic_kg.common.neo4j_for_adk"):
+        db.send_query("RETURN 1")
+        db.send_query("RETURN 1")
+        db.send_query("RETURN 1")
+
+    messages = [record.getMessage() for record in caplog.records]
+    # Once per heal, not once per query: a healthy connection must not become
+    # a noise source.
+    assert sum("rebuilding" in m for m in messages) == 1
+    assert sum("reconnected successfully" in m for m in messages) == 1
+
+
+def test_a_heal_seen_only_through_get_driver_stays_unconfirmed(db, monkeypatch):
+    """get_driver hands the driver to neo4j_graphrag and never reports back, so
+    the confirmation waits for a query. A known timing gap, not a defect."""
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+
+    db.close()
+    db.get_driver()
+    assert db._reconnected_unconfirmed is True
+
+    db.send_query("RETURN 1")
+    assert db._reconnected_unconfirmed is False
+
+
+def test_get_config_reconnects_after_close(db, monkeypatch):
+    """_ensure_connected re-derives the config, so a caller reading the config
+    before anything else healed the connection would otherwise get the
+    pre-close one -- and a stale config returns success-shaped data, failing
+    quietly rather than loudly."""
+    fresh = FakeConfig()
+    fresh.database = "swapped"
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: fresh)
+
+    db.close()
+
+    assert db.get_config() is fresh
+    assert db._closed is False
