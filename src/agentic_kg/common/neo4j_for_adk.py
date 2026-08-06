@@ -257,16 +257,22 @@ class Neo4jForADK:
         return self._driver
 
     def get_config(self):
-        """Return the current config. Does not call _ensure_connected, so after
-        a close() this still returns the pre-close config until something else
-        heals the connection.
+        """Return the current config, reconnecting first if close() has run.
 
-        Safe today only because its one production caller,
-        cypher_tools._physical_schema, calls this AFTER get_driver() -- which
-        does heal and re-derive the config first. That ordering is
-        load-bearing: call this before get_driver() when a heal may be
-        pending and it can return a stale config.
+        Heals for the same reason get_driver does, even though it hands back no
+        driver: _ensure_connected re-derives the config, so without this a
+        caller reading the config before anything else healed the connection
+        would silently get the pre-close one. That used to be safe only by the
+        ordering its single caller happened to use -- and a stale config
+        returns success-shaped data, so getting it wrong would fail quietly
+        rather than loudly.
+
+        RAISES: like get_driver, and for the same reason -- reconnection loads
+        settings and constructs a driver. Its only production caller,
+        cypher_tools._physical_schema, already wraps it in try/except ->
+        tool_error.
         """
+        self._ensure_connected()
         return self._neo4j_config
 
     def close(self):

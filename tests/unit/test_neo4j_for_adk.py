@@ -400,3 +400,20 @@ def test_a_heal_seen_only_through_get_driver_stays_unconfirmed(db, monkeypatch):
 
     db.send_query("RETURN 1")
     assert db._reconnected_unconfirmed is False
+
+
+def test_get_config_reconnects_after_close(db, monkeypatch):
+    """_ensure_connected re-derives the config, so a caller reading the config
+    before anything else healed the connection would otherwise get the
+    pre-close one -- and a stale config returns success-shaped data, failing
+    quietly rather than loudly."""
+    fresh = FakeConfig()
+    fresh.database = "swapped"
+    monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
+    monkeypatch.setattr(
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: fresh)
+
+    db.close()
+
+    assert db.get_config() is fresh
+    assert db._closed is False

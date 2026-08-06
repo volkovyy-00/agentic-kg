@@ -7,17 +7,55 @@ instead of the code path production takes. In particular
 common/graph_profile.py has its own binding that no other integration test
 exercises -- reintroducing the defect there would otherwise be invisible.
 """
+import logging
 import warnings
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
+# The logger _ensure_connected writes its rebuild line to. Asserting on that
+# line is the half of this test's evidence that this repo controls: the
+# use-after-close DeprecationWarning below is emitted by the neo4j package, so
+# if it is ever reworded -- in any patch release, not only at the 6.0 removal
+# the comments anticipate -- the warning filter would silently match nothing
+# and pass while verifying nothing at all. Our own log line cannot drift
+# without this repo changing it.
+RECONNECT_LOGGER = "agentic_kg.common.neo4j_for_adk"
+
 try:
     import docker
     docker.from_env().ping()
 except Exception as exc:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {exc}", allow_module_level=True)
+
+
+def _use_after_close_warnings(caught):
+    """The recorded warnings that say a closed Driver was used.
+
+    Matched narrowly on category plus the driver's exact phrase, not a bare
+    "closed" substring: the callers' warnings.simplefilter("always") also lifts
+    Python's default ResourceWarning suppression, and they drive a live Bolt
+    pool, so an incidental "unclosed <socket...>" ResourceWarning from GC would
+    otherwise fail them for a reason unrelated to the defect under test.
+
+    One definition, used by both tests: the phrase and the category are a
+    single invariant tied to neo4j 5.x driver internals, and two copies could
+    be updated apart -- silently weakening whichever one was missed.
+    """
+    return [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning)
+        and "after it has been closed" in str(w.message).lower()
+    ]
+
+
+def _rebuild_log_lines(caplog):
+    """The rebuild lines _ensure_connected emitted -- one per heal."""
+    return [
+        r.getMessage() for r in caplog.records
+        if "rebuilding" in r.getMessage()
+    ]
 
 
 SUPPLIER_RULE = {
@@ -48,7 +86,8 @@ SUPPLIED_BY_RULE = {
 }
 
 
-def test_every_graph_tool_works_after_a_close_and_recover_cycle(neo4j_graph_with_apoc):
+def test_every_graph_tool_works_after_a_close_and_recover_cycle(
+        neo4j_graph_with_apoc, caplog):
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
     import agentic_kg.tools.kg_construction_tools as kg
@@ -68,7 +107,8 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(neo4j_graph_with
     # The break: exactly what neo4j_is_ready does on a transient failure.
     neo4j_for_adk.close_graphdb()
 
-    with warnings.catch_warnings(record=True) as caught:
+    with warnings.catch_warnings(record=True) as caught, \
+            caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
         warnings.simplefilter("always")
 
         # 1. Schema read -- the get_driver() path.
@@ -107,27 +147,32 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(neo4j_graph_with
     # a hard error on all four production call paths this test exercises, so
     # asserting its absence now is what actually catches a regressed
     # reconnection call site rather than the driver's own leniency.
-    #
-    # Matched narrowly on category plus the driver's exact phrase, not a bare
-    # "closed" substring: warnings.simplefilter("always") above also lifts
-    # Python's default ResourceWarning suppression, and this block drives a
-    # live Bolt pool and re-runs both CSV loaders, so an incidental
-    # "unclosed <socket...>" ResourceWarning from GC is a real possibility --
-    # its message also contains "closed" and would fail this assertion for a
-    # reason that has nothing to do with the defect under test.
-    closed_warnings = [
-        w for w in caught
-        if issubclass(w.category, DeprecationWarning)
-        and "after it has been closed" in str(w.message).lower()
-    ]
+    closed_warnings = _use_after_close_warnings(caught)
     assert not closed_warnings, [str(w.message) for w in closed_warnings]
 
+    # The half of the evidence this repo owns (see RECONNECT_LOGGER): the heal
+    # ran, and ran exactly once for the whole block -- the first call rebuilds,
+    # the rest reuse the healthy driver.
+    #
+    # Known limit: this pins THAT a heal happened, not WHICH call site did it.
+    # Several entry points heal, so if the driver's warning text above were ever
+    # reworded AND one call site lost its heal, another would cover for it and
+    # the count would still be 1. Asserting the count earlier does not fix that
+    # -- get_config heals too, and runs inside the very first step. Catching a
+    # single regressed call site rests on the warning assertion; this one
+    # catches healing being lost altogether, and survives a reworded warning.
+    assert len(_rebuild_log_lines(caplog)) == 1, _rebuild_log_lines(caplog)
 
-def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph_with_apoc):
+
+def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph, caplog):
+    """Uses the plain fixture, not the APOC one its sibling needs: this test
+    only runs `RETURN 1`, so paying for a plugin install would add container
+    boot time to every suite run for nothing."""
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
 
-    with warnings.catch_warnings(record=True) as caught:
+    with warnings.catch_warnings(record=True) as caught, \
+            caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
         warnings.simplefilter("always")
 
         for _ in range(3):
@@ -140,13 +185,10 @@ def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph_with_apoc):
     # test_every_graph_tool_works_after_a_close_and_recover_cycle: neo4j 5.x's
     # Driver tolerates use after close() and only warns, so a passing
     # assertion above proves nothing about whether reconnection actually ran
-    # -- only the absence of this warning does. Matched on category plus the
-    # driver's exact phrase, not a bare "closed" substring, since
-    # simplefilter("always") also surfaces ResourceWarning ("unclosed
-    # <socket...>") from this loop's own live connections.
-    closed_warnings = [
-        w for w in caught
-        if issubclass(w.category, DeprecationWarning)
-        and "after it has been closed" in str(w.message).lower()
-    ]
+    # -- only the absence of this warning does.
+    closed_warnings = _use_after_close_warnings(caught)
     assert not closed_warnings, [str(w.message) for w in closed_warnings]
+
+    # One heal per cycle, three cycles: proves each close was actually followed
+    # by a rebuild rather than by a closed driver the library tolerated.
+    assert len(_rebuild_log_lines(caplog)) == 3, _rebuild_log_lines(caplog)
