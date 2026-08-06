@@ -21,7 +21,7 @@ def _unit_tests_ignore_dotenv():
     machine or in CI (which has no .env). That made the unit suite silently
     depend on ambient developer state -- the same bug class as the earlier
     NEO4J_PASSWORD container leak fixed elsewhere on this branch (see
-    tests/integration/test_csv_loading_integration.py).
+    tests/integration/conftest.py).
 
     Disable .env loading for the whole test session so settings construction
     depends only on os.environ, which monkeypatch controls. This does not

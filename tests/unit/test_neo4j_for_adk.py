@@ -340,6 +340,7 @@ def test_close_graphdb_keeps_the_singleton(monkeypatch):
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
     monkeypatch.setattr(
         neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+    monkeypatch.setattr(neo4j_for_adk.atexit, "register", lambda fn: None)
 
     first = neo4j_for_adk.get_graphdb()
     neo4j_for_adk.close_graphdb()
