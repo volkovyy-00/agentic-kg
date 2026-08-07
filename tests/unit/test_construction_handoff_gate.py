@@ -8,6 +8,16 @@ unit-testable and is verified by hand (see the plan's Task 5).
 """
 import inspect
 
+import asyncio
+
+import pytest
+from google.genai import types
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
+from pydantic import Field
+
+from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.agent import (
@@ -179,3 +189,122 @@ def test_refusal_message_names_the_same_reply_recovery():
     will work from this string, so the two must not drift apart."""
     message = finished(FakeToolContext())["error_message"]
     assert "call 'finished' once more" in message
+
+
+class CapturingLlm(BaseLlm):
+    """Scripted LLM that also records every request it was handed.
+
+    Copied from test_graphrag_context_filtering.py:20 rather than imported.
+    tests/unit/fakes.py deliberately does not centralize fakes of this kind,
+    and that file copied it from test_schema_refinement_loop_turn_cap.py:36
+    for the same reason. Do not extract it.
+    """
+    responses: list = Field(default_factory=list)
+    requests: list = Field(default_factory=list)
+    call_count: int = 0
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        self.requests.append(llm_request)
+        index = min(self.call_count, len(self.responses) - 1)
+        self.call_count += 1
+        yield self.responses[index]
+
+
+def _text(text):
+    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+
+
+def _call(name, args=None):
+    return LlmResponse(content=types.Content(role="model", parts=[
+        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
+    ]))
+
+
+def _declaration_names(request):
+    names = []
+    for tool in (request.config.tools or []):
+        for declaration in (getattr(tool, "function_declarations", None) or []):
+            names.append(declaration.name)
+    return names
+
+
+async def _run_one_turn(agent, app_name, message="hello"):
+    """Drive one real user turn through ADK and return the events it produced.
+
+    Points the Runner at an agent that is already wired into the real tree
+    rather than re-parenting it, which base_agent.py:496-505 forbids for an
+    agent that already has a parent.
+    """
+    runner = InMemoryRunner(agent=agent, app_name=app_name)
+    session = await runner.session_service.create_session(
+        app_name=app_name, user_id="u1",
+    )
+    return [
+        event async for event in runner.run_async(
+            user_id="u1", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        )
+    ]
+
+
+def test_the_strip_callback_is_wired_onto_the_construction_agent():
+    """The cheap statement of intent. Not sufficient on its own -- it says
+    nothing about whether the strip actually worked -- which is why the
+    behavioural tests below exist."""
+    assert strip_transfer_to_agent in graph_construction_agent.canonical_before_model_callbacks
+
+
+def test_the_agent_does_not_disallow_transfers():
+    """Guards the trap this design exists to avoid. Setting
+    disallow_transfer_to_parent would also close the door -- and would make
+    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    for the user's SECOND message, sending every in-phase follow-up back
+    through the coordinator. See the spec's 'Why not' section."""
+    assert graph_construction_agent.disallow_transfer_to_parent is False
+    assert graph_construction_agent.disallow_transfer_to_peers is False
+
+
+def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
+    """The actual guarantee: ADK injects a transfer_to_agent tool into every
+    sub-agent with a parent or peers, and it does not consult this agent's
+    handoff gate. Asserting on what reached the model is the only way to know
+    it is gone."""
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("nothing to do")],
+    ))
+    asyncio.run(_run_one_turn(graph_construction_agent, "construction_door_test"))
+
+    requests = graph_construction_agent.model.requests
+    assert requests, "the model was never called"
+    for request in requests:
+        assert "transfer_to_agent" not in request.tools_dict
+        assert "transfer_to_agent" not in _declaration_names(request)
+        instruction = str(getattr(request.config, "system_instruction", "") or "")
+        assert "transfer_to_agent" not in instruction
+
+
+def test_the_agents_own_tools_survive_the_strip(monkeypatch):
+    """Catches an over-broad strip that empties config.tools. The agent is
+    useless without its own tools, and every other assertion here is about
+    absence, so nothing else would notice."""
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("nothing to do")],
+    ))
+    asyncio.run(_run_one_turn(graph_construction_agent, "construction_tools_survive_test"))
+
+    names = _declaration_names(graph_construction_agent.model.requests[0])
+    assert "finished" in names
+    assert "confirm_construction_handoff" in names
+    assert "read_neo4j_cypher" in names
+
+
+def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+    """Pins what happens if a model emits the call from memory of an earlier
+    turn. The strip pops it from tools_dict, so ADK raises
+    (functions.py:565-568) rather than silently transferring."""
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[_call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})],
+    ))
+    with pytest.raises(ValueError, match="transfer_to_agent"):
+        asyncio.run(_run_one_turn(graph_construction_agent, "construction_hard_error_test"))

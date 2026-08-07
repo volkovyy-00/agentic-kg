@@ -1,6 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
+from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.llm_catalog import get_llm, LlmKind
 from agentic_kg.tools.construction_handoff_tools import HANDOFF_CONFIRMED_KEY
 
@@ -36,6 +37,21 @@ graph_construction_agent = Agent(
         instruction=variants[AGENT_NAME]["instruction"],
         tools=variants[AGENT_NAME]["tools"],
         before_agent_callback=reset_construction_handoff_confirmation,
+        # ADK injects its own 'transfer_to_agent' tool, plus an instruction
+        # advertising it, into any LlmAgent with a parent or peers -- and it
+        # does not consult the handoff gate above. This strips it back out of
+        # every request before the model sees it.
+        #
+        # Deliberately NOT disallow_transfer_to_parent: that flag would also
+        # close the door, and would also stop Runner._find_agent_to_run
+        # (runners.py:474-489) from returning this agent for the user's second
+        # message, so every follow-up question in the post-construction window
+        # would be re-arbitrated by the coordinator. See adk_transfer.py.
+        #
+        # 'finished' is unaffected -- it writes actions.transfer_to_agent
+        # directly (base_llm_flow.py:536-548), which no request-level strip
+        # touches.
+        before_model_callback=strip_transfer_to_agent,
     )
 
 root_agent = graph_construction_agent
