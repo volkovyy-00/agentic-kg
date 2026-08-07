@@ -52,9 +52,12 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
     """
     if not tool_context.state.get(HANDOFF_CONFIRMED_KEY):
         return tool_error(
-            "no confirmation recorded this turn -- if the user already agreed, "
-            "ask them to confirm once more, then call "
-            "'confirm_construction_handoff' and 'finished' in the same reply."
+            "no confirmation recorded this turn -- if you called "
+            "'confirm_construction_handoff' later in this same reply, it has "
+            "been recorded now: call 'finished' once more and it will succeed. "
+            "Otherwise, if the user already agreed, ask them to confirm once "
+            "more, then call 'confirm_construction_handoff' and 'finished' in "
+            "the same reply, confirming first."
         )
     return _transfer_to_retrieval(tool_context)
 
@@ -97,8 +100,10 @@ variants = {
            confirmation is cleared at the start of every turn. In that same reply, tell them you are
            handing them to the retrieval agent, and warn them it will not have seen this conversation,
            so anything they want followed up needs restating.
-           If 'finished' refuses because no confirmation was recorded this turn, do not argue with it and
-           do not repeat the call: ask the user to confirm once more, then call both tools together.
+           If 'finished' refuses because no confirmation was recorded this turn, check whether you called
+           'confirm_construction_handoff' in that same reply. If you did, the confirmation is recorded now --
+           just call 'finished' again. If you did not, do not argue with it and do not repeat the call: ask
+           the user to confirm once more, then call both tools together, confirming first.
 
         """,
         "tools": [

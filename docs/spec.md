@@ -101,10 +101,15 @@ coordinator's prose, is what actually enforces the ordering.
    with `join_preview` / `column_stats` / `collapse_check` and returns `valid` or `retry`. Writes
    `proposed_construction_plan`, `feedback`, `approved_construction_plan`.
 4. **`graph_construction_agent_v1`** — reads the approved plan, creates uniqueness constraints, and runs
-   `build_graph_from_construction_rules`. Writes one key, `construction_handoff_confirmed`, a
-   per-turn flag gating the explicit handoff to stage 5.
+   `build_graph_from_construction_rules`. Writes one key,
+   `construction_handoff_confirmed`, a per-turn flag gating the explicit handoff to stage 5. ADK's
+   injected `transfer_to_agent` tool is stripped from this agent's requests, so that gated `finished`
+   is the only exit the model is offered.
 5. **`graphrag_agent_v2`** — answers questions over the finished graph. Reads and writes one key,
    `graphrag_handoff_confirmed`, a per-turn flag gating the explicit handoff back to the coordinator.
+   ADK's injected `transfer_to_agent` tool is stripped from `graphrag_agent_v2`'s requests, so that
+   gated `finished` is the only exit the model is offered. `graphrag_agent_v1`, the ungated A/B
+   baseline, is unchanged and still receives the injected tool.
 
 In the traced run this produced Supplier 20 / Part 88 / Product 10 / Assembly 64 nodes and SUPPLIES 176
 / PART_OF 88 / ASSEMBLY_OF 64 relationships from the bundled `data/bom` example. Final state held eleven

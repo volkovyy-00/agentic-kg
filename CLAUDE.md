@@ -57,9 +57,11 @@ clone has. Sub-projects 2 and 3 remain the actual next work and are still unstar
 
 Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
 spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
-of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), and the same gate
-applied to the retrieval phase (PR #9, most recent on `main`) — see Architecture's *Handoff confirmation
-gates* subsection. None of these touch sub-projects 2/3, which remain unstarted.
+of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), the same gate
+applied to the retrieval phase (PR #9 — see Architecture's *Handoff confirmation gates* subsection), and a
+fix for the Neo4j singleton's use-after-close defect (PR #10, most recent on `main` — see Architecture's
+*Neo4j access* subsection, which already documents the resulting behavior). None of these touch sub-projects
+2/3, which remain unstarted.
 
 ## Commands
 
@@ -184,10 +186,15 @@ gate a `finished` transfer behind an explicit tool call instead of the model's o
   phase across multiple questions instead of ejecting the user after a single answer.
   `GRAPHRAG_HANDOFF_CONFIRMED_KEY` (`tools/graphrag_handoff_tools.py`) is set by `confirm_graphrag_handoff`;
   `finished` refuses to transfer without it; `reset_graphrag_handoff_confirmation` clears it every turn.
-  Deliberately not factored into a shared helper with the construction gate — the two `finished` wrappers
-  differ in transfer topology (sideways to a live-imported sibling vs. up to a plain constant), so a shared
-  factory would need to parametrise over more than a state key. `graphrag_agent_v1` has no gate and keeps
-  its original single-answer-then-eject behavior, for the A/B comparison described below.
+  Deliberately not factored into a shared helper with the construction gate. The two `finished` bodies are
+  now identical modulo the state key, the tool name inside the refusal string, and the `make_finished`
+  argument — the transfer-topology difference (sideways to a live-imported sibling vs. up to a plain
+  constant) lives entirely inside that argument. What justifies the duplication is that each `finished`'s
+  **docstring is the model-visible tool description** (ADK reads `__doc__` when building the declaration), and
+  the two legitimately say different things: one hands the user to the retrieval agent, the other ends
+  retrieval and hands them back to the coordinator. A shared factory would have to synthesise that text.
+  `graphrag_agent_v1` has no gate and keeps its original single-answer-then-eject behavior, for the
+  A/B comparison described below.
 
 ### Tool results
 

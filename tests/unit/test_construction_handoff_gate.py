@@ -8,6 +8,17 @@ unit-testable and is verified by hand (see the plan's Task 5).
 """
 import inspect
 
+import asyncio
+
+import pytest
+from google.genai import types
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
+from pydantic import Field
+
+from agentic_kg.common.adk_context import drop_foreign_context
+from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.agent import (
@@ -17,6 +28,9 @@ from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.age
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
     GRAPHRAG_AGENT_NAME,
     finished,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import (
+    graphrag_agent,
 )
 from agentic_kg.tools.construction_handoff_tools import (
     HANDOFF_CONFIRMED_KEY,
@@ -155,3 +169,201 @@ def test_confirm_tool_is_wired_into_the_construction_variant():
     tools = variants["graph_construction_agent_v1"]["tools"]
     assert confirm_construction_handoff in tools
     assert finished in tools
+
+
+def test_finished_succeeds_on_retry_after_an_out_of_order_refusal():
+    """Catches a gate that latches its refusal. ADK runs the tool calls in one
+    model reply in the order the model emitted them, so a reply ordering
+    'finished' before 'confirm_construction_handoff' refuses even though the
+    user did agree. The confirmation is recorded by the time the model reads
+    that error, so calling 'finished' again in the same turn must then
+    transfer -- which is the recovery the refusal message and instruction
+    step 9 promise. This matters more once Task 3 removes the injected
+    transfer tool: without the retry, the user is stuck in the phase."""
+    context = FakeToolContext()
+    assert is_error(finished(context))
+    confirm_construction_handoff(context)
+    assert finished(context) == {}
+    assert context.actions.transfer_to_agent == GRAPHRAG_AGENT_NAME
+
+
+def test_refusal_message_names_the_same_reply_recovery():
+    """Catches the refusal message losing the out-of-order recovery hint while
+    instruction step 9 still promises it. The model only learns that a retry
+    will work from this string, so the two must not drift apart."""
+    message = finished(FakeToolContext())["error_message"]
+    assert "call 'finished' once more" in message
+
+
+class CapturingLlm(BaseLlm):
+    """Scripted LLM that also records every request it was handed.
+
+    Copied from test_graphrag_context_filtering.py:20 rather than imported.
+    tests/unit/fakes.py deliberately does not centralize fakes of this kind,
+    and that file copied it from test_schema_refinement_loop_turn_cap.py:36
+    for the same reason. Do not extract it.
+    """
+    responses: list = Field(default_factory=list)
+    requests: list = Field(default_factory=list)
+    call_count: int = 0
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        self.requests.append(llm_request)
+        index = min(self.call_count, len(self.responses) - 1)
+        self.call_count += 1
+        yield self.responses[index]
+
+
+def _text(text):
+    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+
+
+def _call(name, args=None):
+    return LlmResponse(content=types.Content(role="model", parts=[
+        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
+    ]))
+
+
+def _declaration_names(request):
+    names = []
+    for tool in (request.config.tools or []):
+        for declaration in (getattr(tool, "function_declarations", None) or []):
+            names.append(declaration.name)
+    return names
+
+
+async def _run_one_turn(agent, app_name, message="hello"):
+    """Drive one real user turn through ADK and return the events it produced.
+
+    Points the Runner at an agent that is already wired into the real tree
+    rather than re-parenting it, which base_agent.py:496-505 forbids for an
+    agent that already has a parent.
+    """
+    runner = InMemoryRunner(agent=agent, app_name=app_name)
+    session = await runner.session_service.create_session(
+        app_name=app_name, user_id="u1",
+    )
+    return [
+        event async for event in runner.run_async(
+            user_id="u1", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        )
+    ]
+
+
+def test_the_strip_callback_is_wired_onto_the_construction_agent():
+    """The cheap statement of intent. Not sufficient on its own -- it says
+    nothing about whether the strip actually worked -- which is why the
+    behavioural tests below exist."""
+    assert strip_transfer_to_agent in graph_construction_agent.canonical_before_model_callbacks
+
+
+def test_the_agent_does_not_disallow_transfers():
+    """Guards the trap this design exists to avoid. Setting
+    disallow_transfer_to_parent would also close the door -- and would make
+    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    for the user's SECOND message, sending every in-phase follow-up back
+    through the coordinator. See the spec's 'Why not' section."""
+    assert graph_construction_agent.disallow_transfer_to_parent is False
+    assert graph_construction_agent.disallow_transfer_to_peers is False
+
+
+def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
+    """The actual guarantee: ADK injects a transfer_to_agent tool into every
+    sub-agent with a parent or peers, and it does not consult this agent's
+    handoff gate. Asserting on what reached the model is the only way to know
+    it is gone."""
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("nothing to do")],
+    ))
+    asyncio.run(_run_one_turn(graph_construction_agent, "construction_door_test"))
+
+    requests = graph_construction_agent.model.requests
+    assert requests, "the model was never called"
+    for request in requests:
+        assert "transfer_to_agent" not in request.tools_dict
+        assert "transfer_to_agent" not in _declaration_names(request)
+        instruction = str(getattr(request.config, "system_instruction", "") or "")
+        assert "transfer_to_agent" not in instruction
+
+
+def test_the_agents_own_tools_survive_the_strip(monkeypatch):
+    """Catches an over-broad strip that empties config.tools. The agent is
+    useless without its own tools, and every other assertion here is about
+    absence, so nothing else would notice."""
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("nothing to do")],
+    ))
+    asyncio.run(_run_one_turn(graph_construction_agent, "construction_tools_survive_test"))
+
+    names = _declaration_names(graph_construction_agent.model.requests[0])
+    assert "finished" in names
+    assert "confirm_construction_handoff" in names
+    assert "read_neo4j_cypher" in names
+
+
+def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+    """Pins what happens if a model emits the call from memory of an earlier
+    turn. The strip pops it from tools_dict, so ADK raises
+    (functions.py:565-568) rather than silently transferring."""
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[_call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})],
+    ))
+    with pytest.raises(ValueError, match="transfer_to_agent"):
+        asyncio.run(_run_one_turn(graph_construction_agent, "construction_hard_error_test"))
+
+
+def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
+    """Closing the injected door must not disturb the sanctioned one. Runs the
+    real ADK dispatch rather than calling 'finished' directly: the existing
+    test_finished_transfers_to_retrieval_when_confirmed calls the closure with
+    a FakeToolContext and would pass even if ADK's resolution path broke.
+
+    Both models are scripted: the transfer runs inline in the same turn
+    (base_llm_flow.py:536-542), so graphrag_agent's real model would otherwise
+    be invoked for real.
+    """
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[
+            _call("confirm_construction_handoff"),
+            _call("finished"),
+            _text("handing you to the retrieval agent"),
+        ],
+    ))
+    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("retrieval agent speaking")],
+    ))
+
+    events = asyncio.run(_run_one_turn(
+        graph_construction_agent, "construction_handoff_test",
+        message="I'm done here, move me on",
+    ))
+
+    authors = [event.author for event in events]
+    assert GRAPHRAG_AGENT_NAME in authors, (
+        f"the retrieval agent never took over; authors were {authors}"
+    )
+
+
+def test_the_agent_is_parented_so_the_absence_assertions_are_not_vacuous():
+    """ADK only injects transfer_to_agent into an agent that has a parent or
+    peers. If graph_construction_agent were ever unparented at test time, every
+    absence assertion in this file would pass without proving anything."""
+    assert graph_construction_agent.parent_agent is not None
+
+
+def test_both_model_callbacks_are_present_on_the_construction_agent():
+    """Catches either callback being dropped when the other is edited.
+
+    The strip removes the transfer_to_agent DECLARATION; drop_foreign_context
+    removes the coordinator's own delegating call, which ADK rewrites into a
+    'For context: ... called tool transfer_to_agent with parameters {...}'
+    message (contents.py:241-245) and then keeps in history for every later
+    turn. Either one alone leaves the model a standing worked example of a
+    door it is not supposed to use.
+    """
+    callbacks = graph_construction_agent.canonical_before_model_callbacks
+    assert drop_foreign_context in callbacks
+    assert strip_transfer_to_agent in callbacks
