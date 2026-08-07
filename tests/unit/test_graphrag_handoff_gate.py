@@ -21,6 +21,12 @@ from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+# Imported for the side effect of building the real agent tree: this parents
+# graphrag_agent under full_workflow_agent, which is what makes ADK actually
+# inject transfer_to_agent into it. Without this import, graphrag_agent has no
+# parent/peers at test time and every "transfer_to_agent is absent" assertion
+# below would pass vacuously regardless of whether the strip callback works.
+from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import agent as graphrag_module
 
 from agentic_kg.common.tool_result import is_error, is_success
@@ -281,6 +287,13 @@ def test_the_agent_does_not_disallow_transfers():
     through the coordinator. See the spec's 'Why not' section."""
     assert graphrag_agent.disallow_transfer_to_parent is False
     assert graphrag_agent.disallow_transfer_to_peers is False
+
+
+def test_the_agent_is_parented_so_the_absence_assertions_are_not_vacuous():
+    """ADK only injects transfer_to_agent into an agent that has a parent or
+    peers. If graphrag_agent were ever unparented at test time, every absence
+    assertion in this file would pass without proving anything."""
+    assert graphrag_agent.parent_agent is not None
 
 
 def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
