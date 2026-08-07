@@ -193,8 +193,8 @@ gate a `finished` transfer behind an explicit tool call instead of the model's o
   **docstring is the model-visible tool description** (ADK reads `__doc__` when building the declaration), and
   the two legitimately say different things: one hands the user to the retrieval agent, the other ends
   retrieval and hands them back to the coordinator. A shared factory would have to synthesise that text.
-  `graphrag_agent_v1` has no gate and keeps
-  its original single-answer-then-eject behavior, for the A/B comparison described below.
+  `graphrag_agent_v1` has no gate and keeps its original single-answer-then-eject behavior, for the
+  A/B comparison described below.
 
 ### Tool results
 
