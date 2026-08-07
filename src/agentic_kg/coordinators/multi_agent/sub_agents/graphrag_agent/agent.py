@@ -2,6 +2,7 @@ from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
 
+from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.llm_catalog import get_llm, LlmKind
 from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED_KEY
 
@@ -38,10 +39,32 @@ graphrag_agent = Agent(
     description="Information retrieval from a knowledge graph using a range of query tools.", # Crucial for delegation later
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
-    # .get() so v1, which has no callback, stays a no-op: the field defaults to
-    # None (llm_agent.py:225) and canonical_before_model_callbacks returns []
-    # on falsy (390-391).
-    before_model_callback=variants[AGENT_NAME].get("before_model_callback"),
+    # v2 holds two model callbacks: drop_foreign_context (from the variant
+    # spec, PR #9's context filtering) and the transfer strip. ADK iterates
+    # canonical_before_model_callbacks as a list (base_llm_flow.py:661), so a
+    # list is native here -- the strip must JOIN drop_foreign_context, never
+    # replace it.
+    #
+    # ADK injects its own 'transfer_to_agent' tool, plus an instruction
+    # advertising it, into any LlmAgent with a parent or peers, and it does not
+    # consult the handoff gate. The strip removes it from every request.
+    #
+    # Deliberately NOT disallow_transfer_to_parent: that flag would also close
+    # the door, and would also stop Runner._find_agent_to_run
+    # (runners.py:474-489) from returning this agent for the user's second
+    # message, so every follow-up question would be re-arbitrated by the
+    # coordinator. See adk_transfer.py.
+    #
+    # Conditional for the same reason as the reset callback below. v1 is the
+    # ungated A/B baseline -- its 'finished' transfers unconditionally, so it
+    # has no guarantee for the injected tool to bypass, and
+    # test_v1_is_left_intact_for_the_acceptance_ab pins that it carries no
+    # before_model_callback at all. Never attach this unconditionally.
+    before_model_callback=(
+        [variants[AGENT_NAME]["before_model_callback"], strip_transfer_to_agent]
+        if AGENT_NAME == "graphrag_agent_v2"
+        else variants[AGENT_NAME].get("before_model_callback")
+    ),
     # Conditional because only v2 is gated. Attaching unconditionally would
     # write an inert graphrag_handoff_confirmed every turn under v1, read by
     # nobody -- harmless, but untrue to "v1 is untouched" and avoidable in one

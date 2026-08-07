@@ -9,6 +9,20 @@ PR #9's description for the verification steps).
 """
 import inspect
 
+import asyncio
+
+import pytest
+from google.genai import types
+from google.adk.agents import Agent
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
+from pydantic import Field
+
+from agentic_kg.common.adk_context import drop_foreign_context
+from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import agent as graphrag_module
+
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.tools.graphrag_handoff_tools import (
     GRAPHRAG_HANDOFF_CONFIRMED_KEY,
@@ -24,6 +38,56 @@ from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import 
     graphrag_agent,
     reset_graphrag_handoff_confirmation,
 )
+
+
+class CapturingLlm(BaseLlm):
+    """Scripted LLM that also records every request it was handed.
+
+    Copied from test_graphrag_context_filtering.py:20 rather than imported.
+    tests/unit/fakes.py deliberately does not centralize fakes of this kind.
+    Do not extract it.
+    """
+    responses: list = Field(default_factory=list)
+    requests: list = Field(default_factory=list)
+    call_count: int = 0
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        self.requests.append(llm_request)
+        index = min(self.call_count, len(self.responses) - 1)
+        self.call_count += 1
+        yield self.responses[index]
+
+
+def _text(text):
+    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+
+
+def _call(name, args=None):
+    return LlmResponse(content=types.Content(role="model", parts=[
+        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
+    ]))
+
+
+def _declaration_names(request):
+    names = []
+    for tool in (request.config.tools or []):
+        for declaration in (getattr(tool, "function_declarations", None) or []):
+            names.append(declaration.name)
+    return names
+
+
+async def _run_one_turn(agent, app_name, message="hello"):
+    """Drive one real user turn through ADK and return the events it produced."""
+    runner = InMemoryRunner(agent=agent, app_name=app_name)
+    session = await runner.session_service.create_session(
+        app_name=app_name, user_id="u1",
+    )
+    return [
+        event async for event in runner.run_async(
+            user_id="u1", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        )
+    ]
 
 
 class FakeActions:
@@ -185,3 +249,117 @@ def test_refusal_message_names_the_same_reply_recovery():
     will work from this string, so the two must not drift apart."""
     message = finished(FakeToolContext())["error_message"]
     assert "same reply" in message
+
+
+def test_the_strip_callback_tracks_the_selected_variant():
+    """Catches an unconditional attachment. Only graphrag_agent_v2 has a gate
+    for the injected transfer tool to bypass; v1 is the ungated A/B baseline
+    and must keep its request untouched. Written against AGENT_NAME rather
+    than the literal so it survives -- and still constrains -- a future flip
+    of that constant, which is precisely when an unconditional attachment
+    would silently reach v1."""
+    expected = graphrag_module.AGENT_NAME == "graphrag_agent_v2"
+    callbacks = graphrag_agent.canonical_before_model_callbacks
+    assert (strip_transfer_to_agent in callbacks) is expected
+
+
+def test_both_model_callbacks_are_present_on_the_shipped_variant():
+    """States the current fact the test above deliberately does not, and
+    catches the strip callback replacing drop_foreign_context rather than
+    joining it -- which would silently undo the #9 context filtering."""
+    assert graphrag_module.AGENT_NAME == "graphrag_agent_v2"
+    callbacks = graphrag_agent.canonical_before_model_callbacks
+    assert drop_foreign_context in callbacks
+    assert strip_transfer_to_agent in callbacks
+
+
+def test_the_agent_does_not_disallow_transfers():
+    """Guards the trap this design exists to avoid. Setting
+    disallow_transfer_to_parent would also close the door -- and would make
+    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    for the user's SECOND message, sending every follow-up question back
+    through the coordinator. See the spec's 'Why not' section."""
+    assert graphrag_agent.disallow_transfer_to_parent is False
+    assert graphrag_agent.disallow_transfer_to_peers is False
+
+
+def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
+    """The actual guarantee: ADK injects a transfer_to_agent tool into every
+    sub-agent with a parent or peers, and it does not consult this agent's
+    handoff gate. Asserting on what reached the model is the only way to know
+    it is gone."""
+    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("what would you like to know?")],
+    ))
+    asyncio.run(_run_one_turn(graphrag_agent, "graphrag_door_test"))
+
+    requests = graphrag_agent.model.requests
+    assert requests, "the model was never called"
+    for request in requests:
+        assert "transfer_to_agent" not in request.tools_dict
+        assert "transfer_to_agent" not in _declaration_names(request)
+        instruction = str(getattr(request.config, "system_instruction", "") or "")
+        assert "transfer_to_agent" not in instruction
+
+
+def test_the_agents_own_tools_survive_the_strip(monkeypatch):
+    """Catches an over-broad strip that empties config.tools."""
+    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("what would you like to know?")],
+    ))
+    asyncio.run(_run_one_turn(graphrag_agent, "graphrag_tools_survive_test"))
+
+    names = _declaration_names(graphrag_agent.model.requests[0])
+    assert "finished" in names
+    assert "confirm_graphrag_handoff" in names
+    assert "read_neo4j_cypher" in names
+
+
+def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+    """Pins what happens if a model emits the call from memory of an earlier
+    turn. The strip pops it from tools_dict, so ADK raises
+    (functions.py:565-568) rather than silently transferring."""
+    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[_call("transfer_to_agent", {"agent_name": MULTI_AGENT_COORDINATOR})],
+    ))
+    with pytest.raises(ValueError, match="transfer_to_agent"):
+        asyncio.run(_run_one_turn(graphrag_agent, "graphrag_hard_error_test"))
+
+
+def test_an_unstripped_agent_still_receives_it_negative_control():
+    """Proves the assertions above are not vacuous -- that this harness does
+    detect the injected tool when it is genuinely there.
+
+    Builds a fresh, unparented v1 with no strip callback and gives it a
+    throwaway parent with a peer. That is only possible because it is freshly
+    constructed: base_agent.py:496-505 raises on any attempt to re-parent the
+    live singletons, which is why every other test here points the Runner at
+    the real tree.
+    """
+    spec = variants["graphrag_agent_v1"]
+    child = Agent(
+        name="graphrag_agent_v1",
+        model=CapturingLlm(model="scripted", responses=[_text("ok")]),
+        description="test",
+        instruction=spec["instruction"],
+        tools=spec["tools"],
+    )
+    peer = Agent(
+        name="dummy_peer",
+        model=CapturingLlm(model="scripted", responses=[_text("ok")]),
+        description="a peer, so the peers branch of _get_transfer_targets runs",
+    )
+    Agent(
+        name="fake_coordinator",
+        model=CapturingLlm(model="scripted", responses=[_text("ok")]),
+        description="throwaway parent",
+        sub_agents=[child, peer],
+    )
+
+    asyncio.run(_run_one_turn(child, "graphrag_negative_control"))
+
+    request = child.model.requests[0]
+    assert "transfer_to_agent" in request.tools_dict
+    assert "transfer_to_agent" in _declaration_names(request)
+    assert "transfer_to_agent" in str(request.config.system_instruction or "")
