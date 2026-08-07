@@ -376,3 +376,37 @@ def test_an_unstripped_agent_still_receives_it_negative_control():
     assert "transfer_to_agent" in request.tools_dict
     assert "transfer_to_agent" in _declaration_names(request)
     assert "transfer_to_agent" in str(request.config.system_instruction or "")
+
+
+def test_a_confirmed_handoff_still_reaches_the_coordinator(monkeypatch):
+    """Closing the injected door must not disturb the sanctioned one. Runs the
+    real ADK dispatch rather than calling 'finished' directly: the existing
+    test_finished_transfers_to_the_coordinator_when_confirmed calls the
+    closure with a FakeToolContext and would pass even if ADK's resolution
+    path broke.
+
+    Both models are scripted: the transfer runs inline in the same turn
+    (base_llm_flow.py:536-542), so the coordinator's real model would
+    otherwise be invoked for real.
+    """
+    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[
+            _call("confirm_graphrag_handoff"),
+            _call("finished"),
+            _text("handing you back to the coordinator"),
+        ],
+    ))
+    monkeypatch.setattr(full_workflow_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("coordinator speaking")],
+    ))
+
+    events = asyncio.run(_run_one_turn(
+        graphrag_agent, "graphrag_handoff_test",
+        message="that's everything, thanks",
+    ))
+
+    authors = [event.author for event in events]
+    assert MULTI_AGENT_COORDINATOR in authors, (
+        f"the coordinator never took over; authors were {authors}"
+    )
