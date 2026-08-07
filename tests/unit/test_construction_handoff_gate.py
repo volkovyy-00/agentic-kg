@@ -178,4 +178,4 @@ def test_refusal_message_names_the_same_reply_recovery():
     instruction step 9 still promises it. The model only learns that a retry
     will work from this string, so the two must not drift apart."""
     message = finished(FakeToolContext())["error_message"]
-    assert "same reply" in message
+    assert "call 'finished' once more" in message
