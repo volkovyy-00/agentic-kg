@@ -21,6 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   gate, the same mechanism the construction handoff uses.
 
 ### Fixed
+- **Handoff gates are no longer bypassable (#11)**: both the construction and retrieval handoff gates
+  guarded only their own `finished` tool, while ADK independently injected a `transfer_to_agent` tool —
+  and an instruction advertising it — into every sub-agent with a parent or peers. The model could leave
+  either phase through that tool with the confirmation flag still unset, which is the exact defect both
+  gates were built to prevent. Both gated agents now strip that tool out of every request before the
+  model sees it, so `finished` is the only exit the model can choose. The construction gate's refusal
+  message was also corrected: it now tells the model a retry will succeed when the confirmation was
+  recorded later in the same reply, instead of sending it back to re-ask the user.
 - **Neo4j connection recovery (#10)**: a brief database outage no longer disables every graph tool for the
   life of the process. The shared client now reopens its own connection on next use instead of being
   discarded while five modules still held it, so once the database is healthy the next tool call succeeds
