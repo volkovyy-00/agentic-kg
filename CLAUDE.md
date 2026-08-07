@@ -58,10 +58,13 @@ clone has. Sub-projects 2 and 3 remain the actual next work and are still unstar
 Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
 spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
 of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), the same gate
-applied to the retrieval phase (PR #9 — see Architecture's *Handoff confirmation gates* subsection), and a
-fix for the Neo4j singleton's use-after-close defect (PR #10, most recent on `main` — see Architecture's
-*Neo4j access* subsection, which already documents the resulting behavior). None of these touch sub-projects
-2/3, which remain unstarted.
+applied to the retrieval phase (PR #9 — see Architecture's *Handoff confirmation gates* subsection), a
+fix for the Neo4j singleton's use-after-close defect (PR #10 — see Architecture's *Neo4j access* subsection,
+which already documents the resulting behavior), a fix for both handoff gates being bypassable via ADK's
+own injected `transfer_to_agent` tool (PR #11 — see Architecture's *Handoff confirmation gates* subsection),
+and a gate on the user-intent phase so it cannot be left before the user's goal approval is actually
+recorded (PR #12, open — same subsection; it is the one gate that holds no per-turn flag). None of these
+touch sub-projects 2/3, which remain unstarted.
 
 ## Commands
 
@@ -174,8 +177,10 @@ invocation per user turn (deliberate, not an unexplained restriction): `reset_sc
 
 ### Handoff confirmation gates
 
-Two phase transitions reuse the same state-gate shape as `schema_refinement_loop`'s turn cap above, but to
-gate a `finished` transfer behind an explicit tool call instead of the model's own reading of the conversation:
+Three phase exits are gated. Two of them reuse the same state-gate shape as `schema_refinement_loop`'s turn
+cap above, gating a `finished` transfer behind an explicit tool call instead of the model's own reading of
+the conversation. **The third gates on durable state instead and is deliberately not the same shape** — read
+its entry below before assuming a fourth gate should copy either pattern:
 
 - **Construction → retrieval** (PR #8): `graph_construction_agent`'s `finished` wrapper refuses to transfer
   until `HANDOFF_CONFIRMED_KEY` (`tools/construction_handoff_tools.py`) is set by an explicit
@@ -195,6 +200,55 @@ gate a `finished` transfer behind an explicit tool call instead of the model's o
   retrieval and hands them back to the coordinator. A shared factory would have to synthesise that text.
   `graphrag_agent_v1` has no gate and keeps its original single-answer-then-eject behavior, for the
   A/B comparison described below.
+- **Intent → coordinator** (PR #12): `user_intent_agent_v2`'s `finished` refuses until the user's goal has
+  been approved *and* that approval is still current — `approved_user_goal` present **and equal to**
+  `perceived_user_goal`, both already written by `tools/user_goal_tools.py`. **No new state key, no new
+  tool, no reset callback, and no `before_agent_callback` at all.** That is the difference from the two
+  gates above, and it is load-bearing: they gate on something the user *said* ("yes, I'm done here"), which
+  is turn-scoped and must not go stale, so they need a per-turn flag and a reset. This phase gates on
+  something the user *did* — an approval already recorded durably by an existing tool — so a flag would
+  duplicate a fact `approved_user_goal` already carries and would need a reset to stay honest. **This is
+  therefore not copy #3 of the flag/reset/confirm-tool shape, and does not fire the extraction trigger the
+  retrieval-gate spec named.** Do not "notice the duplication" and factor the three together.
+  Equality rather than presence, because a goal approved and then revised leaves an approved key that no
+  longer describes what the user asked for; refusing on that is the same defect one route over.
+  `finished` branches three ways in code — nothing recorded / never approved / stale since approval — the
+  first gate here to do so; the construction gate's single `if` with one two-situation string is the
+  precedent for wording style, not structure. The branch messages are read by the model, not the user, and
+  each names the tool to call next; that is the entire recovery path, since there is no escape hatch.
+  The shared module-level `finished` object had to be split first: `_transfer_to_coordinator` (ungated,
+  `user_intent_agent_v1`'s, and its `__name__` must stay `"finished"` since ADK derives the tool name from
+  it) versus the gated `finished` (v2's). Gating in place would have left v1 — which uses `set_user_goal`
+  and never writes `approved_user_goal` — unable to exit at all, invisibly until someone flipped
+  `AGENT_NAME`.
+
+Both flag-based gates above guard only `finished`. ADK separately injects a `transfer_to_agent` tool (plus an
+advertising instruction block) into every sub-agent with a parent or peers, and that tool never consulted
+either gate — before PR #11 the model could leave a phase through it with the confirmation flag still
+unset, the exact defect the gates exist to prevent. Both gated agents (`graph_construction_agent` and
+`graphrag_agent_v2` only, never `_v1`) now run `strip_transfer_to_agent` (`common/adk_transfer.py`) as a
+`before_model_callback`, stripping the tool from `tools_dict`, `config.tools`, and the system instruction
+before the model sees the request. `disallow_transfer_to_parent` was deliberately avoided instead, since it
+also kills phase stickiness (`Runner._find_agent_to_run` would re-arbitrate every new message through the
+coordinator). Instruction-block removal is bounded by two marker phrases matched forward from the block's
+start; if a future `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning
+rather than failing loudly — check logs after any ADK bump. `graph_construction_agent` also gained
+`drop_foreign_context` in this change, closing the same context-leak hole the *Grounding* section below
+documents for `graphrag_agent_v2`.
+
+`user_intent_agent_v2` carries both callbacks too (PR #12), for the same reason and as a pair:
+`before_model_callback=[drop_foreign_context, strip_transfer_to_agent]`. **The two belong together
+wherever the strip is used.** The strip removes the transfer *declaration*; every stripped agent is
+entered *by* someone else's `transfer_to_agent` call, which ADK rewrites into a `"For context:
+[kg_construction_agent_v1] called tool transfer_to_agent…"` turn that then sits in that agent's history —
+a worked *example* of the exact call and argument shape. Removing the declaration and leaving the example
+is half a fix: the model copies it, the strip has already popped it from `tools_dict`, and ADK raises
+`ValueError` mid-turn. That failure is not the "loud" one the refusal messages are — it is a dead turn
+with no response and no spinner, i.e. the swallowed-exception mode the *Two coordinators* section above
+tells you to debug from the `adk web` stdout. `user_intent_agent`'s exposure is the largest of the three,
+since the interview is the stickiest phase and the example sits in context on every turn of it. Only
+`drop_foreign_context` on the coordinator itself is absent by design — its transfer tool is never
+stripped, since that is how the workflow advances at all.
 
 ### Tool results
 
