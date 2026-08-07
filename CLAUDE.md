@@ -57,9 +57,11 @@ clone has. Sub-projects 2 and 3 remain the actual next work and are still unstar
 
 Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
 spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
-of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), and the same gate
-applied to the retrieval phase (PR #9, most recent on `main`) — see Architecture's *Handoff confirmation
-gates* subsection. None of these touch sub-projects 2/3, which remain unstarted.
+of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), the same gate
+applied to the retrieval phase (PR #9 — see Architecture's *Handoff confirmation gates* subsection), and a
+fix for the Neo4j singleton's use-after-close defect (PR #10, most recent on `main` — see Architecture's
+*Neo4j access* subsection, which already documents the resulting behavior). None of these touch sub-projects
+2/3, which remain unstarted.
 
 ## Commands
 
