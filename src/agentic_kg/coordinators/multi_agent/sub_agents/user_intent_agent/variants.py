@@ -12,13 +12,11 @@ from google.adk.tools import ToolContext
 from agentic_kg.tools.user_goal_tools import (
     set_user_goal, get_user_goal,
     set_perceived_user_goal, approve_perceived_user_goal,
-    APPROVED_USER_GOAL,
+    APPROVED_USER_GOAL, PERCEIVED_USER_GOAL,
 )
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.tool_result import tool_error
-
-PERCEIVED_USER_GOAL = "perceived_user_goal"
 
 # v1's exit, ungated and unchanged in behaviour. v1 predates the
 # perceived/approved split entirely -- it uses set_user_goal, which writes
