@@ -186,9 +186,14 @@ gate a `finished` transfer behind an explicit tool call instead of the model's o
   phase across multiple questions instead of ejecting the user after a single answer.
   `GRAPHRAG_HANDOFF_CONFIRMED_KEY` (`tools/graphrag_handoff_tools.py`) is set by `confirm_graphrag_handoff`;
   `finished` refuses to transfer without it; `reset_graphrag_handoff_confirmation` clears it every turn.
-  Deliberately not factored into a shared helper with the construction gate — the two `finished` wrappers
-  differ in transfer topology (sideways to a live-imported sibling vs. up to a plain constant), so a shared
-  factory would need to parametrise over more than a state key. `graphrag_agent_v1` has no gate and keeps
+  Deliberately not factored into a shared helper with the construction gate. The two `finished` bodies are
+  now identical modulo the state key, the tool name inside the refusal string, and the `make_finished`
+  argument — the transfer-topology difference (sideways to a live-imported sibling vs. up to a plain
+  constant) lives entirely inside that argument. What justifies the duplication is that each `finished`'s
+  **docstring is the model-visible tool description** (ADK reads `__doc__` when building the declaration), and
+  the two legitimately say different things: one hands the user to the retrieval agent, the other ends
+  retrieval and hands them back to the coordinator. A shared factory would have to synthesise that text.
+  `graphrag_agent_v1` has no gate and keeps
   its original single-answer-then-eject behavior, for the A/B comparison described below.
 
 ### Tool results

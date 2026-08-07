@@ -21,9 +21,20 @@ it built it in -- a marker phrase in an interpolated instruction block, and the
 layout of config.tools. That is why this is tested against real LlmRequest
 objects and asserted end-to-end on what reaches the model. A google-adk 2.x
 upgrade should expect to rewrite this module.
+
+Known gap, deliberately not closed: the live (bidi-streaming) path never runs
+this. run_live (base_llm_flow.py:70-79) does call _preprocess_async, so it DOES
+inject the transfer tool, but it never reaches _handle_before_model_callback
+(base_llm_flow.py:560), which only _call_llm_async on the run_async path calls
+-- so neither this strip nor drop_foreign_context applies under run_live. That
+is unreachable here because LiteLlm does not override BaseLlm.connect
+(base_llm.py:118), which raises NotImplementedError, so no agent in this tree
+can run live at all.
 """
 import logging
 from typing import Any, Optional
+
+from google.adk.models.llm_response import LlmResponse
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +45,10 @@ TRANSFER_TOOL_NAME = "transfer_to_agent"
 # the whole thing -- this is the invariant opening line.
 _TRANSFER_INSTRUCTION_PREFIX = "You have a list of other agents to transfer to:"
 
-# ...and these are its two possible closing lines: the base block always ends
-# with the first, and the parent addendum (agent_transfer.py:101-106), when
-# present, ends with the second. Both are quoted mid-line because ADK's source
-# hard-wraps the surrounding sentences; these fragments sit on a line of their
-# own and so survive the wrapping.
+# ...and this is its closing line. The base block (agent_transfer.py:85-99)
+# always ends with it. Quoted mid-line because ADK's source hard-wraps the
+# surrounding sentence; this fragment sits on a line of its own and so survives
+# the wrapping.
 #
 # The end boundary is needed because the block is NOT reliably the last thing
 # in the system instruction. _preprocess_async (base_llm_flow.py:374-405) runs
@@ -48,21 +58,39 @@ _TRANSFER_INSTRUCTION_PREFIX = "You have a list of other agents to transfer to:"
 # system instruction today, so nothing currently lands after the block. A
 # future toolset that did would have its own legitimate instructions silently
 # deleted by a truncate-to-end-of-string removal.
-_TRANSFER_INSTRUCTION_ENDINGS = (
-    "the function call.",
-    "to your parent agent.",
-)
+_TRANSFER_INSTRUCTION_ENDING = "the function call."
+
+# When the agent has a parent, agent_transfer.py:101-106 appends one more
+# paragraph immediately after the base block, and that paragraph is what
+# actually ends the thing we want removed.
+#
+# Both markers are matched FORWARD from the block's start, never backward: an
+# rfind would jump to the LAST occurrence anywhere later in the instruction, so
+# any future toolset instruction happening to contain one of these ordinary
+# English fragments would be swallowed whole, silently -- the exact failure the
+# two-ended bound exists to prevent.
+#
+# Extending past the base ending is likewise conditional, not unconditional:
+# the addendum is only recognised when the text between the two markers really
+# is ADK's addendum, i.e. it opens with the addendum's own first words. A later
+# instruction ending "...hand control back to your parent agent." does not
+# qualify, and the removal stops at the base ending instead.
+_TRANSFER_PARENT_ADDENDUM_OPENING = "Your parent agent is"
+_TRANSFER_PARENT_ADDENDUM_ENDING = "to your parent agent."
 
 
-def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional[None]:
+def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional[LlmResponse]:
     """Remove the injected transfer tool from the request, in place.
 
     The parameter NAMES are load-bearing: ADK invokes this purely by keyword,
     as callback(callback_context=..., llm_request=...) (base_llm_flow.py:661).
     Renaming either one fails at request time with a TypeError, not at import.
 
-    Returns None so ADK proceeds with the (now stripped) request; a non-None
-    return would short-circuit the model call entirely.
+    Always returns None so ADK proceeds with the (now stripped) request. The
+    Optional[LlmResponse] annotation documents ADK's contract rather than this
+    function's behaviour: returning an LlmResponse here would short-circuit the
+    model call entirely and send that response back as the turn's output, which
+    is never what a strip wants.
 
     All three surfaces matter. tools_dict is ADK's dispatch table, so removing
     it makes a call the model remembers from an earlier turn a hard error
@@ -71,6 +99,7 @@ def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional
     the model the tool. system_instruction is where ADK tells the model the
     tool exists at all.
     """
+    was_injected = TRANSFER_TOOL_NAME in llm_request.tools_dict
     llm_request.tools_dict.pop(TRANSFER_TOOL_NAME, None)
 
     config = getattr(llm_request, "config", None)
@@ -94,19 +123,36 @@ def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional
 
     instruction = config.system_instruction
     if isinstance(instruction, str):
-        config.system_instruction = _without_transfer_block(instruction)
+        config.system_instruction = _without_transfer_block(
+            instruction, tool_was_injected=was_injected
+        )
 
     return None
 
 
-def _without_transfer_block(instruction: str) -> str:
+def _without_transfer_block(instruction: str, tool_was_injected: bool = True) -> str:
     """Cut out the injected transfer block, and only it.
 
-    Bounded at both ends deliberately. Removing from the prefix to the end of
-    the string would be correct today and would silently swallow anything a
-    future tool appended after it -- see _TRANSFER_INSTRUCTION_ENDINGS.
+    Bounded at both ends deliberately, and both bounds are searched FORWARD
+    from the block's start. Removing from the prefix to the end of the string
+    would be correct today and would silently swallow anything a future tool
+    appended after it; so, just as silently, would taking the LAST occurrence
+    of an ending marker rather than the first.
     """
     start = instruction.find(_TRANSFER_INSTRUCTION_PREFIX)
+    if start != -1 and not tool_was_injected:
+        # ADK renamed the tool: the block is still being appended (its opening
+        # line matched) but nothing named TRANSFER_TOOL_NAME was in tools_dict,
+        # so the two tool-level strips above did nothing at all and the model
+        # is still being offered a working transfer under its new name. The
+        # instruction strip below still fires, which hides this from every
+        # assertion phrased on the instruction text -- hence the warning.
+        logger.warning(
+            "the transfer instruction block was injected but no %s tool was in "
+            "tools_dict -- ADK may have renamed the tool, in which case the "
+            "renamed tool is NOT being stripped",
+            TRANSFER_TOOL_NAME,
+        )
     if start == -1:
         if TRANSFER_TOOL_NAME in instruction:
             # ADK changed the block's opening line. The tool is gone from both
@@ -120,18 +166,27 @@ def _without_transfer_block(instruction: str) -> str:
             )
         return instruction
 
-    end = -1
-    for ending in _TRANSFER_INSTRUCTION_ENDINGS:
-        found = instruction.rfind(ending, start)
-        if found != -1:
-            end = max(end, found + len(ending))
+    base_ending = instruction.find(_TRANSFER_INSTRUCTION_ENDING, start)
+    if base_ending == -1:
+        end = -1
+    else:
+        end = base_ending + len(_TRANSFER_INSTRUCTION_ENDING)
+        addendum_ending = instruction.find(_TRANSFER_PARENT_ADDENDUM_ENDING, end)
+        if addendum_ending != -1:
+            between = instruction[end:addendum_ending].lstrip()
+            if between.startswith(_TRANSFER_PARENT_ADDENDUM_OPENING):
+                # Really is agent_transfer.py:101-106's parent paragraph, which
+                # follows the base block immediately. Anything else sitting
+                # between the two markers means the second marker belongs to
+                # someone else's instruction, and the removal stops short.
+                end = addendum_ending + len(_TRANSFER_PARENT_ADDENDUM_ENDING)
     if end == -1:
-        # Opening line matched but neither closing line did: ADK's wording has
+        # Opening line matched but the closing line did not: ADK's wording has
         # drifted. Fall back to removing everything from the prefix, which is
         # what this did before it was bounded -- losing a trailing instruction
         # is worse than leaving the door advertised, so warn loudly.
         logger.warning(
-            "found the transfer block's opening line but neither closing "
+            "found the transfer block's opening line but not its closing "
             "line -- removing to end of instruction, which may discard other "
             "tools' instructions; ADK's wording may have changed",
         )

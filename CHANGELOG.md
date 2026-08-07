@@ -28,7 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   gates were built to prevent. Both gated agents now strip that tool out of every request before the
   model sees it, so `finished` is the only exit the model can choose. The construction gate's refusal
   message was also corrected: it now tells the model a retry will succeed when the confirmation was
-  recorded later in the same reply, instead of sending it back to re-ask the user.
+  recorded later in the same reply, instead of sending it back to re-ask the user. The construction
+  agent additionally drops other agents' turns from its context, the same filtering the retrieval agent
+  already did — otherwise the coordinator's own delegating call stayed in history as a worked example of
+  the tool that was just taken away.
 - **Neo4j connection recovery (#10)**: a brief database outage no longer disables every graph tool for the
   life of the process. The shared client now reopens its own connection on next use instead of being
   discarded while five modules still held it, so once the database is healthy the next tool call succeeds

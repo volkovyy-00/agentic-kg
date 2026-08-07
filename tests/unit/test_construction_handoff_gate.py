@@ -17,6 +17,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
 from pydantic import Field
 
+from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
@@ -344,3 +345,25 @@ def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
     assert GRAPHRAG_AGENT_NAME in authors, (
         f"the retrieval agent never took over; authors were {authors}"
     )
+
+
+def test_the_agent_is_parented_so_the_absence_assertions_are_not_vacuous():
+    """ADK only injects transfer_to_agent into an agent that has a parent or
+    peers. If graph_construction_agent were ever unparented at test time, every
+    absence assertion in this file would pass without proving anything."""
+    assert graph_construction_agent.parent_agent is not None
+
+
+def test_both_model_callbacks_are_present_on_the_construction_agent():
+    """Catches either callback being dropped when the other is edited.
+
+    The strip removes the transfer_to_agent DECLARATION; drop_foreign_context
+    removes the coordinator's own delegating call, which ADK rewrites into a
+    'For context: ... called tool transfer_to_agent with parameters {...}'
+    message (contents.py:241-245) and then keeps in history for every later
+    turn. Either one alone leaves the model a standing worked example of a
+    door it is not supposed to use.
+    """
+    callbacks = graph_construction_agent.canonical_before_model_callbacks
+    assert drop_foreign_context in callbacks
+    assert strip_transfer_to_agent in callbacks

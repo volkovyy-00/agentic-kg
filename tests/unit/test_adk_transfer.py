@@ -158,6 +158,60 @@ def test_strip_keeps_instructions_that_land_after_the_block():
     assert "expert at knowledge graph construction" in request.config.system_instruction
 
 
+def test_strip_keeps_a_later_instruction_containing_the_base_ending_marker():
+    """The sharper version of the test above.
+
+    That one's trailing text contains neither ending marker, so it passes
+    against a removal bounded with rfind -- which takes the LAST occurrence of
+    a marker anywhere after the block rather than the first, and so deletes
+    everything from the block's opening line through a later, unrelated
+    sentence. "the function call." is ordinary enough English for a future
+    toolset to write, and the deletion is silent: no error, no warning.
+    """
+    request = asyncio.run(_request_as_adk_builds_it())
+    request.append_instructions(
+        ["Later toolset: when you are done, emit the function call."]
+    )
+
+    strip_transfer_to_agent(None, request)
+
+    assert TRANSFER_TOOL_NAME not in request.config.system_instruction
+    assert "other agents to transfer to" not in request.config.system_instruction
+    assert "Later toolset: when you are done" in request.config.system_instruction
+    assert "expert at knowledge graph construction" in request.config.system_instruction
+
+
+def test_strip_keeps_a_later_instruction_containing_the_parent_ending_marker():
+    """Same trap, the other marker. "to your parent agent." only ends the block
+    when it terminates ADK's parent addendum (agent_transfer.py:101-106), which
+    opens with "Your parent agent is" and follows the base ending immediately.
+    A later sentence that merely happens to end the same way must not extend
+    the removal to reach it."""
+    request = asyncio.run(_request_as_adk_builds_it())
+    request.append_instructions(
+        ["Later toolset: hand control back to your parent agent."]
+    )
+
+    strip_transfer_to_agent(None, request)
+
+    assert TRANSFER_TOOL_NAME not in request.config.system_instruction
+    assert "other agents to transfer to" not in request.config.system_instruction
+    assert "Later toolset: hand control back" in request.config.system_instruction
+    assert "expert at knowledge graph construction" in request.config.system_instruction
+
+
+def test_strip_still_removes_the_parent_addendum_it_is_meant_to():
+    """The negative control for the two tests above: a bound narrowed until it
+    stops at the base ending would pass both of them while leaving ADK's real
+    parent paragraph -- 'transfer to your parent agent' -- in the instruction.
+    """
+    request = asyncio.run(_request_as_adk_builds_it())
+    strip_transfer_to_agent(None, request)
+
+    assert "Your parent agent is" not in request.config.system_instruction
+    assert "to your parent agent." not in request.config.system_instruction
+
+
 async def _request_with_no_transfer_tool():
     request = LlmRequest()
     request.append_instructions(["You are an expert at knowledge graph construction."])

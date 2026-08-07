@@ -410,3 +410,20 @@ def test_a_confirmed_handoff_still_reaches_the_coordinator(monkeypatch):
     assert MULTI_AGENT_COORDINATOR in authors, (
         f"the coordinator never took over; authors were {authors}"
     )
+
+
+def test_refusal_message_names_the_retry_that_actually_recovers():
+    """Sharpens test_refusal_message_names_the_same_reply_recovery above, which
+    is kept as-is (this file is append-only for existing tests).
+
+    "same reply" was already in the ORIGINAL refusal wording, the one that told
+    the model only to ask the user again -- so that assertion passes whether or
+    not the message still tells the model that an out-of-order 'finished' can
+    simply be retried. That retry hint is the whole recovery for a reply that
+    ordered 'finished' before 'confirm_graphrag_handoff', and with the injected
+    transfer tool stripped there is no other way out of the phase. This asserts
+    the phrase that only the current wording carries, matching the construction
+    copy's assertion.
+    """
+    message = finished(FakeToolContext())["error_message"]
+    assert "call 'finished' once more" in message
