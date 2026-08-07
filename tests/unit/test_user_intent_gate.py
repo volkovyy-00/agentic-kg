@@ -21,6 +21,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
 from pydantic import Field
 
+from agentic_kg.common.adk_context import FOREIGN_CONTEXT_SENTINEL, drop_foreign_context
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.tool_result import is_error
@@ -37,9 +38,10 @@ from agentic_kg.coordinators.multi_agent.sub_agents.user_intent_agent.variants i
     finished,
     variants,
 )
-from agentic_kg.tools.user_goal_tools import APPROVED_USER_GOAL
-
-PERCEIVED = "perceived_user_goal"
+from agentic_kg.tools.user_goal_tools import (
+    APPROVED_USER_GOAL,
+    PERCEIVED_USER_GOAL as PERCEIVED,
+)
 
 GOAL = {"kind_of_graph": "bill of materials", "graph_description": "parts and suppliers"}
 OTHER_GOAL = {"kind_of_graph": "supply chain", "graph_description": "a different graph entirely"}
@@ -261,11 +263,17 @@ def test_the_user_intent_agent_has_no_before_agent_callback():
     assert user_intent_agent.canonical_before_agent_callbacks == []
 
 
-def test_only_the_strip_is_wired_as_a_model_callback():
-    """Catches drop_foreign_context being added by analogy with the other two
-    gated agents. This agent answers nothing from graph state; filtering other
-    agents' turns out of its context is not part of this design."""
-    assert user_intent_agent.canonical_before_model_callbacks == [strip_transfer_to_agent]
+def test_both_model_callbacks_are_wired_in_order():
+    """Catches either half of the pair being dropped. The strip removes the
+    transfer DECLARATION; drop_foreign_context removes the worked EXAMPLE of it
+    that ADK leaves in this agent's history. Removing the declaration and
+    leaving the example is half a fix -- the model copies the example, the
+    strip has already popped the tool from tools_dict, and ADK raises
+    mid-turn. Same pairing as graph_construction_agent."""
+    assert user_intent_agent.canonical_before_model_callbacks == [
+        drop_foreign_context,
+        strip_transfer_to_agent,
+    ]
 
 
 def test_the_agent_does_not_disallow_transfers():
@@ -295,6 +303,57 @@ def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
         assert "transfer_to_agent" not in _declaration_names(request)
         instruction = str(getattr(request.config, "system_instruction", "") or "")
         assert "transfer_to_agent" not in instruction
+
+
+def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkeypatch):
+    """The behavioural half of the callback pair, and the reason it exists.
+
+    Wiring assertions prove drop_foreign_context is attached, not that it does
+    anything -- the same gap TRAP 5 guards for the strip. This agent is entered
+    BY the coordinator's transfer_to_agent call, which ADK rewrites into a
+    'For context: ...' turn (contents.py) that would otherwise sit in history
+    for the whole interview: a worked example of the exact call the strip
+    removes the declaration for. Catches drop_foreign_context being dropped, or
+    being wired somewhere it never runs.
+    """
+    monkeypatch.setattr(full_workflow_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[_call("transfer_to_agent", {"agent_name": "user_intent_agent_v2"})],
+    ))
+    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[
+            _text("what kind of graph did you have in mind?"),
+            _text("thanks -- and what will you use it for?"),
+        ],
+    ))
+
+    async def run():
+        runner = InMemoryRunner(agent=full_workflow_agent, app_name="intent_context_test")
+        session = await runner.session_service.create_session(
+            app_name="intent_context_test", user_id="u1",
+        )
+        for message in ("I want a graph", "a bill of materials"):
+            async for _ in runner.run_async(
+                user_id="u1", session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+            ):
+                pass
+
+    asyncio.run(run())
+
+    requests = user_intent_agent.model.requests
+    assert len(requests) >= 2, (
+        f"the interview never reached a second turn; got {len(requests)} request(s)"
+    )
+    for request in requests:
+        for content in (request.contents or []):
+            for part in (getattr(content, "parts", None) or []):
+                text = getattr(part, "text", None) or ""
+                assert FOREIGN_CONTEXT_SENTINEL not in text, (
+                    "the coordinator's transfer_to_agent call is still in this "
+                    f"agent's context: {text[:200]!r}"
+                )
 
 
 def test_the_agents_own_tools_survive_the_strip(monkeypatch):
