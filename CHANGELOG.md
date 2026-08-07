@@ -21,6 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   gate, the same mechanism the construction handoff uses.
 
 ### Fixed
+- **The user's goal approval is now recorded (#12)**: `user_intent_agent_v2` could ask its clarifying
+  questions and transfer away in the same reply, so the user's agreement was heard by the coordinator,
+  which holds no approval tool — `approved_user_goal` was never written, and the workflow continued on a
+  goal the system had never recorded as approved. The intent phase can no longer end without a recorded
+  approval, and can no longer be walked out of via ADK's injected `transfer_to_agent` tool. An approval
+  that the user then revises no longer counts: the gate compares the approved goal against the current
+  one, so a revision must be approved again. The coordinator's own delegating call is also filtered out
+  of this agent's context, so the tool taken away is not left behind as a worked example.
 - **Handoff gates are no longer bypassable (#11)**: both the construction and retrieval handoff gates
   guarded only their own `finished` tool, while ADK independently injected a `transfer_to_agent` tool —
   and an instruction advertising it — into every sub-agent with a parent or peers. The model could leave
