@@ -180,3 +180,146 @@ def test_v1_exit_still_presents_to_the_model_as_finished():
     rename v1's exit tool and falsify v1's own instruction line ('use the
     finished tool') without failing any other test."""
     assert _transfer_to_coordinator.__name__ == "finished"
+
+
+class CapturingLlm(BaseLlm):
+    """Replays a fixed script and records every LlmRequest it was handed.
+
+    Copied from test_construction_handoff_gate.py:199 rather than imported.
+    tests/unit/fakes.py deliberately does not centralize fakes of this kind.
+    Do not extract it.
+    """
+    responses: list = Field(default_factory=list)
+    requests: list = Field(default_factory=list)
+    call_count: int = 0
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        self.requests.append(llm_request)
+        index = min(self.call_count, len(self.responses) - 1)
+        self.call_count += 1
+        yield self.responses[index]
+
+
+def _text(text):
+    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+
+
+def _call(name, args=None):
+    return LlmResponse(content=types.Content(role="model", parts=[
+        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
+    ]))
+
+
+def _declaration_names(request):
+    names = []
+    for tool in (request.config.tools or []):
+        for declaration in (getattr(tool, "function_declarations", None) or []):
+            names.append(declaration.name)
+    return names
+
+
+async def _run_one_turn(agent, app_name, message="hello"):
+    """Drive one real user turn through ADK and return the events it produced.
+
+    Points the Runner at an agent already wired into the real tree rather than
+    re-parenting it, which base_agent.py:496-505 forbids for an agent that
+    already has a parent.
+    """
+    runner = InMemoryRunner(agent=agent, app_name=app_name)
+    session = await runner.session_service.create_session(
+        app_name=app_name, user_id="u1",
+    )
+    return [
+        event async for event in runner.run_async(
+            user_id="u1", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        )
+    ]
+
+
+def test_the_agent_is_parented_so_the_absence_assertions_are_not_vacuous():
+    """ADK only injects transfer_to_agent into an agent that has a parent or
+    peers. A bare import of this agent's own module leaves parent_agent as
+    None, so without the full_workflow_agent import at the top of this file
+    every absence assertion below would pass without proving anything."""
+    assert user_intent_agent.parent_agent is not None
+
+
+def test_the_strip_callback_is_wired_onto_the_user_intent_agent():
+    """The cheap statement of intent. Not sufficient on its own -- it says
+    nothing about whether the strip actually worked -- which is why the
+    behavioural tests below exist."""
+    assert strip_transfer_to_agent in user_intent_agent.canonical_before_model_callbacks
+
+
+def test_the_user_intent_agent_has_no_before_agent_callback():
+    """TRAP 3. This gate compares two durable state keys and has no per-turn
+    flag, so there is nothing for a reset callback to do. Catches someone
+    copying graphrag_agent/agent.py's two-callback shape wholesale and
+    reintroducing the flag machinery this design deliberately avoids."""
+    assert user_intent_agent.before_agent_callback is None
+    assert user_intent_agent.canonical_before_agent_callbacks == []
+
+
+def test_only_the_strip_is_wired_as_a_model_callback():
+    """Catches drop_foreign_context being added by analogy with the other two
+    gated agents. This agent answers nothing from graph state; filtering other
+    agents' turns out of its context is not part of this design."""
+    assert user_intent_agent.canonical_before_model_callbacks == [strip_transfer_to_agent]
+
+
+def test_the_agent_does_not_disallow_transfers():
+    """Guards the trap this design exists to avoid. Setting
+    disallow_transfer_to_parent would also close the door -- and would make
+    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    for the user's SECOND message, sending every mid-interview reply back
+    through the coordinator to be re-arbitrated."""
+    assert user_intent_agent.disallow_transfer_to_parent is False
+    assert user_intent_agent.disallow_transfer_to_peers is False
+
+
+def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
+    """The actual guarantee, and the exact exit taken in the reported session.
+    ADK injects a transfer_to_agent tool into every sub-agent with a parent or
+    peers, and it does not consult this gate. Asserting on what reached the
+    model is the only way to know it is gone."""
+    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("tell me about your data")],
+    ))
+    asyncio.run(_run_one_turn(user_intent_agent, "intent_door_test"))
+
+    requests = user_intent_agent.model.requests
+    assert requests, "the model was never called"
+    for request in requests:
+        assert "transfer_to_agent" not in request.tools_dict
+        assert "transfer_to_agent" not in _declaration_names(request)
+        instruction = str(getattr(request.config, "system_instruction", "") or "")
+        assert "transfer_to_agent" not in instruction
+
+
+def test_the_agents_own_tools_survive_the_strip(monkeypatch):
+    """Catches an over-broad strip that empties config.tools. The agent is
+    useless without its own tools, and every other assertion here is about
+    absence, so nothing else would notice."""
+    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("tell me about your data")],
+    ))
+    asyncio.run(_run_one_turn(user_intent_agent, "intent_tools_survive_test"))
+
+    names = _declaration_names(user_intent_agent.model.requests[0])
+    assert "finished" in names
+    assert "set_perceived_user_goal" in names
+    assert "approve_perceived_user_goal" in names
+
+
+def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+    """Pins what happens if a model emits the call from memory of an earlier
+    turn -- which is precisely what the reported session did. The strip pops it
+    from tools_dict, so ADK raises (functions.py:565-568) rather than silently
+    transferring mid-question."""
+    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[_call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})],
+    ))
+    with pytest.raises(ValueError, match="transfer_to_agent"):
+        asyncio.run(_run_one_turn(user_intent_agent, "intent_hard_error_test"))
