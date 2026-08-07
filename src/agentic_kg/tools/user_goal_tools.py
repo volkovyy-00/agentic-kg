@@ -67,8 +67,8 @@ def approve_perceived_user_goal(tool_context: ToolContext):
 
 def get_approved_user_goal(tool_context: ToolContext):
     """Returns the user's goal, which is a dictionary containing the kind of graph and its description."""
-    if "approved_user_goal" not in tool_context.state:
-        return tool_error("approved_user_goal not set. Either delegate to an appropriate agent, or ask the user to clarify their goal if that is your job.")  
+    if APPROVED_USER_GOAL not in tool_context.state:
+        return tool_error("approved_user_goal not set. Either delegate to an appropriate agent, or ask the user to clarify their goal if that is your job.")
     
     user_goal_data = tool_context.state[APPROVED_USER_GOAL]
 

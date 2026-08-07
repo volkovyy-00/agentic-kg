@@ -29,25 +29,23 @@ from agentic_kg.common.tool_result import tool_error
 _transfer_to_coordinator = make_finished(MULTI_AGENT_COORDINATOR)
 
 
+# The three branches below are ordered and non-overlapping. A missing
+# 'perceived_user_goal' implies a missing 'approved_user_goal', because
+# approve_perceived_user_goal reads the perceived key directly and cannot
+# write the approved one without it (see approve_perceived_user_goal in
+# tools/user_goal_tools.py).
+#
+# Returns a bare {} on success, matching every other 'finished' in this
+# codebase; the error paths are the only ones that speak ToolResult.
+#
+# v2 only. v1 holds '_transfer_to_coordinator' directly.
 def finished(tool_context: ToolContext) -> Dict[str, Any]:
     """Finish the user-intent phase and hand control back to the coordinator.
 
     Refuses unless the user's goal has been approved AND that approval is
     still current -- that is, 'approve_perceived_user_goal' has run since the
-    most recent 'set_perceived_user_goal'. Equality, not mere presence:
-    a goal approved and then revised leaves an approved key that no longer
-    describes what the user asked for, and waving that through is the same
-    defect this gate exists to close, one route over.
-
-    The three branches are ordered and non-overlapping. A missing
-    'perceived_user_goal' implies a missing 'approved_user_goal', because
-    approve_perceived_user_goal reads the perceived key directly
-    (user_goal_tools.py:59-60) and cannot write the approved one without it.
-
-    Returns a bare {} on success, matching every other 'finished' in this
-    codebase; the error paths are the only ones that speak ToolResult.
-
-    v2 only. v1 holds '_transfer_to_coordinator' directly.
+    most recent 'set_perceived_user_goal'. A goal revised after approval must
+    be approved again.
     """
     perceived = tool_context.state.get(PERCEIVED_USER_GOAL)
     approved = tool_context.state.get(APPROVED_USER_GOAL)

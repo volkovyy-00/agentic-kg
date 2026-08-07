@@ -94,10 +94,11 @@ coordinator's prose, is what actually enforces the ordering.
    Writes `perceived_user_goal`, then `approved_user_goal` on confirmation. `finished` refuses
    to leave the phase until `approved_user_goal` exists and still matches `perceived_user_goal`,
    so a goal revised after approval must be approved again. ADK's injected `transfer_to_agent`
-   tool is stripped from this agent's requests, and the coordinator's own delegating call is
-   filtered out of its context, so that gated `finished` is the only exit the model is offered
-   and the only example of the stripped call is gone with it. Unlike stages 4 and 5 this gate
-   holds no per-turn flag — the approval itself is the durable record.
+   tool is stripped from this agent's requests, and every foreign turn — not just the
+   coordinator's own delegating call — is filtered out of its context, so on re-entry after
+   later phases this agent sees none of those agents' output, and the only example of the
+   stripped call is gone with it. Unlike stages 4 and 5 this gate holds no per-turn flag — the
+   approval itself is the durable record.
 2. **`file_suggestion_agent_v1`** — reads `approved_user_goal`. Lists and samples what is under
    `SOURCE_URI`, proposes a subset. Writes `all_available_files`, `suggested_file_list`,
    `approved_file_list`.

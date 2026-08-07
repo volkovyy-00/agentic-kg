@@ -212,6 +212,21 @@ def _call(name, args=None):
     ]))
 
 
+def _multi_call(*name_arg_pairs):
+    """Like _call, but packs several function calls into ONE LlmResponse.
+
+    _call only ever builds a single-Part response, so it cannot express "the
+    model emitted N tool calls in the same reply" -- exactly the shape the
+    design instructs ('approve_perceived_user_goal and finished in the same
+    reply'). ADK executes every function_call Part in a response's Content
+    together, in order, before calling the model again.
+    """
+    return LlmResponse(content=types.Content(role="model", parts=[
+        types.Part(function_call=types.FunctionCall(name=name, args=args or {}))
+        for name, args in name_arg_pairs
+    ]))
+
+
 def _declaration_names(request):
     names = []
     for tool in (request.config.tools or []):
@@ -245,13 +260,6 @@ def test_the_agent_is_parented_so_the_absence_assertions_are_not_vacuous():
     None, so without the full_workflow_agent import at the top of this file
     every absence assertion below would pass without proving anything."""
     assert user_intent_agent.parent_agent is not None
-
-
-def test_the_strip_callback_is_wired_onto_the_user_intent_agent():
-    """The cheap statement of intent. Not sufficient on its own -- it says
-    nothing about whether the strip actually worked -- which is why the
-    behavioural tests below exist."""
-    assert strip_transfer_to_agent in user_intent_agent.canonical_before_model_callbacks
 
 
 def test_the_user_intent_agent_has_no_before_agent_callback():
@@ -382,3 +390,78 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
     ))
     with pytest.raises(ValueError, match="transfer_to_agent"):
         asyncio.run(_run_one_turn(user_intent_agent, "intent_hard_error_test"))
+
+
+def test_the_gate_opens_through_adks_real_state_delta_in_one_reply(monkeypatch):
+    """Drives 'set_perceived_user_goal', 'approve_perceived_user_goal', and
+    'finished' as three function calls in a SINGLE model reply, through the
+    real ADK Runner and its real State -- not FakeToolContext's plain dict.
+
+    The design's central instruction is 'call approve_perceived_user_goal and
+    finished in the same reply', which only works because ADK's State.get()
+    (google/adk/sessions/state.py) reads the uncommitted in-turn _delta, not
+    just already-committed session state, so 'finished' can see the approval
+    the same reply just wrote. A plain dict (as FakeToolContext uses
+    elsewhere in this file) can't distinguish that from an implementation
+    that happens to work only because everything lands in one object -- it
+    has no separate delta/committed layering to get wrong. This test would
+    catch a future google-adk upgrade that changes State's delta-visibility
+    semantics, which the seven FakeToolContext-based tests above cannot.
+    """
+    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[_multi_call(
+            ("set_perceived_user_goal", {
+                "kind_of_graph": "bill of materials",
+                "graph_description": "parts and suppliers",
+            }),
+            ("approve_perceived_user_goal", {}),
+            ("finished", {}),
+        )],
+    ))
+    # 'finished' escalates control to the parent, which the Runner then calls
+    # for real within the same turn -- mock it too, or this test makes a live
+    # network call. Same reasoning as
+    # test_the_coordinators_transfer_call_never_reaches_this_agents_context.
+    monkeypatch.setattr(full_workflow_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("got it, moving on")],
+    ))
+
+    app_name = "intent_real_state_gate_test"
+    runner = InMemoryRunner(agent=user_intent_agent, app_name=app_name)
+
+    async def run():
+        session = await runner.session_service.create_session(
+            app_name=app_name, user_id="u1",
+        )
+        events = [
+            event async for event in runner.run_async(
+                user_id="u1", session_id=session.id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part(text="a bill of materials graph")],
+                ),
+            )
+        ]
+        committed = await runner.session_service.get_session(
+            app_name=app_name, user_id="u1", session_id=session.id,
+        )
+        return events, committed
+
+    events, committed = asyncio.run(run())
+
+    assert committed.state.get(PERCEIVED) is not None
+    assert committed.state.get(APPROVED_USER_GOAL) == committed.state.get(PERCEIVED)
+
+    finished_responses = [
+        part.function_response.response
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if getattr(part, "function_response", None) is not None
+        and part.function_response.name == "finished"
+    ]
+    assert finished_responses, "the 'finished' call never produced a function response"
+    for response in finished_responses:
+        assert response.get("status") != "error", (
+            f"'finished' refused instead of transferring: {response}"
+        )

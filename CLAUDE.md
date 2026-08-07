@@ -225,8 +225,8 @@ its entry below before assuming a fourth gate should copy either pattern:
 Both flag-based gates above guard only `finished`. ADK separately injects a `transfer_to_agent` tool (plus an
 advertising instruction block) into every sub-agent with a parent or peers, and that tool never consulted
 either gate — before PR #11 the model could leave a phase through it with the confirmation flag still
-unset, the exact defect the gates exist to prevent. Both gated agents (`graph_construction_agent` and
-`graphrag_agent_v2` only, never `_v1`) now run `strip_transfer_to_agent` (`common/adk_transfer.py`) as a
+unset, the exact defect the gates exist to prevent. The two agents gated at the time (`graph_construction_agent`
+and `graphrag_agent_v2` only, never `_v1`) started running `strip_transfer_to_agent` (`common/adk_transfer.py`) as a
 `before_model_callback`, stripping the tool from `tools_dict`, `config.tools`, and the system instruction
 before the model sees the request. `disallow_transfer_to_parent` was deliberately avoided instead, since it
 also kills phase stickiness (`Runner._find_agent_to_run` would re-arbitrate every new message through the
