@@ -28,6 +28,9 @@ from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.var
     GRAPHRAG_AGENT_NAME,
     finished,
 )
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import (
+    graphrag_agent,
+)
 from agentic_kg.tools.construction_handoff_tools import (
     HANDOFF_CONFIRMED_KEY,
     confirm_construction_handoff,
@@ -308,3 +311,36 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
     ))
     with pytest.raises(ValueError, match="transfer_to_agent"):
         asyncio.run(_run_one_turn(graph_construction_agent, "construction_hard_error_test"))
+
+
+def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
+    """Closing the injected door must not disturb the sanctioned one. Runs the
+    real ADK dispatch rather than calling 'finished' directly: the existing
+    test_finished_transfers_to_retrieval_when_confirmed calls the closure with
+    a FakeToolContext and would pass even if ADK's resolution path broke.
+
+    Both models are scripted: the transfer runs inline in the same turn
+    (base_llm_flow.py:536-542), so graphrag_agent's real model would otherwise
+    be invoked for real.
+    """
+    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
+        model="scripted",
+        responses=[
+            _call("confirm_construction_handoff"),
+            _call("finished"),
+            _text("handing you to the retrieval agent"),
+        ],
+    ))
+    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
+        model="scripted", responses=[_text("retrieval agent speaking")],
+    ))
+
+    events = asyncio.run(_run_one_turn(
+        graph_construction_agent, "construction_handoff_test",
+        message="I'm done here, move me on",
+    ))
+
+    authors = [event.author for event in events]
+    assert GRAPHRAG_AGENT_NAME in authors, (
+        f"the retrieval agent never took over; authors were {authors}"
+    )
