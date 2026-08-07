@@ -99,8 +99,7 @@ def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional
     the model the tool. system_instruction is where ADK tells the model the
     tool exists at all.
     """
-    was_injected = TRANSFER_TOOL_NAME in llm_request.tools_dict
-    llm_request.tools_dict.pop(TRANSFER_TOOL_NAME, None)
+    was_injected = llm_request.tools_dict.pop(TRANSFER_TOOL_NAME, None) is not None
 
     config = getattr(llm_request, "config", None)
     if config is None:
