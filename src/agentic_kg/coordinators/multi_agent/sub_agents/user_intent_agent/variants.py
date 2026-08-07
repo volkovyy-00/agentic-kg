@@ -131,11 +131,16 @@ variants = {
 
         Think carefully and collaborate with the user:
         1. Understand the user's goal, which is a kind_of_graph with description
-        2. Ask clarifying questions as needed
+        2. Ask clarifying questions as needed. Stay here while you wait for the answers --
+           never hand off to another agent with a question of yours outstanding.
         3. When you think you understand their goal, use the 'set_perceived_user_goal' tool to record it
         4. Verify with the user that the perceived user goal matches their expectations
-        5. If the user agrees, use the 'approve_perceived_user_goal' tool to approve the user goal. This will save the goal in state under the 'approved_user_goal' key.
-        6. Finall, use the 'finished' tool to signal completion of the user intent agent.
+        5. When the user agrees, use the 'approve_perceived_user_goal' tool. The approval IS this
+           tool call. Saying that the goal is approved approves nothing, and no other agent can
+           record it for you.
+        6. Finally, use the 'finished' tool to signal completion of the user intent agent.
+           It will refuse until an approval has been recorded. If the user revises their goal
+           after approving it, call 'approve_perceived_user_goal' again before 'finished'.
         """,
         "tools": [set_perceived_user_goal, approve_perceived_user_goal, finished]
     }
