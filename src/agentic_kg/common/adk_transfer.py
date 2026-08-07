@@ -60,6 +60,20 @@ _TRANSFER_INSTRUCTION_PREFIX = "You have a list of other agents to transfer to:"
 # deleted by a truncate-to-end-of-string removal.
 _TRANSFER_INSTRUCTION_ENDING = "the function call."
 
+# Everything between the opening line and this sentence is interpolated: it is
+# one "Agent name: ... / Agent description: ..." pair per transfer target
+# (agent_transfer.py:88-90), and those descriptions are author-written prose
+# from each agent's own `description=`. So the ending marker above must NOT be
+# searched from the block's start -- a peer whose description happened to end
+# "...formats the function call." would match first, and the removal would stop
+# mid-block, leaving the advertisement in place with neither drift warning
+# firing. This sentence is the first FIXED text after the interpolated region
+# (agent_transfer.py:92-93), so searching for the ending from here instead
+# skips every description.
+_TRANSFER_INSTRUCTION_BODY_ANCHOR = (
+    "If you are the best to answer the question according to your description"
+)
+
 # When the agent has a parent, agent_transfer.py:101-106 appends one more
 # paragraph immediately after the base block, and that paragraph is what
 # actually ends the thing we want removed.
@@ -165,7 +179,20 @@ def _without_transfer_block(instruction: str, tool_was_injected: bool = True) ->
             )
         return instruction
 
-    base_ending = instruction.find(_TRANSFER_INSTRUCTION_ENDING, start)
+    # Skip the interpolated agent descriptions before looking for the ending.
+    # If the anchor is missing, ADK's wording has drifted; searching from the
+    # block start is the old, description-sensitive behaviour, which is still
+    # better than giving up -- but say so.
+    body = instruction.find(_TRANSFER_INSTRUCTION_BODY_ANCHOR, start)
+    if body == -1:
+        logger.warning(
+            "found the transfer block's opening line but not its fixed body "
+            "sentence -- falling back to searching the end marker from the "
+            "block start, which an agent description can shadow; ADK's wording "
+            "may have changed",
+        )
+        body = start
+    base_ending = instruction.find(_TRANSFER_INSTRUCTION_ENDING, body)
     if base_ending == -1:
         end = -1
     else:

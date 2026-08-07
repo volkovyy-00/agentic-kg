@@ -242,3 +242,69 @@ def test_the_parameter_names_are_the_ones_adk_passes():
 
     parameters = list(inspect.signature(strip_transfer_to_agent).parameters)
     assert parameters == ["callback_context", "llm_request"]
+
+
+# The block ADK builds when a PEER's description happens to end with the same
+# words as the block's own closing line. Everything between the opening line
+# and "If you are the best to answer..." is interpolated from each target's
+# `description=` (agent_transfer.py:88-90), so a description is free to contain
+# any prose at all -- including this one.
+_TRANSFER_INSTRUCTION_WITH_TRAPPED_DESCRIPTION = """
+You have a list of other agents to transfer to:
+
+Agent name: cypher_format_agent
+Agent description: Formats the function call.
+
+If you are the best to answer the question according to your description, you
+can answer it.
+
+If another agent is better for answering the question according to its
+description, call `transfer_to_agent` function to transfer the
+question to that agent. When transferring, do not generate any text other than
+the function call.
+
+Your parent agent is kg_construction_agent_v1. If neither the other agents nor
+you are best for answering the question according to the descriptions, transfer
+to your parent agent.
+"""
+
+
+async def _request_whose_peer_description_shadows_the_end_marker():
+    request = LlmRequest()
+    request.append_instructions(["You are an expert at knowledge graph construction."])
+    await FunctionTool(func=keep_me).process_llm_request(
+        tool_context=None, llm_request=request
+    )
+    request.append_instructions([_TRANSFER_INSTRUCTION_WITH_TRAPPED_DESCRIPTION])
+    await FunctionTool(func=transfer_to_agent).process_llm_request(
+        tool_context=None, llm_request=request
+    )
+    return request
+
+
+def test_a_peer_description_cannot_shadow_the_blocks_end_marker():
+    """A peer whose description ends "...the function call." sits BEFORE the
+    block's own closing line, because ADK interpolates every target's
+    description into the block (agent_transfer.py:88-90) ahead of the fixed
+    text. Searching the end marker from the block's start would match the
+    description first and stop the removal mid-block -- leaving the whole
+    `transfer_to_agent` advertisement in the instruction, with neither drift
+    warning firing because both markers were technically found.
+
+    Anchoring the search at the block's first fixed sentence skips every
+    description. This is a regression test: revert
+    `instruction.find(_TRANSFER_INSTRUCTION_ENDING, body)` to search from
+    `start` and it fails.
+    """
+    request = asyncio.run(_request_whose_peer_description_shadows_the_end_marker())
+    assert TRANSFER_TOOL_NAME in request.config.system_instruction  # negative control
+
+    strip_transfer_to_agent(None, request)
+
+    instruction = request.config.system_instruction
+    assert TRANSFER_TOOL_NAME not in instruction
+    assert "You have a list of other agents to transfer to:" not in instruction
+    assert "cypher_format_agent" not in instruction
+    assert "to your parent agent." not in instruction
+    # ...and the agent's own instruction is still there.
+    assert "You are an expert at knowledge graph construction." in instruction
