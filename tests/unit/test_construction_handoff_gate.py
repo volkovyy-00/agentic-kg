@@ -155,3 +155,27 @@ def test_confirm_tool_is_wired_into_the_construction_variant():
     tools = variants["graph_construction_agent_v1"]["tools"]
     assert confirm_construction_handoff in tools
     assert finished in tools
+
+
+def test_finished_succeeds_on_retry_after_an_out_of_order_refusal():
+    """Catches a gate that latches its refusal. ADK runs the tool calls in one
+    model reply in the order the model emitted them, so a reply ordering
+    'finished' before 'confirm_construction_handoff' refuses even though the
+    user did agree. The confirmation is recorded by the time the model reads
+    that error, so calling 'finished' again in the same turn must then
+    transfer -- which is the recovery the refusal message and instruction
+    step 9 promise. This matters more once Task 3 removes the injected
+    transfer tool: without the retry, the user is stuck in the phase."""
+    context = FakeToolContext()
+    assert is_error(finished(context))
+    confirm_construction_handoff(context)
+    assert finished(context) == {}
+    assert context.actions.transfer_to_agent == GRAPHRAG_AGENT_NAME
+
+
+def test_refusal_message_names_the_same_reply_recovery():
+    """Catches the refusal message losing the out-of-order recovery hint while
+    instruction step 9 still promises it. The model only learns that a retry
+    will work from this string, so the two must not drift apart."""
+    message = finished(FakeToolContext())["error_message"]
+    assert "same reply" in message
