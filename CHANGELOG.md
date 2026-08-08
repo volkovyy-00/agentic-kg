@@ -7,7 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-08
+
 ### Added
+- **Typed graph properties (#13)**: a construction plan can now declare a property as `integer`,
+  `float` or `boolean`, and the CSV loaders write real Neo4j types instead of strings — so
+  filtering, range comparison, sorting and aggregation over quantities, lead times, prices and
+  costs return correct answers without the query casting or cleaning the value first. Currency
+  formatting and thousands separators are stripped on the way in. A new `column_type_hint` tool
+  gives the schema agents the evidence to propose and challenge a type. Values that cannot be read
+  as their declared type are reported and cleared rather than silently kept as text, and a column
+  failing on most of a batch stops that rule outright. Identifiers and join columns stay text by
+  rule, since they are matched as raw CSV values.
 - **Living spec (#6)**: `docs/spec.md`, a verified orientation document covering what the project is, the two
   entry points and why only one is maintained, the construction workflow as it actually runs, what retrieval
   grounding does and does not guard against, and the current shipped/next state.
@@ -106,7 +117,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Documentation of the colima/Testcontainers `DOCKER_HOST` + Ryuk workaround needed to run integration
   tests locally (#1).
 
-[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/volkovyy-00/agentic-kg/compare/v0.2.0...v0.2.1

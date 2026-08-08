@@ -273,7 +273,18 @@ work — see `.env.example` for the full list of allowed schemes). `tools/cypher
 higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no
 Neo4j import directory to manage: `tools/kg_construction_tools.py` reads CSVs client-side (via `common/file_source.py`
 and `common/csv_reader.py`) and loads rows with parameterised `UNWIND` batches, since Aura forbids
-`LOAD CSV FROM "file:///"`. Labels and relationship types, which Cypher cannot parameterise, are validated with
+`LOAD CSV FROM "file:///"`.
+
+A construction rule may carry `property_types` (`{property_name: "integer"|"float"|"boolean"}`);
+`common/value_types.py` converts those values in Python before the batch is sent, and the loaders'
+Cypher gains two `FOREACH` passes for them — one writing converted values, one clearing values that
+were blank or unreadable via a sentinel, since Cypher cannot distinguish a failed parse from a
+ragged row's absent key. A typed column failing on more than half a batch's non-blank values stops
+that rule with an error rather than half-typing the property. Identifiers and any column a
+relationship joins on may not be typed; `check_construction_plan_consistency` refuses such a plan at
+approval time.
+
+Labels and relationship types, which Cypher cannot parameterise, are validated with
 `common/cypher_identifiers.checked()` and then interpolated into the query text — never passed as Cypher `$()`
 dynamic labels, which cannot use a uniqueness index. The loaders' `ToolResult`s include `nodes_in_graph` /
 `relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
