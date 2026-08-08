@@ -218,8 +218,19 @@ def _multi_call(*name_arg_pairs):
     _call only ever builds a single-Part response, so it cannot express "the
     model emitted N tool calls in the same reply" -- exactly the shape the
     design instructs ('approve_perceived_user_goal and finished in the same
-    reply'). ADK executes every function_call Part in a response's Content
-    together, in order, before calling the model again.
+    reply'). ADK runs every function_call Part in a response's Content before
+    calling the model again.
+
+    It dispatches them concurrently, not sequentially: handle_function_calls_async
+    (google/adk/flows/llm_flows/functions.py:155-169) creates one asyncio task
+    per call and gathers them, so emission order is not a documented contract.
+    It holds here because every tool on this agent is synchronous and no plugin
+    is registered, leaving no suspension point inside a task -- each runs to
+    completion in creation order. Measured 200/200 in that order.
+
+    That is incidental, and deliberately relied on only in the safe direction:
+    a reordering makes 'finished' refuse, which fails the assertion below. It
+    cannot turn this test falsely green.
     """
     return LlmResponse(content=types.Content(role="model", parts=[
         types.Part(function_call=types.FunctionCall(name=name, args=args or {}))
@@ -392,21 +403,25 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
         asyncio.run(_run_one_turn(user_intent_agent, "intent_hard_error_test"))
 
 
-def test_the_gate_opens_through_adks_real_state_delta_in_one_reply(monkeypatch):
+def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch):
     """Drives 'set_perceived_user_goal', 'approve_perceived_user_goal', and
     'finished' as three function calls in a SINGLE model reply, through the
     real ADK Runner and its real State -- not FakeToolContext's plain dict.
 
     The design's central instruction is 'call approve_perceived_user_goal and
-    finished in the same reply', which only works because ADK's State.get()
-    (google/adk/sessions/state.py) reads the uncommitted in-turn _delta, not
-    just already-committed session state, so 'finished' can see the approval
-    the same reply just wrote. A plain dict (as FakeToolContext uses
-    elsewhere in this file) can't distinguish that from an implementation
-    that happens to work only because everything lands in one object -- it
-    has no separate delta/committed layering to get wrong. This test would
-    catch a future google-adk upgrade that changes State's delta-visibility
-    semantics, which the seven FakeToolContext-based tests above cannot.
+    finished in the same reply'. That works on a narrower ADK guarantee than
+    it looks: each function call in a reply gets its OWN ToolContext and
+    therefore its own private EventActions.state_delta, so the approval is
+    NOT visible to 'finished' through the delta. It is visible because
+    State.__setitem__ (google/adk/sessions/state.py:47-52) writes through to
+    self._value as well, and _value is invocation_context.session.state --
+    one dict shared by every tool call in the invocation.
+
+    ADK marks that write-through with a TODO to remove it ('make new change
+    only store in delta'). Acting on it would silently break the same-reply
+    path this whole design instructs the model to use. A plain dict (as
+    FakeToolContext uses elsewhere in this file) has no delta/committed
+    layering and cannot see that coming; this test can, and would go red.
     """
     monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
         model="scripted",
