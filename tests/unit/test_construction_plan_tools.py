@@ -414,3 +414,91 @@ def test_null_property_types_are_stored_as_an_empty_dict(ctx, any_column_exists)
 
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {}
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {}
+
+
+# --- type consistency -------------------------------------------------------
+
+def _typed_plan(**overrides):
+    """A minimal two-node, one-relationship plan; overrides patch one rule."""
+    plan = {
+        "Part": {"construction_type": "node", "source_file": "parts.csv",
+                 "label": "Part", "unique_column_name": "part_id",
+                 "properties": ["unit_cost", "part_name"],
+                 "property_types": {"unit_cost": "float"}},
+        "Supplier": {"construction_type": "node", "source_file": "suppliers.csv",
+                     "label": "Supplier", "unique_column_name": "supplier_id",
+                     "properties": ["name"], "property_types": {}},
+        "SUPPLIED_BY": {"construction_type": "relationship",
+                        "source_file": "part_supplier_mapping.csv",
+                        "relationship_type": "SUPPLIED_BY",
+                        "from_node_label": "Part", "from_node_column": "part_id",
+                        "to_node_label": "Supplier", "to_node_column": "supplier_id",
+                        "properties": ["lead_time_days"],
+                        "property_types": {"lead_time_days": "integer"}},
+    }
+    for key, rule in overrides.items():
+        plan[key] = rule
+    return plan
+
+
+def test_a_legal_typed_plan_is_consistent():
+    assert check_construction_plan_consistency(_typed_plan()) == []
+
+
+def test_a_type_for_a_property_not_in_the_list_is_refused():
+    """A type on a name the loader never reads is a silent no-op: the plan looks
+    typed and the graph comes out as strings."""
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unti_cost": "float"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("unti_cost" in problem for problem in problems)
+
+
+def test_typing_the_unique_column_is_refused_even_when_also_a_property():
+    """Checked independently of properties-membership: nothing stops a model
+    listing the key column as a property too, and the first rule alone would
+    then let the identifier be typed."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["part_id", "part_name"]
+    plan["Part"]["property_types"] = {"part_id": "integer"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("part_id" in problem for problem in problems)
+
+
+def test_typing_a_column_a_relationship_joins_on_is_refused_and_names_both_exits():
+    """import_relationships' MATCH compares the raw CSV string against the stored
+    property, and Neo4j does not coerce '5' = 5 -- a typed node side matches
+    nothing, silently. The message must name both fixes because the refinement
+    loop gets one invocation per turn."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["part_id", "unit_cost", "part_name"]
+    plan["Part"]["property_types"] = {"part_id": "integer"}
+    plan["SUPPLIED_BY"]["from_node_column"] = "part_id"
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "part_id" in joined
+    assert "SUPPLIED_BY" in joined
+
+
+def test_an_unknown_type_name_is_refused():
+    """'string', 'date' and 'int' are all plausible model output and none of them
+    is in the closed set; coerce() would fail every value of such a column."""
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unit_cost": "decimal"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("decimal" in problem for problem in problems)
+
+
+def test_approval_refuses_a_plan_with_an_illegal_type(ctx):
+    """The rules are only worth anything if approval enforces them."""
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unit_cost": "decimal"}
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = plan
+
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "error"
+    assert APPROVED_CONSTRUCTION_PLAN not in ctx.state

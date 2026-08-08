@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_success, tool_error
+from agentic_kg.common.value_types import ALLOWED_TYPES
 
 graphdb = get_graphdb()
 
@@ -336,6 +337,17 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     }
     problems = []
 
+    # Every column a relationship joins on, so a property can be checked against
+    # the whole plan rather than only its own construction. This is what makes a
+    # type retroactively invalid when a later relationship joins on it.
+    joined_columns = {}
+    for key, rule in construction_plan.items():
+        if not isinstance(rule, dict) or rule.get("construction_type") != "relationship":
+            continue
+        for label, column in ((rule.get("from_node_label"), rule.get("from_node_column")),
+                              (rule.get("to_node_label"), rule.get("to_node_column"))):
+            joined_columns.setdefault((label, column), []).append(key)
+
     def check_endpoint(rel_key, side, label, column):
         node_rule = nodes.get(label)
         if node_rule is None:
@@ -359,6 +371,49 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             continue
         check_endpoint(key, "from", rule.get("from_node_label"), rule.get("from_node_column"))
         check_endpoint(key, "to", rule.get("to_node_label"), rule.get("to_node_column"))
+
+    # Declared property types. Three rules, all refusing at approval time rather
+    # than failing much later at import time.
+    for key, rule in construction_plan.items():
+        if not isinstance(rule, dict):
+            continue
+        property_types = rule.get("property_types") or {}
+        if not isinstance(property_types, dict):
+            problems.append(
+                f"{key}: 'property_types' must be a map of property name to type, "
+                f"got {type(property_types).__name__}. Supply a map or omit it.")
+            continue
+
+        properties = rule.get("properties") or []
+        unique_column = rule.get("unique_column_name")
+
+        for name, declared in property_types.items():
+            if declared not in ALLOWED_TYPES:
+                problems.append(
+                    f"{key}: property '{name}' declares unknown type '{declared}'. "
+                    f"Use one of {', '.join(ALLOWED_TYPES)}, or drop the type to "
+                    f"store it as text.")
+
+            if name not in properties:
+                problems.append(
+                    f"{key}: '{name}' has a declared type but is not in the "
+                    f"properties list {sorted(properties)}, so nothing would load "
+                    f"it. Either add '{name}' to properties or drop its type.")
+
+            if unique_column is not None and name == unique_column:
+                problems.append(
+                    f"{key}: '{name}' is this node's unique identifier and must "
+                    f"stay text — identifiers are matched as raw CSV values, so a "
+                    f"typed identifier matches nothing. Drop the type for '{name}'.")
+
+            joining = joined_columns.get((key, name), [])
+            if joining:
+                problems.append(
+                    f"{key}: '{name}' carries a declared type but "
+                    f"{', '.join(sorted(joining))} joins on it. Join columns are "
+                    f"compared as raw CSV text, so a typed column matches zero "
+                    f"rows with no error. Either drop the type for '{name}', or "
+                    f"join {', '.join(sorted(joining))} on '{unique_column}' instead.")
 
     return problems
 
