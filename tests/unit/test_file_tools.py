@@ -328,22 +328,22 @@ def test_column_type_hint_counts_come_from_the_loader_converter(monkeypatch):
     fs = fsspec.filesystem("memory")
     fs.store.clear()
     fs.pseudo_dirs.clear()
-    with fs.open("/hints/costs.csv", "w") as handle:
-        handle.write("cost\n$1,234.50\n42\nN/A\n\n")
-    monkeypatch.setenv("SOURCE_URI", "memory://hints")
-    reset_settings()
+    try:
+        with fs.open("/hints/costs.csv", "w") as handle:
+            handle.write("cost\n$1,234.50\n42\nN/A\n\n")
+        monkeypatch.setenv("SOURCE_URI", "memory://hints")
+        reset_settings()
 
-    result = file_tools.column_type_hint("costs.csv", "cost", FakeToolContext())
+        result = file_tools.column_type_hint("costs.csv", "cost", FakeToolContext())
 
-    hint = result["column_type_hint"]
-    assert hint["convertible_count"] == 2
-    assert hint["blank_count"] == 1
-    assert hint["unconvertible_count"] == 1
-    assert hint["example_unconvertible"] == ["N/A"]
-
-    fs.store.clear()
-    fs.pseudo_dirs.clear()
-    reset_settings()
+        hint = result["column_type_hint"]
+        assert hint["convertible_count"] == 2
+        assert hint["blank_count"] == 1
+        assert hint["unconvertible_count"] == 1
+        assert hint["example_unconvertible"] == ["N/A"]
+    finally:
+        fs.store.clear()
+        fs.pseudo_dirs.clear()
 
 
 def test_column_type_hints_returns_one_entry_per_column(bom_source):
