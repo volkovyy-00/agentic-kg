@@ -413,18 +413,27 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 own_node_label = (rule.get("from_node_label")
                                    if name == rule.get("from_node_column")
                                    else rule.get("to_node_label"))
-                join_target = (nodes.get(own_node_label) or {}).get("unique_column_name")
+                own_node_rule = nodes.get(own_node_label)
+                join_target = (own_node_rule.get("unique_column_name")
+                               if own_node_rule else None)
             else:
                 label = rule.get("label", key)
                 joining = joined_columns.get((label, name), [])
+                own_node_label = label
                 join_target = unique_column
             if joining:
+                if join_target is not None:
+                    second_exit = f"join {', '.join(sorted(joining))} on '{join_target}' instead"
+                else:
+                    second_exit = (
+                        f"'{own_node_label}' has no node construction in this plan, "
+                        f"so there is no identifier to join on instead")
                 problems.append(
                     f"{key}: '{name}' carries a declared type but "
                     f"{', '.join(sorted(joining))} joins on it. Join columns are "
                     f"compared as raw CSV text, so a typed column matches zero "
                     f"rows with no error. Either drop the type for '{name}', or "
-                    f"join {', '.join(sorted(joining))} on '{join_target}' instead.")
+                    f"{second_exit}.")
 
     return problems
 

@@ -503,6 +503,27 @@ def test_a_relationship_typing_its_own_join_column_is_refused():
     assert "SUPPLIED_BY" in joined
 
 
+def test_a_relationship_typing_its_own_join_column_with_an_unresolved_endpoint_label_names_no_target():
+    """Catches the implementation that computed
+    join_target = (nodes.get(own_node_label) or {}).get("unique_column_name")
+    unconditionally: when own_node_label has no matching node construction in
+    the plan, that expression is None, and the refusal used to render the
+    literal string \"join SUPPLIED_BY on 'None' instead\" -- an unactionable
+    second exit that reads as though 'None' were a real column name, breaking
+    the two-exits contract the refinement loop depends on for a single-pass
+    fix."""
+    plan = _typed_plan()
+    del plan["Supplier"]
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_id"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer", "supplier_id": "integer"}
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "supplier_id" in joined
+    assert "'None'" not in joined
+
+
 def test_a_typed_join_column_is_refused_when_the_rule_key_differs_from_the_label():
     """Catches the gap where joined_columns is keyed by (node_label, column) but
     looked up as (key, name), where key is the plan-dict key of the rule under
