@@ -1,5 +1,5 @@
 from google.adk.tools import ToolContext
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_success, tool_error
@@ -27,7 +27,9 @@ def _missing_values(**fields) -> list[str]:
     return [name for name, value in fields.items() if not value]
 
 
-def propose_node_construction(approved_file: str, proposed_label: str, unique_column_name: str, proposed_properties: list[str], tool_context:ToolContext) -> dict:
+def propose_node_construction(approved_file: str, proposed_label: str, unique_column_name: str,
+                              proposed_properties: list[str], tool_context: ToolContext,
+                              proposed_property_types: Optional[dict] = None) -> dict:
     """Propose a node construction for an approved file that supports the user goal.
 
     The construction will be added to the proposed construction plan dictionary under using proposed_label as the key.
@@ -38,11 +40,18 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
     - label: the proposed label of the node
     - unique_column_name: the name of the column that will be used to uniquely identify constructed nodes
     - properties: A list of property names for the node, derived from column names in the approved file
+    - property_types: An optional map of property name to declared type, one of
+      "integer", "float" or "boolean". A property absent from this map is stored
+      as text. Never declare a type for the unique_column_name, or for any column
+      a relationship joins on -- both are compared as raw text and typing them
+      makes the join match nothing.
 
     Args:
         approved_file: The approved file to propose a node construction for
         proposed_label: The proposed label for constructed nodes (used as key in the construction plan)
         unique_column_name: The name of the column that will be used to uniquely identify constructed nodes
+        proposed_property_types: Optional map of property name to "integer",
+            "float" or "boolean". Omit or pass {} to store every property as text.
 
     Returns:
         dict: A dictionary containing metadata about the content.
@@ -79,7 +88,10 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
         # A model may send a JSON null here rather than omitting the field. That
         # reaches Cypher as FOREACH (k IN null | ...), which is a silent no-op:
         # the nodes load with no properties at all and nothing reports a problem.
-        "properties": proposed_properties or []
+        "properties": proposed_properties or [],
+        # Same defence, same reason: a null here would reach the loader as a key
+        # that reads as "typed" and fail on .items(). Absent means text.
+        "property_types": proposed_property_types or {},
     }
     construction_plan[proposed_label] = node_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
@@ -94,7 +106,8 @@ def propose_node_constructions(node_constructions: list[dict], tool_context:Tool
 
     Args:
         node_constructions: a list of dictionaries, each with the keys
-            'approved_file', 'proposed_label', 'unique_column_name' and 'proposed_properties',
+            'approved_file', 'proposed_label', 'unique_column_name',
+            'proposed_properties' and the optional 'proposed_property_types',
             matching the arguments of 'propose_node_construction'
 
     Returns:
@@ -110,6 +123,7 @@ def propose_node_constructions(node_constructions: list[dict], tool_context:Tool
             node_construction.get("unique_column_name"),
             node_construction.get("proposed_properties", []),
             tool_context,
+            node_construction.get("proposed_property_types", {}),
         )
         if result["status"] == "error":
             return tool_error(
@@ -148,13 +162,20 @@ def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
 
 RELATIONSHIP_CONSTRUCTION = "relationship_construction"
 
-def propose_relationship_construction(approved_file: str, proposed_relationship_type: str, 
-    from_node_label: str,from_node_column: str, to_node_label:str, to_node_column: str, 
-    proposed_properties: list[str], 
-    tool_context:ToolContext) -> dict:
+def propose_relationship_construction(approved_file: str, proposed_relationship_type: str,
+    from_node_label: str, from_node_column: str, to_node_label: str, to_node_column: str,
+    proposed_properties: list[str],
+    tool_context: ToolContext,
+    proposed_property_types: Optional[dict] = None) -> dict:
     """Propose a relationship construction for an approved file that supports the user goal.
 
     The construction will be added to the proposed construction plan dictionary under using proposed_relationship_type as the key.
+
+    - property_types: An optional map of property name to declared type, one of
+      "integer", "float" or "boolean". A property absent from this map is stored
+      as text. Never declare a type for the unique_column_name, or for any column
+      a relationship joins on -- both are compared as raw text and typing them
+      makes the join match nothing.
 
     Args:
         approved_file: The approved file to propose a node construction for
@@ -164,6 +185,8 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
         to_node_label: The label of the target node
         to_node_column: The name of the column within the approved file that will be used to uniquely identify target nodes
         unique_column_name: The name of the column that will be used to uniquely identify target nodes
+        proposed_property_types: Optional map of property name to "integer",
+            "float" or "boolean". Omit or pass {} to store every property as text.
 
     Returns:
         dict: A dictionary containing metadata about the content.
@@ -208,7 +231,10 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
         "to_node_label": to_node_label,
         "to_node_column": to_node_column,
         # See propose_node_construction: a null reaches Cypher as a silent no-op.
-        "properties": proposed_properties or []
+        "properties": proposed_properties or [],
+        # Same defence, same reason: a null here would reach the loader as a key
+        # that reads as "typed" and fail on .items(). Absent means text.
+        "property_types": proposed_property_types or {},
     }
     construction_plan[proposed_relationship_type] = relationship_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
@@ -223,9 +249,10 @@ def propose_relationship_constructions(relationship_constructions: list[dict], t
 
     Args:
         relationship_constructions: a list of dictionaries, each with the keys
-            'approved_file', 'proposed_relationship_type', 'from_node_label', 'from_node_column',
-            'to_node_label', 'to_node_column' and 'proposed_properties', matching the arguments
-            of 'propose_relationship_construction'
+            'approved_file', 'proposed_relationship_type', 'from_node_label',
+            'from_node_column', 'to_node_label', 'to_node_column',
+            'proposed_properties' and the optional 'proposed_property_types',
+            matching the arguments of 'propose_relationship_construction'
 
     Returns:
         dict: Includes a 'status' key ('success' or 'error').
@@ -243,6 +270,7 @@ def propose_relationship_constructions(relationship_constructions: list[dict], t
             relationship_construction.get("to_node_column"),
             relationship_construction.get("proposed_properties", []),
             tool_context,
+            relationship_construction.get("proposed_property_types", {}),
         )
         if result["status"] == "error":
             return tool_error(

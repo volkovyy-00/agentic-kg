@@ -351,3 +351,66 @@ def test_null_properties_are_stored_as_an_empty_list(ctx, any_column_exists):
     propose_relationship_construction(
         "products.csv", "HAS_PART", "Product", "product_id", "Part", "part_id", None, ctx)
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["HAS_PART"]["properties"] == []
+
+
+# --- property types ---------------------------------------------------------
+
+def test_node_construction_stores_property_types(ctx, any_column_exists):
+    """Without this the model has nowhere to record a type and every property
+    reaches the loader as a string -- the defect itself."""
+    propose_node_construction(
+        "part_supplier_mapping.csv", "Part", "part_id",
+        ["unit_cost", "lead_time_days", "part_name"], ctx,
+        {"unit_cost": "float", "lead_time_days": "integer"})
+
+    rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Part"]
+    assert rule["property_types"] == {"unit_cost": "float", "lead_time_days": "integer"}
+    assert rule["properties"] == ["unit_cost", "lead_time_days", "part_name"]
+
+
+def test_relationship_construction_stores_property_types(ctx, any_column_exists):
+    propose_relationship_construction(
+        "part_supplier_mapping.csv", "SUPPLIED_BY", "Part", "part_id",
+        "Supplier", "supplier_id", ["unit_cost"], ctx, {"unit_cost": "float"})
+
+    rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]
+    assert rule["property_types"] == {"unit_cost": "float"}
+
+
+def test_batch_node_constructions_carry_property_types(ctx, any_column_exists):
+    propose_node_constructions([
+        {"approved_file": "products.csv", "proposed_label": "Product",
+         "unique_column_name": "product_id", "proposed_properties": ["price"],
+         "proposed_property_types": {"price": "float"}},
+    ], ctx)
+
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {
+        "price": "float"}
+
+
+def test_batch_relationship_constructions_carry_property_types(ctx, any_column_exists):
+    propose_relationship_constructions([
+        {"approved_file": "part_supplier_mapping.csv",
+         "proposed_relationship_type": "SUPPLIED_BY",
+         "from_node_label": "Part", "from_node_column": "part_id",
+         "to_node_label": "Supplier", "to_node_column": "supplier_id",
+         "proposed_properties": ["lead_time_days"],
+         "proposed_property_types": {"lead_time_days": "integer"}},
+    ], ctx)
+
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {
+        "lead_time_days": "integer"}
+
+
+def test_null_property_types_are_stored_as_an_empty_dict(ctx, any_column_exists):
+    """A model may send JSON null rather than omitting the field. Stored raw,
+    that null would reach the loader as a plan key that reads as 'typed' and
+    blow up on .items(); the plan must degrade to plain text properties instead."""
+    propose_node_construction("products.csv", "Product", "product_id",
+                              ["price"], ctx, None)
+    propose_relationship_construction(
+        "part_supplier_mapping.csv", "SUPPLIED_BY", "Part", "part_id",
+        "Supplier", "supplier_id", ["unit_cost"], ctx, None)
+
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {}
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {}
