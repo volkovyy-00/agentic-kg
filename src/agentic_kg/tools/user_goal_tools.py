@@ -28,6 +28,8 @@ def get_user_goal(tool_context: ToolContext):
 
 #  Define the tools for the User Intent Agent
 
+PERCEIVED_USER_GOAL = "perceived_user_goal"
+
 def set_perceived_user_goal(kind_of_graph: str, graph_description:str, tool_context: ToolContext):
     """Sets the user's goal, including the kind of graph and its description.
     
@@ -48,25 +50,25 @@ def set_perceived_user_goal(kind_of_graph: str, graph_description:str, tool_cont
         )
 
     user_goal_data = {"kind_of_graph": kind_of_graph, "graph_description": graph_description}
-    tool_context.state["perceived_user_goal"] = user_goal_data
+    tool_context.state[PERCEIVED_USER_GOAL] = user_goal_data
     print("User's goal set:", user_goal_data)
-    return tool_success("perceived_user_goal", user_goal_data)
+    return tool_success(PERCEIVED_USER_GOAL, user_goal_data)
 
 APPROVED_USER_GOAL = "approved_user_goal"
 
 def approve_perceived_user_goal(tool_context: ToolContext):
     """Approves the user's goal, including the kind of graph and its description."""
-    if "perceived_user_goal" not in tool_context.state:
+    if PERCEIVED_USER_GOAL not in tool_context.state:
         return tool_error("perceived_user_goal not set. Ask the user to clarify their goal (kind of graph and description).")
-    
-    tool_context.state[APPROVED_USER_GOAL] = tool_context.state["perceived_user_goal"]
+
+    tool_context.state[APPROVED_USER_GOAL] = tool_context.state[PERCEIVED_USER_GOAL]
 
     return tool_success(APPROVED_USER_GOAL, tool_context.state[APPROVED_USER_GOAL])
 
 def get_approved_user_goal(tool_context: ToolContext):
     """Returns the user's goal, which is a dictionary containing the kind of graph and its description."""
-    if "approved_user_goal" not in tool_context.state:
-        return tool_error("approved_user_goal not set. Either delegate to an appropriate agent, or ask the user to clarify their goal if that is your job.")  
+    if APPROVED_USER_GOAL not in tool_context.state:
+        return tool_error("approved_user_goal not set. Either delegate to an appropriate agent, or ask the user to clarify their goal if that is your job.")
     
     user_goal_data = tool_context.state[APPROVED_USER_GOAL]
 

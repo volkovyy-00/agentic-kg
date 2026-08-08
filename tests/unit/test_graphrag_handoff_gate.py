@@ -195,8 +195,8 @@ def test_v1_exit_still_presents_to_the_model_as_finished():
     ADK derives the model-facing tool name from __name__, so such a change
     would silently rename v1's exit tool and falsify v1's own instruction line
     ('finished: signal that the user is done with the graphrag agent') without
-    failing any other test. No other agent lists a renamed make_finished
-    result as a tool, so nothing else covers this."""
+    failing any other test. user_intent_agent_v1 now does the same thing and
+    has its own copy of this test; neither covers the other."""
     assert _transfer_to_coordinator.__name__ == "finished"
 
 

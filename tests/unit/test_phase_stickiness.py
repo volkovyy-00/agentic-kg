@@ -32,6 +32,9 @@ from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.agent import (
     graph_construction_agent,
 )
+from agentic_kg.coordinators.multi_agent.sub_agents.user_intent_agent.agent import (
+    user_intent_agent,
+)
 
 
 class ScriptedLlm(BaseLlm):
@@ -114,4 +117,62 @@ def test_a_second_question_stays_with_the_construction_agent(monkeypatch):
     assert full_workflow_agent.model.call_count == coordinator_calls_after_turn_1, (
         "the coordinator re-arbitrated the second question -- something set "
         "disallow_transfer_to_parent on the construction agent or an ancestor"
+    )
+
+
+def test_a_second_answer_stays_with_the_user_intent_agent(monkeypatch):
+    """The intent phase is an interview -- the user's answer to a clarifying
+    question is turn 2, and it must reach the same agent that asked. Catches
+    disallow_transfer_to_parent being set on this agent or an ancestor, which
+    would send every mid-interview reply back to the coordinator to be
+    re-arbitrated: another chance to leave the phase before an approval is
+    recorded, which is the defect this gate exists to close."""
+    monkeypatch.setattr(full_workflow_agent, "model", ScriptedLlm(
+        model="scripted",
+        responses=[_call("transfer_to_agent", {"agent_name": "user_intent_agent_v2"})],
+    ))
+    monkeypatch.setattr(user_intent_agent, "model", ScriptedLlm(
+        model="scripted",
+        responses=[
+            _text("what kind of graph did you have in mind?"),
+            _text("thanks -- and what do you want to use it for?"),
+        ],
+    ))
+
+    async def run():
+        runner = InMemoryRunner(agent=full_workflow_agent, app_name="intent_stickiness_test")
+        session = await runner.session_service.create_session(
+            app_name="intent_stickiness_test", user_id="u1",
+        )
+
+        async def turn(text):
+            return [
+                event async for event in runner.run_async(
+                    user_id="u1", session_id=session.id,
+                    new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+                )
+            ]
+
+        turn_1 = await turn("I want to build a graph")
+        coordinator_calls_after_turn_1 = full_workflow_agent.model.call_count
+        turn_2 = await turn("a bill of materials, for supplier risk")
+        return turn_1, coordinator_calls_after_turn_1, turn_2
+
+    turn_1, coordinator_calls_after_turn_1, turn_2 = asyncio.run(run())
+
+    assert "user_intent_agent_v2" in [e.author for e in turn_1], (
+        "turn 1 never reached the user intent agent; the fixture is wrong"
+    )
+
+    authors = [event.author for event in turn_2]
+    assert "user_intent_agent_v2" in authors, (
+        f"the user's answer never reached the intent agent; authors were {authors}"
+    )
+    assert MULTI_AGENT_COORDINATOR not in authors, (
+        "the coordinator handled the user's answer instead of the intent agent; "
+        f"authors were {authors}"
+    )
+    assert full_workflow_agent.model.call_count == coordinator_calls_after_turn_1, (
+        "the coordinator re-arbitrated the user's answer -- something set "
+        "disallow_transfer_to_parent on the intent agent or an ancestor"
     )
