@@ -767,3 +767,25 @@ def test_relationship_gate_stops_the_rule(fake_db, monkeypatch):
 
     assert result["status"] == "error"
     assert fake_db.queries == []
+
+
+def test_relationship_type_warning_and_join_warning_combine(fake_db, monkeypatch):
+    """import_relationships already sets loaded["warning"] for its join
+    under-match case; a second `loaded["warning"] = ...` for the type warning
+    would silently overwrite that assignment instead of joining with it."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [
+            {"id": "1", "cost": "N/A"}, {"id": "2", "cost": "5"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.import_relationships({
+        "source_file": "p.csv", "relationship_type": "R",
+        "from_node_label": "A", "from_node_column": "id",
+        "to_node_label": "B", "to_node_column": "id",
+        "properties": ["cost"], "property_types": {"cost": "float"},
+    })
+
+    warning = result["rows_loaded"]["warning"]
+    assert "cost" in warning
+    assert "rows matched both endpoints" in warning

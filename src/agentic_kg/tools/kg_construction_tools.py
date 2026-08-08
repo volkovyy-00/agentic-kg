@@ -45,6 +45,15 @@ CLEAR_SENTINEL = "\x00__agentic_kg_clear__"
 # at a different severity.
 TYPE_FAILURE_LIMIT = 0.5
 
+# Below this many present, non-blank values, a failure is not evidence of a
+# wrong type; it is one row. The column still counts toward the warning. This
+# composes with the blank exemption above rather than sitting apart from it: a
+# column so sparse that a batch only ever holds 0-1 present values was already
+# exempt from the gate when those values were blank; it is now exempt when the
+# rare present value fails too, for the same reason -- neither case is enough
+# evidence to call a column the wrong type.
+TYPE_FAILURE_MIN_SAMPLE = 2
+
 # Re-exported for backward compatibility: this module used to define its own
 # InvalidIdentifier/_checked; both now live in common/cypher_identifiers so
 # cypher_tools.create_uniqueness_constraint can share the same validation.
@@ -77,7 +86,7 @@ def _coerce_batch(batch, property_types):
     A key the row does not carry stays absent (see CLEAR_SENTINEL). Anything
     else becomes either the converted value or the sentinel.
     """
-    tallies = {name: {"converted": 0, "blank": 0, "unconvertible": 0, "examples": []}
+    tallies = {name: {CONVERTED: 0, BLANK: 0, UNCONVERTIBLE: 0, "examples": []}
                for name in property_types}
     rows = []
     for row in batch:
@@ -101,8 +110,8 @@ def _coerce_batch(batch, property_types):
 def _merge_tallies(totals, tallies):
     for name, tally in tallies.items():
         running = totals.setdefault(
-            name, {"converted": 0, "blank": 0, "unconvertible": 0, "examples": []})
-        for field in ("converted", "blank", "unconvertible"):
+            name, {CONVERTED: 0, BLANK: 0, UNCONVERTIBLE: 0, "examples": []})
+        for field in (CONVERTED, BLANK, UNCONVERTIBLE):
             running[field] += tally[field]
         for example in tally["examples"]:
             if len(running["examples"]) < 3:
@@ -118,16 +127,13 @@ def _type_failure(tallies, property_types, source_file, rows_committed):
     optional column.
     """
     for name, tally in tallies.items():
-        present = tally["converted"] + tally["unconvertible"]
-        # A single present value failing is not evidence of a wrong type -- it
-        # takes at least two data points for "more than half failed" to mean
-        # anything. Without this, one bad value in an otherwise-unseen column
-        # would trip the gate on its very first row.
-        if present > 1 and tally["unconvertible"] > present * TYPE_FAILURE_LIMIT:
+        present = tally[CONVERTED] + tally[UNCONVERTIBLE]
+        if (present >= TYPE_FAILURE_MIN_SAMPLE
+                and tally[UNCONVERTIBLE] > present * TYPE_FAILURE_LIMIT):
             examples = ", ".join(repr(example) for example in tally["examples"])
             return (
                 f"{source_file}: '{name}' is declared {property_types[name]} but "
-                f"{tally['unconvertible']} of {present} non-blank values in this "
+                f"{tally[UNCONVERTIBLE]} of {present} non-blank values in this "
                 f"batch could not be read as one (e.g. {examples}). Load stopped "
                 f"after {rows_committed} rows committed (this batch was not sent). "
                 f"Correct or remove the declared type for '{name}' in the "
@@ -145,11 +151,11 @@ def _type_warning(totals, property_types, source_file):
     parts = []
     for name in sorted(totals):
         tally = totals[name]
-        if not tally["unconvertible"]:
+        if not tally[UNCONVERTIBLE]:
             continue
         examples = ", ".join(repr(example) for example in tally["examples"])
         parts.append(
-            f"{source_file}: {tally['unconvertible']} value(s) of '{name}' could not "
+            f"{source_file}: {tally[UNCONVERTIBLE]} value(s) of '{name}' could not "
             f"be read as {property_types[name]} and were not stored (e.g. {examples})")
     return "; ".join(parts)
 
@@ -255,6 +261,7 @@ def load_nodes_from_csv(
         warning = _type_warning(totals, property_types, source_file)
         if warning:
             loaded["warning"] = warning
+            logger.warning(warning)
 
     # Rows processed is not the number of nodes that exist: MERGE collapses
     # every row sharing a key value into one node, which is by design for a
