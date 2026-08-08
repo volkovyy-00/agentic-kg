@@ -13,7 +13,7 @@ common/graph_profile.py's _BARE_NUMERIC / _NUMERIC_LIKE rather than importing
 them. The profile is retrieval-side and out of scope for this change, and the
 ticket's dependency reasoning -- that a genuinely typed property takes the
 profile's type branch and never reaches its regex path -- holds only while that
-file stays untouched. See docs/backlog/numeric-pattern-duplication.md.
+file stays untouched.
 """
 import re
 from typing import Any, Iterable, Optional, Tuple
