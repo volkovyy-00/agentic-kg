@@ -125,9 +125,10 @@ def test_a_row_without_a_column_does_not_erase_what_an_earlier_row_loaded(
     assert kept == "London"
 
 
-def test_an_empty_cell_is_still_stored(neo4j_graph, monkeypatch):
-    """Only an absent key is skipped. An empty string is a value the CSV
-    actually carried, so it must still reach the graph."""
+def test_an_empty_cell_is_still_stored_for_a_text_property(neo4j_graph, monkeypatch):
+    """Only an absent key is skipped. For an UNTYPED property an empty string is
+    a value the CSV actually carried, so it must still reach the graph. A typed
+    property is the opposite case -- see the test below."""
     import agentic_kg.tools.kg_construction_tools as kg
     monkeypatch.setattr(kg, "graphdb", neo4j_graph)
 
@@ -140,3 +141,205 @@ def test_an_empty_cell_is_still_stored(neo4j_graph, monkeypatch):
     city = neo4j_graph.send_query(
         "MATCH (n:Person {id:'2'}) RETURN n.city AS city")["records"][0]["city"]
     assert city == ""
+
+
+def test_an_empty_cell_leaves_a_typed_property_unset(neo4j_graph, monkeypatch):
+    """There is no empty number. Storing "" in a property declared float would put
+    a string back into exactly the property this ticket exists to type."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def one_row(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "e1", "cost": ""}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", one_row)
+    assert kg.load_nodes_from_csv(
+        "p.csv", "Priced", "id", ["cost"], {"cost": "float"})["status"] == "success"
+
+    record = neo4j_graph.send_query(
+        "MATCH (n:Priced {id:'e1'}) RETURN n.cost AS cost")["records"][0]
+    assert record["cost"] is None
+
+
+def test_a_ragged_row_does_not_erase_a_typed_property(neo4j_graph, monkeypatch):
+    """The typed counterpart of the untyped ragged-row guard. An absent key must
+    still leave an earlier row's value alone -- the sentinel exists precisely so
+    that clearing does not also cover this case."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def two_rows(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "r1", "cost": "10"}, {"id": "r1"}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", two_rows)
+    assert kg.load_nodes_from_csv(
+        "p.csv", "Ragged", "id", ["cost"], {"cost": "float"})["status"] == "success"
+
+    kept = neo4j_graph.send_query(
+        "MATCH (n:Ragged {id:'r1'}) RETURN n.cost AS cost")["records"][0]["cost"]
+    assert kept == 10.0
+
+
+def test_an_unreadable_value_clears_a_previously_loaded_one(neo4j_graph, monkeypatch):
+    """Leaving the old value behind would produce a property holding numbers on
+    most nodes and stale text on a few -- worse than uniform text, because an
+    aggregation across the mix misbehaves rather than failing."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def good(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "c1", "cost": "10"}]
+
+    def bad(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "c1", "cost": "N/A"}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", good)
+    kg.load_nodes_from_csv("p.csv", "Cleared", "id", ["cost"], {"cost": "float"})
+    monkeypatch.setattr(kg, "read_csv_batches", bad)
+    assert kg.load_nodes_from_csv(
+        "p.csv", "Cleared", "id", ["cost"], {"cost": "float"})["status"] == "success"
+
+    record = neo4j_graph.send_query(
+        "MATCH (n:Cleared {id:'c1'}) RETURN n.cost AS cost")["records"][0]
+    assert record["cost"] is None
+
+
+def test_a_blanked_source_cell_clears_a_previously_loaded_value(neo4j_graph, monkeypatch):
+    """Editing a cell to empty means the value is gone; leaving the old number in
+    the graph would report data the source no longer has."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def good(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "b1", "cost": "10"}]
+
+    def blanked(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "b1", "cost": ""}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", good)
+    kg.load_nodes_from_csv("p.csv", "Blanked", "id", ["cost"], {"cost": "float"})
+    monkeypatch.setattr(kg, "read_csv_batches", blanked)
+    assert kg.load_nodes_from_csv(
+        "p.csv", "Blanked", "id", ["cost"], {"cost": "float"})["status"] == "success"
+
+    record = neo4j_graph.send_query(
+        "MATCH (n:Blanked {id:'b1'}) RETURN n.cost AS cost")["records"][0]
+    assert record["cost"] is None
+
+
+def test_a_re_run_retypes_a_property_that_was_stored_as_a_string(neo4j_graph, monkeypatch):
+    """Acceptance criterion 6, directly: a graph built before this change holds
+    '$42.73' as a STRING, and a re-run with a corrected plan must leave a real
+    FLOAT behind rather than needing a manual rebuild. Asserting on the driver's
+    Python type is what catches a coercion path that only runs for newly created
+    nodes and no-ops on a MERGE hit."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+
+    def one_row(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "t1", "cost": "$42.73"}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", one_row)
+
+    # First build: the old, untyped plan.
+    kg.load_nodes_from_csv("p.csv", "Retyped", "id", ["cost"])
+    before = neo4j_graph.send_query(
+        "MATCH (n:Retyped {id:'t1'}) RETURN n.cost AS cost")["records"][0]["cost"]
+    assert before == "$42.73"
+
+    # Same source, corrected plan.
+    assert kg.load_nodes_from_csv(
+        "p.csv", "Retyped", "id", ["cost"], {"cost": "float"})["status"] == "success"
+
+    after = neo4j_graph.send_query(
+        "MATCH (n:Retyped {id:'t1'}) RETURN n.cost AS cost")["records"][0]["cost"]
+    assert isinstance(after, float)
+    assert after == 42.73
+
+
+TYPED_PLAN = {
+    "Product": {
+        "construction_type": "node",
+        "source_file": "products.csv",
+        "label": "TypedProduct",
+        "unique_column_name": "product_id",
+        "properties": ["product_name", "price"],
+        "property_types": {"price": "float"},
+    },
+    "Part": {
+        "construction_type": "node",
+        "source_file": "part_supplier_mapping.csv",
+        "label": "TypedPart",
+        "unique_column_name": "part_id",
+        "properties": ["part_name"],
+        "property_types": {},
+    },
+    "Supplier": {
+        "construction_type": "node",
+        "source_file": "suppliers.csv",
+        "label": "TypedSupplier",
+        "unique_column_name": "supplier_id",
+        "properties": ["name"],
+        "property_types": {},
+    },
+    "TYPED_SUPPLIED_BY": {
+        "construction_type": "relationship",
+        "source_file": "part_supplier_mapping.csv",
+        "relationship_type": "TYPED_SUPPLIED_BY",
+        "from_node_label": "TypedPart",
+        "from_node_column": "part_id",
+        "to_node_label": "TypedSupplier",
+        "to_node_column": "supplier_id",
+        "properties": ["lead_time_days", "unit_cost", "preferred_supplier"],
+        "property_types": {"lead_time_days": "integer", "unit_cost": "float",
+                           "preferred_supplier": "boolean"},
+    },
+}
+
+
+def test_typed_bom_graph_answers_numeric_questions_without_casting(
+        neo4j_graph, monkeypatch):
+    """Acceptance criteria 1-3 end to end: filter, compare, aggregate and sort on
+    the bundled data with no toFloat() and no string cleaning in the query. Before
+    this change every one of these either errored or sorted lexicographically."""
+    import agentic_kg.tools.kg_construction_tools as kg
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    import agentic_kg.tools.cypher_tools as cypher_tools
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+
+    result = kg.construct_domain_graph(TYPED_PLAN)
+    assert result["status"] == "success", result.get("error_message")
+
+    # Currency formatting is gone and the value is a number.
+    price = neo4j_graph.send_query(
+        "MATCH (p:TypedProduct {product_id:'P-1000'}) RETURN p.price AS price"
+    )["records"][0]["price"]
+    assert isinstance(price, (int, float)) and price == 246
+
+    # Range comparison, no cast.
+    quick = neo4j_graph.send_query(
+        "MATCH ()-[r:TYPED_SUPPLIED_BY]->() WHERE r.lead_time_days < 10 "
+        "RETURN count(r) AS c")["records"][0]["c"]
+    assert quick > 0
+
+    # Aggregation, no cast.
+    total = neo4j_graph.send_query(
+        "MATCH ()-[r:TYPED_SUPPLIED_BY]->() RETURN sum(r.unit_cost) AS total"
+    )["records"][0]["total"]
+    assert total > 0
+
+    # Numeric order, not lexicographic: '9' must not sort after '30'.
+    longest = neo4j_graph.send_query(
+        "MATCH ()-[r:TYPED_SUPPLIED_BY]->() RETURN r.lead_time_days AS d "
+        "ORDER BY d DESC LIMIT 1")["records"][0]["d"]
+    shortest = neo4j_graph.send_query(
+        "MATCH ()-[r:TYPED_SUPPLIED_BY]->() RETURN r.lead_time_days AS d "
+        "ORDER BY d ASC LIMIT 1")["records"][0]["d"]
+    assert longest >= shortest
+    assert isinstance(longest, int)
+
+    # The yes/no column is a real boolean.
+    preferred = neo4j_graph.send_query(
+        "MATCH ()-[r:TYPED_SUPPLIED_BY]->() WHERE r.preferred_supplier = true "
+        "RETURN count(r) AS c")["records"][0]["c"]
+    assert preferred > 0
