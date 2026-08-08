@@ -14,6 +14,10 @@ from agentic_kg.common.file_source import (
     open_source,
     source_exists,
 )
+from agentic_kg.common.value_types import (
+    BARE_NUMERIC, BLANK, BOOLEAN, BOOLEAN_LIKE, CONVERTED, FLOAT, INTEGER,
+    NUMERIC_AFTER_CLEANING, classify, coerce, is_blank,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +296,120 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
         "empty_count": empty_count,
         "is_unique": empty_count == 0 and distinct_count == len(values),
     })
+
+
+def _suggested_type(shape: str, values) -> str | None:
+    """Map a column's shape to the type to suggest for it.
+
+    Derived from the shape, never from whether the sampled values happen to look
+    whole. Every price in the bundled products.csv is a round dollar amount, so
+    a whole-number test would suggest integer for a currency column and then
+    refuse the first fractional price the data ever gains. Needing a currency
+    symbol or thousands separator stripped is itself the evidence it is money.
+    """
+    if shape == BOOLEAN_LIKE:
+        return BOOLEAN
+    if shape == NUMERIC_AFTER_CLEANING:
+        return FLOAT
+    if shape == BARE_NUMERIC:
+        for value in values:
+            if is_blank(value):
+                continue
+            if coerce(value, INTEGER)[1] != CONVERTED:
+                return FLOAT
+        return INTEGER
+    return None
+
+
+def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> dict:
+    """Reports what type one CSV column's values can actually be stored as.
+
+    Use this before declaring a property's type in a construction plan. It
+    answers one question only -- what the data supports -- and deliberately says
+    nothing about whether a column is a good identifier ('column_stats'), or
+    whether it survives being collapsed into a node ('collapse_check'). A
+    suggestion is evidence, not a decision: a column of bare digits can be a
+    product code, and only the column name and the user goal can tell.
+
+    The counts come from the same converter the loader runs, so they are exactly
+    what would happen at build time.
+
+    Args:
+      file_path: Path to the CSV file, relative to the source location.
+      column: The column to analyze.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'column_type_hint'
+              key with 'path', 'column', 'shape' (one of 'bare_numeric',
+              'numeric_after_cleaning', 'boolean_like', 'text'), 'suggested_type'
+              ('integer', 'float', 'boolean', or null when the column is text),
+              'convertible_count', 'blank_count', 'unconvertible_count' and up to
+              three 'example_unconvertible' values.
+    """
+    values, error = _collect_column_values(file_path, column)
+    if error is not None:
+        return error
+
+    shape = classify(values)
+    suggested = _suggested_type(shape, values)
+
+    convertible_count = 0
+    blank_count = 0
+    unconvertible_count = 0
+    examples: List[str] = []
+
+    for value in values:
+        if suggested is None:
+            if is_blank(value):
+                blank_count += 1
+            continue
+        _converted, outcome = coerce(value, suggested)
+        if outcome == CONVERTED:
+            convertible_count += 1
+        elif outcome == BLANK:
+            blank_count += 1
+        else:
+            unconvertible_count += 1
+            if len(examples) < 3:
+                examples.append(value)
+
+    return tool_success("column_type_hint", {
+        "path": file_path,
+        "column": column,
+        "shape": shape,
+        "suggested_type": suggested,
+        "convertible_count": convertible_count,
+        "blank_count": blank_count,
+        "unconvertible_count": unconvertible_count,
+        "example_unconvertible": examples,
+    })
+
+
+def column_type_hints(file_path: str, columns: List[str], tool_context: ToolContext) -> dict:
+    """Reports 'column_type_hint' for several columns of one file in a single call.
+
+    Each column is analyzed with the same rules as 'column_type_hint'. Analysis
+    stops at the first column that cannot be read, so the error names the column
+    to correct.
+
+    Args:
+      file_path: Path to the CSV file, relative to the source location.
+      columns: The columns to analyze.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'column_type_hints'
+              key holding one 'column_type_hint' payload per requested column, in
+              the order requested.
+    """
+    hints = []
+    for column in columns or []:
+        result = column_type_hint(file_path, column, tool_context)
+        if result["status"] == "error":
+            return result
+        hints.append(result["column_type_hint"])
+    return tool_success("column_type_hints", hints)
 
 
 def _collect_column_pairs(file_path: str, column_a: str, column_b: str):

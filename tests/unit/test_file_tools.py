@@ -256,3 +256,112 @@ def test_a_bare_string_is_not_treated_as_a_list_of_characters(memory_source):
     result = file_tools.set_suggested_files("people.csv", context)
     assert result["status"] == "error"
     assert file_tools.SUGGESTED_FILES not in context.state
+
+
+# --- column type hints ------------------------------------------------------
+
+@pytest.fixture
+def bom_source(monkeypatch):
+    """Point the source root at the bundled example data.
+
+    tests/conftest.py already defaults SOURCE_URI to ./data/bom, but other
+    fixtures in this file override it, so set it explicitly and reset the cached
+    settings both ways.
+    """
+    monkeypatch.setenv("SOURCE_URI", "./data/bom")
+    reset_settings()
+    yield
+    reset_settings()
+
+
+def test_column_type_hint_reports_a_plain_count_as_integer(bom_source):
+    """lead_time_days is bare digits; suggesting float for it would store 8.0
+    where the source says 8."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint(
+        "part_supplier_mapping.csv", "lead_time_days", context)
+
+    assert result["status"] == "success"
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "bare_numeric"
+    assert hint["suggested_type"] == "integer"
+    assert hint["unconvertible_count"] == 0
+
+
+def test_column_type_hint_reports_currency_as_float_by_shape(bom_source):
+    """Every price in products.csv is a whole dollar amount, so a derivation
+    keyed off 'are all values whole' would answer integer -- and then refuse the
+    first $99.99 the data ever gains. The shape assertion is the real guard:
+    it fails even if a broken derivation happens to return the right label."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint("products.csv", "price", context)
+
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "numeric_after_cleaning"
+    assert hint["suggested_type"] == "float"
+
+
+def test_column_type_hint_reports_a_yes_no_column_as_boolean(bom_source):
+    context = FakeToolContext()
+    result = file_tools.column_type_hint(
+        "part_supplier_mapping.csv", "preferred_supplier", context)
+
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "boolean_like"
+    assert hint["suggested_type"] == "boolean"
+
+
+def test_column_type_hint_suggests_nothing_for_text(bom_source):
+    """A suggestion for a name column would invite the model to type it, and
+    every value would then fail to convert."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint("suppliers.csv", "name", context)
+
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "text"
+    assert hint["suggested_type"] is None
+
+
+def test_column_type_hint_counts_come_from_the_loader_converter(monkeypatch):
+    """The counts must be what the loader will actually do, not a second
+    implementation that can disagree with it."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/hints/costs.csv", "w") as handle:
+        handle.write("cost\n$1,234.50\n42\nN/A\n\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://hints")
+    reset_settings()
+
+    result = file_tools.column_type_hint("costs.csv", "cost", FakeToolContext())
+
+    hint = result["column_type_hint"]
+    assert hint["convertible_count"] == 2
+    assert hint["blank_count"] == 1
+    assert hint["unconvertible_count"] == 1
+    assert hint["example_unconvertible"] == ["N/A"]
+
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    reset_settings()
+
+
+def test_column_type_hints_returns_one_entry_per_column(bom_source):
+    context = FakeToolContext()
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv", ["lead_time_days", "preferred_supplier"], context)
+
+    assert result["status"] == "success"
+    hints = result["column_type_hints"]
+    assert [hint["column"] for hint in hints] == ["lead_time_days", "preferred_supplier"]
+    assert [hint["suggested_type"] for hint in hints] == ["integer", "boolean"]
+
+
+def test_column_type_hint_errors_on_a_missing_column(bom_source):
+    """A misspelled column must not come back as 'text, no suggestion' -- that
+    reads as an answer about the data rather than a typo."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint("products.csv", "prcie", context)
+
+    assert result["status"] == "error"
+    assert "prcie" in result["error_message"]
