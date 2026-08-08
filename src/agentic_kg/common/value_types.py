@@ -51,6 +51,15 @@ _TRUE_VALUES = frozenset({"yes", "true", "y", "1"})
 _FALSE_VALUES = frozenset({"no", "false", "n", "0"})
 _BOOLEAN_VALUES = _TRUE_VALUES | _FALSE_VALUES
 
+# The share of non-blank values that has to fit a shape for classify() to report
+# it. Defined here rather than written into classify() as a bare comparison
+# because the loader's refusal gate (kg_construction_tools.TYPE_FAILURE_LIMIT)
+# imports this exact number: a column this module suggests a type for must not
+# then trip that gate. Two independent 0.5 literals could drift apart silently,
+# and the only thing that would notice is a build refusing a column the model
+# was told was fine.
+MAJORITY_SHARE = 0.5
+
 
 def is_blank(value: Any) -> bool:
     """True for a value that carries nothing: None, empty, or only whitespace."""
@@ -62,8 +71,8 @@ def classify(values: Iterable[Any]) -> str:
 
     Majority rather than all: one bad row in four hundred must not collapse a
     numeric column to text, because the loader itself tolerates up to half a
-    batch failing. The same 50% line is used in both places on purpose -- a
-    column this suggests a type for cannot then trip the loader's refusal gate.
+    batch failing. Both places read MAJORITY_SHARE on purpose -- a column this
+    suggests a type for cannot then trip the loader's refusal gate.
 
     Order is load-bearing. Boolean is checked FIRST because _BARE_NUMERIC
     matches "1" and "0": a genuine 0/1 flag would otherwise match the numeric
@@ -75,7 +84,8 @@ def classify(values: Iterable[Any]) -> str:
         return TEXT
 
     def majority(matches) -> bool:
-        return sum(1 for value in non_blank if matches(value)) * 2 > len(non_blank)
+        fitting = sum(1 for value in non_blank if matches(value))
+        return fitting > len(non_blank) * MAJORITY_SHARE
 
     if majority(lambda value: value.strip().lower() in _BOOLEAN_VALUES):
         return BOOLEAN_LIKE

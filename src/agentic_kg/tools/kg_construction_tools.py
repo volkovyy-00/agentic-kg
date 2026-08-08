@@ -19,7 +19,8 @@ from agentic_kg.common.csv_reader import read_csv_batches
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked as _checked
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
-from agentic_kg.common.value_types import BLANK, CONVERTED, UNCONVERTIBLE, coerce
+from agentic_kg.common.value_types import (
+    BLANK, CONVERTED, MAJORITY_SHARE, UNCONVERTIBLE, coerce)
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
 
 logger = logging.getLogger(__name__)
@@ -40,10 +41,13 @@ CLEAR_SENTINEL = "\x00__agentic_kg_clear__"
 
 # Above this share of a batch's present, non-blank values failing to convert,
 # the column is the wrong type rather than dirty, and continuing would clear
-# real values row by row. Chosen for this gate, not inherited from
-# import_relationships' join under-match warning, which is a different failure
-# at a different severity.
-TYPE_FAILURE_LIMIT = 0.5
+# real values row by row. Deliberately the same number classify() uses to
+# suggest a type, imported rather than restated so the two cannot drift: a
+# column the hint tool suggests a type for is, by construction, one that will
+# not trip this gate. Still NOT inherited from import_relationships' join
+# under-match warning below, which is a different failure at a different
+# severity and keeps its own literal.
+TYPE_FAILURE_LIMIT = MAJORITY_SHARE
 
 # Below this many present, non-blank values, a failure is not evidence of a
 # wrong type; it is one row. The column still counts toward the warning. This
@@ -80,14 +84,45 @@ def _split_properties(properties, property_types):
     return untyped, typed
 
 
+def _new_tally():
+    """A zeroed per-column tally. One definition, since _coerce_batch starts one
+    per column and _merge_tallies has to start an identical one for a column it
+    has not seen before."""
+    return {CONVERTED: 0, BLANK: 0, UNCONVERTIBLE: 0, "examples": []}
+
+
+def _missing_typed_columns_error(typed_properties, header, source_file, loaded_into):
+    """The refusal for a typed property with no such column, or None.
+
+    Shared by both loaders rather than written twice: a misspelled TYPED
+    property would clear that property on every row of the file, so the wording
+    has to stay the same on both paths. (A misspelled UNTYPED property stays as
+    silent as it is today -- that asymmetry is deliberate.)
+    """
+    missing_typed = [name for name in typed_properties if name not in header]
+    if not missing_typed:
+        return None
+    return (
+        f"{source_file} has no column "
+        f"{' or '.join(repr(name) for name in missing_typed)} to load as a "
+        f"typed property of {loaded_into}, so nothing was loaded. "
+        f"Available columns: {header}"
+    )
+
+
 def _coerce_batch(batch, property_types):
     """Convert every typed value in a batch, returning new rows and per-column tallies.
 
     A key the row does not carry stays absent (see CLEAR_SENTINEL). Anything
     else becomes either the converted value or the sentinel.
     """
-    tallies = {name: {CONVERTED: 0, BLANK: 0, UNCONVERTIBLE: 0, "examples": []}
-               for name in property_types}
+    # A rule with no declared types is the pre-existing path -- every plan
+    # written before this feature. Hand its rows straight back rather than
+    # copying each one only to change nothing in it.
+    if not property_types:
+        return batch, {}
+
+    tallies = {name: _new_tally() for name in property_types}
     rows = []
     for row in batch:
         coerced = dict(row)
@@ -109,8 +144,7 @@ def _coerce_batch(batch, property_types):
 
 def _merge_tallies(totals, tallies):
     for name, tally in tallies.items():
-        running = totals.setdefault(
-            name, {CONVERTED: 0, BLANK: 0, UNCONVERTIBLE: 0, "examples": []})
+        running = totals.setdefault(name, _new_tally())
         for field in (CONVERTED, BLANK, UNCONVERTIBLE):
             running[field] += tally[field]
         for example in tally["examples"]:
@@ -213,17 +247,10 @@ def load_nodes_from_csv(
                         f"{source_file} has no column '{unique_column_name}' to key {label} "
                         f"nodes by, so nothing was loaded. Available columns: {header}"
                     )
-                # Typed properties only. A misspelled untyped property stays as
-                # silent as it is today; a misspelled typed one would clear that
-                # property on every row of the file instead of merely not setting it.
-                missing_typed = [name for name in typed_properties if name not in header]
-                if missing_typed:
-                    return tool_error(
-                        f"{source_file} has no column "
-                        f"{' or '.join(repr(name) for name in missing_typed)} to load as a "
-                        f"typed property of {label}, so nothing was loaded. "
-                        f"Available columns: {header}"
-                    )
+                missing_typed = _missing_typed_columns_error(
+                    typed_properties, header, source_file, label)
+                if missing_typed is not None:
+                    return tool_error(missing_typed)
                 header_checked = True
 
             rows, tallies = _coerce_batch(batch, property_types)
@@ -376,17 +403,10 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                         f"to join {relationship_type} on, so nothing was loaded. "
                         f"Available columns: {header}"
                     )
-                # Typed properties only. A misspelled untyped property stays as
-                # silent as it is today; a misspelled typed one would clear that
-                # property on every row of the file instead of merely not setting it.
-                missing_typed = [name for name in typed_properties if name not in header]
-                if missing_typed:
-                    return tool_error(
-                        f"{source_file} has no column "
-                        f"{' or '.join(repr(name) for name in missing_typed)} to load as a "
-                        f"typed property of {relationship_type}, so nothing was loaded. "
-                        f"Available columns: {header}"
-                    )
+                missing_typed = _missing_typed_columns_error(
+                    typed_properties, header, source_file, relationship_type)
+                if missing_typed is not None:
+                    return tool_error(missing_typed)
                 header_checked = True
 
             rows, tallies = _coerce_batch(batch, property_types)

@@ -6,6 +6,7 @@ reachable, and the revision paragraph not naming property_types.
 """
 import pytest
 
+from agentic_kg.common.value_types import ALLOWED_TYPES
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.variants import (
     variants,
 )
@@ -63,3 +64,25 @@ def test_proposed_property_types_stays_optional_in_the_declaration(fn):
 
     assert "proposed_property_types" in props
     assert "proposed_property_types" not in required
+
+
+@pytest.mark.parametrize("fn", [propose_node_construction, propose_relationship_construction])
+def test_every_allowed_type_is_named_in_the_tool_description(fn):
+    """The closed set lives in value_types.ALLOWED_TYPES, but the model only
+    ever learns it from prose -- these docstrings are the tool descriptions ADK
+    sends. Adding a fourth type (dates are the named candidate) to the constant
+    without touching the text leaves the model told it is illegal, and the
+    consistency check would accept a type the model never proposes."""
+    for allowed in ALLOWED_TYPES:
+        assert allowed in fn.__doc__, allowed
+
+
+def test_every_allowed_type_is_named_in_the_validation_rules():
+    """Same staleness, one layer up: the shared rules block tells both agents
+    which types exist, so a new entry in ALLOWED_TYPES that never reaches this
+    prompt is a type the proposal agent will not use and the critic will
+    reject."""
+    for name in ("schema_proposal_agent_v1", "schema_critic_agent_v1"):
+        instruction = variants[name]["instruction"]
+        for allowed in ALLOWED_TYPES:
+            assert allowed in instruction, f"{name}: {allowed}"
