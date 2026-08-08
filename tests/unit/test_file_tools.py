@@ -288,6 +288,17 @@ def test_column_type_hint_reports_a_plain_count_as_integer(bom_source):
     assert hint["unconvertible_count"] == 0
 
 
+def test_suggested_type_ignores_a_single_dirty_value_in_a_bare_numeric_column():
+    """Catches _suggested_type downgrading a clean integer column to float
+    because ONE non-blank value fails INTEGER coercion, even when that value
+    is not a number at all (e.g. 'N/A'). A value that also fails FLOAT
+    coercion is dirty data, not evidence of fractional-ness, and must not
+    influence integer-vs-float -- otherwise 400 integers plus one 'N/A'
+    would be suggested float and store 8.0 where the source says 8."""
+    values = [str(n) for n in range(400)] + ["N/A"]
+    assert file_tools._suggested_type(file_tools.BARE_NUMERIC, values) == "integer"
+
+
 def test_column_type_hint_reports_currency_as_float_by_shape(bom_source):
     """Every price in products.csv is a whole dollar amount, so a derivation
     keyed off 'are all values whole' would answer integer -- and then refuse the

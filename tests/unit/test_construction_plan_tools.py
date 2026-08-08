@@ -483,6 +483,44 @@ def test_typing_a_column_a_relationship_joins_on_is_refused_and_names_both_exits
     assert "SUPPLIED_BY" in joined
 
 
+def test_a_relationship_typing_its_own_join_column_is_refused():
+    """Catches the gap where joined_columns is keyed by (node_label, column) but
+    looked up as (key, name): for a relationship rule, key is the relationship
+    type, so a lookup against a map keyed by node labels never matches. Without
+    this check, a relationship that lists its own from_node_column in
+    properties and declares a type for it was accepted with zero problems --
+    the value gets coerced at build time, the MATCH then compares a number
+    against the raw string the node loader stored, and the rule silently
+    produces zero relationships."""
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "part_id"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer", "part_id": "integer"}
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "part_id" in joined
+    assert "SUPPLIED_BY" in joined
+
+
+def test_a_typed_join_column_is_refused_when_the_rule_key_differs_from_the_label():
+    """Catches the gap where joined_columns is keyed by (node_label, column) but
+    looked up as (key, name), where key is the plan-dict key of the rule under
+    inspection. That lookup only works by coincidence when key == rule['label'],
+    which propose_node_construction happens to arrange but nothing in the
+    checker guarantees -- this branch's own TYPED_PLAN integration fixture uses
+    key 'Part' with label 'TypedPart', so the rule silently did not apply to
+    that plan at all."""
+    plan = _typed_plan()
+    plan["PartKey"] = plan.pop("Part")
+    plan["SUPPLIED_BY"]["from_node_column"] = "unit_cost"
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "unit_cost" in joined
+    assert "SUPPLIED_BY" in joined
+
+
 def test_an_unknown_type_name_is_refused():
     """'string', 'date' and 'int' are all plausible model output and none of them
     is in the closed set; coerce() would fail every value of such a column."""

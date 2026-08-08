@@ -172,6 +172,7 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
 
     The construction will be added to the proposed construction plan dictionary under using proposed_relationship_type as the key.
 
+    The construction entry will be a dictionary with the following keys:
     - property_types: An optional map of property name to declared type, one of
       "integer", "float" or "boolean". A property absent from this map is stored
       as text. Never declare a type for the unique_column_name, or for any column
@@ -406,14 +407,24 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                     f"stay text — identifiers are matched as raw CSV values, so a "
                     f"typed identifier matches nothing. Drop the type for '{name}'.")
 
-            joining = joined_columns.get((key, name), [])
+            if rule.get("construction_type") == "relationship":
+                joining = [key] if name in (
+                    rule.get("from_node_column"), rule.get("to_node_column")) else []
+                own_node_label = (rule.get("from_node_label")
+                                   if name == rule.get("from_node_column")
+                                   else rule.get("to_node_label"))
+                join_target = (nodes.get(own_node_label) or {}).get("unique_column_name")
+            else:
+                label = rule.get("label", key)
+                joining = joined_columns.get((label, name), [])
+                join_target = unique_column
             if joining:
                 problems.append(
                     f"{key}: '{name}' carries a declared type but "
                     f"{', '.join(sorted(joining))} joins on it. Join columns are "
                     f"compared as raw CSV text, so a typed column matches zero "
                     f"rows with no error. Either drop the type for '{name}', or "
-                    f"join {', '.join(sorted(joining))} on '{unique_column}' instead.")
+                    f"join {', '.join(sorted(joining))} on '{join_target}' instead.")
 
     return problems
 

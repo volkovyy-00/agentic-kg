@@ -315,7 +315,8 @@ def _suggested_type(shape: str, values) -> str | None:
         for value in values:
             if is_blank(value):
                 continue
-            if coerce(value, INTEGER)[1] != CONVERTED:
+            if (coerce(value, FLOAT)[1] == CONVERTED
+                    and coerce(value, INTEGER)[1] != CONVERTED):
                 return FLOAT
         return INTEGER
     return None
