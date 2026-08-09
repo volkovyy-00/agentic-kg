@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- **Ruff for linting and formatting (#15)**: `ruff check` / `ruff format --check` now cover `src/` and
+  `tests/`; config lives in `pyproject.toml`'s `[tool.ruff]`. Dev-only — no user-facing behavior change.
+
 ### Removed
 - **Local `upstream` git remote (#14)**: this clone is local-only now. GitHub still shows the repo as
   forked from `neo4j-contrib/agentic-kg`; there's just no local remote to sync from anymore.
