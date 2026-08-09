@@ -258,9 +258,10 @@ bundled furniture example must keep working throughout.
   with no reconnect path — so `neo4j_is_ready`, the one production caller that closes on a failed
   readiness check, permanently disables every Neo4j tool for the life of the process, and silently,
   since tool bodies return `tool_error`.
-- **Everything is a string.** The CSV path writes every property as a Neo4j STRING with no type slot in
-  the construction plan, so uncast comparisons silently sort lexicographically (`'9' > '30'`) — wrong
-  answers rather than errors. §4's `numeric_like` annotation exists to make the retrieval agent cast.
+- **Types are declared, not inferred.** The CSV path stores a property as `INTEGER`, `FLOAT` or
+  `BOOLEAN` only when the construction plan declares that type for it; anything undeclared stays a
+  STRING, as do identifiers and join columns, which are matched as raw CSV text. Dates are not
+  supported. §4's `numeric_like` annotation therefore still matters for undeclared columns.
 - **`pyproject.toml:3` still reads `version = "0.1.0"`**, four releases behind, as does its mirror in
   `uv.lock:21`. These are the only machine-readable versions in the repo.
 - Model configuration drifts from documentation: the models named in `CLAUDE.md` and `CHANGELOG.md` 0.4.0

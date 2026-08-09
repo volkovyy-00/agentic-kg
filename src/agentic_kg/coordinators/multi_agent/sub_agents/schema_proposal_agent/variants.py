@@ -12,7 +12,7 @@ from agentic_kg.tools.user_goal_tools import (
  )
 from agentic_kg.tools.file_tools import (
     get_approved_files, sample_file, search_file, column_stats, join_preview,
-    collapse_check,
+    collapse_check, column_type_hint, column_type_hints,
  )
 from agentic_kg.tools.construction_plan_tools import (
     propose_node_construction, propose_relationship_construction,
@@ -83,6 +83,27 @@ _VALIDATION_RULES = """
               connects only a small fraction of the data is a real problem -- never let it pass
               unmentioned.
 
+            Property types -- use 'column_type_hint':
+            - Every property is stored as text unless the construction declares a type for it.
+              A number stored as text sorts lexicographically ('9' after '30'), so any question
+              about how many, how much, or which is largest returns a wrong answer rather than
+              an error. Declare a type for every property that holds a quantity, a duration, a
+              price, a cost or a yes/no flag.
+            - Call 'column_type_hint' with the file and the column before declaring a type, or
+              'column_type_hints' for several columns of one file at once. It reports the shape
+              of the column's values, a suggested type, and how many values could not be
+              converted. Never judge a type from 'sample_file' output alone.
+            - The suggestion is evidence, not a decision. A column of bare digits can be a
+              product code, a year, or a postal code; only the column name and the user goal
+              can tell those from a quantity. If a high 'unconvertible_count' comes back, the
+              column is not that type -- do not declare it.
+            - The allowed types are exactly 'integer', 'float' and 'boolean'. Anything else,
+              including dates, stays text.
+            - NEVER declare a type for a node's 'unique_column_name', and NEVER declare a type
+              for a column any relationship joins on. Join columns and identifiers are compared
+              as raw text from the CSV, so a typed column matches zero rows with no error at
+              all. If a relationship needs to join on a column, that column stays text.
+
             Direction of relationships (a good name pointing the wrong way is still wrong):
             - The name and the direction are two independent decisions, and a name that reads as
               valid English says nothing about whether the from/to labels are the right way round.
@@ -141,7 +162,10 @@ variants = {
             - Before calling a propose tool, check whether that label or type is already in the plan. If it
               is, and the current request does not concern it, leave it alone. If it is and the request
               does concern it, restate every field you intend to keep — a propose call replaces the whole
-              entry, it does not merge.
+              entry, it does not merge. This includes 'proposed_property_types': a re-proposal that
+              restates the properties but omits the types silently reverts every declared type back to
+              text, and the resulting plan looks identical to the one you meant to keep. Nothing later in
+              the workflow can detect that, so restating it is the only protection.
             - If you change a node's 'unique_column_name', you must also update every relationship in the
               plan that joins to that label, so its join column matches the new identifier. A plan whose
               relationship joins on a column the referenced node does not carry will be rejected at
@@ -208,22 +232,30 @@ variants = {
             4. For a node file, propose a node construction using the 'propose_node_construction' tool.
             5. If the node contains a reference relationship, use the 'propose_relationship_construction' tool to propose a relationship construction.
             6. For a relationship file, propose a relationship construction using the 'propose_relationship_construction' tool
-            7. When you have several nodes or relationships ready to propose at once, prefer the batch
+            7. For each property you intend to keep on a node or relationship, call
+               'column_type_hint' (or 'column_type_hints' for several columns of one file) and
+               declare a type for every quantity, duration, price, cost or yes/no flag by passing
+               'proposed_property_types' to the propose tool. Apply the property-type rules above.
+            8. Never declare a type for a node's unique identifier, or for a column a relationship
+               joins on. If you later add a relationship that joins on a typed property, remove that
+               property's type in the same revision — approval refuses a plan that has both.
+            9. When you have several nodes or relationships ready to propose at once, prefer the batch
                tools 'propose_node_constructions' / 'propose_relationship_constructions', which take a
                list of constructions and record them in one call. Either form is fine; use the singular
                tools when proposing one construction at a time or when you want per-construction errors.
-            8. If you need to remove a construction, use the 'remove_node_construction' or 'remove_relationship_construction' tool
-            9. Before finalizing any relationship construction, apply the join-key rules above with
-               'collapse_check' for each join column that is not the referenced node's declared unique
-               identifier, then check raw value overlap with 'join_preview'.
-            10. Before finalizing any relationship construction, apply the direction rules above. If the
+            10. If you need to remove a construction, use the 'remove_node_construction' or 'remove_relationship_construction' tool
+            11. Before finalizing any relationship construction, apply the join-key rules above with
+                'collapse_check' for each join column that is not the referenced node's declared unique
+                identifier, then check raw value overlap with 'join_preview'.
+            12. Before finalizing any relationship construction, apply the direction rules above. If the
                 direction is wrong, re-propose the relationship with the from and to endpoints (labels
                 *and* columns) swapped — do not settle for renaming it.
-            11. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
+            13. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
         """,
         "tools": [
             get_approved_user_goal, get_approved_files, get_proposed_construction_plan,
             sample_file, search_file, column_stats, join_preview, collapse_check,
+            column_type_hint, column_type_hints,
             propose_node_construction, propose_relationship_construction,
             propose_node_constructions, propose_relationship_constructions,
             remove_node_construction, remove_relationship_construction,
@@ -256,6 +288,13 @@ variants = {
             - Is every relationship pointing the right way? Apply the direction rules above and reject
               with 'retry' when a relationship is reversed. Say explicitly that the endpoints must be
               swapped, not that the type should be renamed.
+            - Is a property that clearly holds a quantity, duration, price, cost or yes/no flag left
+              without a declared type? Call 'column_type_hint' to check what the data supports, and
+              reject with 'retry' when a numeric or boolean column is being stored as text.
+            - Is a declared type wrong for the data? A high 'unconvertible_count' from
+              'column_type_hint' means the build would refuse that column outright.
+            - Is a node's unique identifier, or any column a relationship joins on, given a type?
+              Those must stay text; reject with 'retry' and say which type to drop.
 
             Prepare for the task:
             - get the user goal using the 'get_approved_user_goal' tool
@@ -280,6 +319,7 @@ variants = {
             get_approved_user_goal, get_approved_files,
             get_proposed_construction_plan,
             sample_file, search_file, column_stats, join_preview, collapse_check,
+            column_type_hint, column_type_hints,
         ]
     }
 }

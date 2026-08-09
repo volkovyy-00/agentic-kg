@@ -38,6 +38,20 @@ def make_csv_reader(handle, relative_path: str):
     return clevercsv.reader(handle, dialect)
 
 
+def read_csv_header(relative_path: str) -> List[str]:
+    """Return a source CSV's header, reading no data rows.
+
+    read_csv_batches yields nothing at all for a file holding a header and no
+    data rows, because it only yields once it has collected a batch. Any caller
+    that validates column names inside that loop therefore skips validation
+    entirely for a header-only file -- a perfectly valid empty export -- and a
+    plan naming columns the file does not have is reported as a clean zero-row
+    success instead of the promised missing-column error.
+    """
+    with open_source(relative_path, "r") as handle:
+        return next(make_csv_reader(handle, relative_path), [])
+
+
 def read_csv_batches(
     relative_path: str,
     batch_size: int = DEFAULT_BATCH_SIZE,

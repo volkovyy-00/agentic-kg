@@ -2,6 +2,7 @@ import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
+from agentic_kg.common.value_types import classify
 from agentic_kg.tools import file_tools
 
 
@@ -256,3 +257,253 @@ def test_a_bare_string_is_not_treated_as_a_list_of_characters(memory_source):
     result = file_tools.set_suggested_files("people.csv", context)
     assert result["status"] == "error"
     assert file_tools.SUGGESTED_FILES not in context.state
+
+
+# --- column type hints ------------------------------------------------------
+
+@pytest.fixture
+def bom_source(monkeypatch):
+    """Point the source root at the bundled example data.
+
+    tests/conftest.py already defaults SOURCE_URI to ./data/bom, but other
+    fixtures in this file override it, so set it explicitly and reset the cached
+    settings both ways.
+    """
+    monkeypatch.setenv("SOURCE_URI", "./data/bom")
+    reset_settings()
+    yield
+    reset_settings()
+
+
+def test_column_type_hint_reports_a_plain_count_as_integer(bom_source):
+    """lead_time_days is bare digits; suggesting float for it would store 8.0
+    where the source says 8."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint(
+        "part_supplier_mapping.csv", "lead_time_days", context)
+
+    assert result["status"] == "success"
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "bare_numeric"
+    assert hint["suggested_type"] == "integer"
+    assert hint["unconvertible_count"] == 0
+
+
+def test_suggested_type_ignores_a_single_dirty_value_in_a_bare_numeric_column():
+    """Catches _suggested_type downgrading a clean integer column to float
+    because ONE non-blank value fails INTEGER coercion, even when that value
+    is not a number at all (e.g. 'N/A'). A value that also fails FLOAT
+    coercion is dirty data, not evidence of fractional-ness, and must not
+    influence integer-vs-float -- otherwise 400 integers plus one 'N/A'
+    would be suggested float and store 8.0 where the source says 8."""
+    values = [str(n) for n in range(400)] + ["N/A"]
+    assert file_tools._suggested_type(file_tools.BARE_NUMERIC, values) == "integer"
+
+
+def test_column_type_hint_reports_currency_as_float_by_shape(bom_source):
+    """Every price in products.csv is a whole dollar amount, so a derivation
+    keyed off 'are all values whole' would answer integer -- and then refuse the
+    first $99.99 the data ever gains. The shape assertion is the real guard:
+    it fails even if a broken derivation happens to return the right label."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint("products.csv", "price", context)
+
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "numeric_after_cleaning"
+    assert hint["suggested_type"] == "float"
+
+
+def test_column_type_hint_reports_a_yes_no_column_as_boolean(bom_source):
+    context = FakeToolContext()
+    result = file_tools.column_type_hint(
+        "part_supplier_mapping.csv", "preferred_supplier", context)
+
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "boolean_like"
+    assert hint["suggested_type"] == "boolean"
+
+
+def test_column_type_hint_suggests_nothing_for_text(bom_source):
+    """A suggestion for a name column would invite the model to type it, and
+    every value would then fail to convert."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint("suppliers.csv", "name", context)
+
+    hint = result["column_type_hint"]
+    assert hint["shape"] == "text"
+    assert hint["suggested_type"] is None
+
+
+def test_column_type_hint_counts_come_from_the_loader_converter(monkeypatch):
+    """The counts must be what the loader will actually do, not a second
+    implementation that can disagree with it."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    try:
+        with fs.open("/hints/costs.csv", "w") as handle:
+            handle.write('cost,note\n"$1,234.50",a\n42,b\nN/A,c\n,d\n99\n')
+        monkeypatch.setenv("SOURCE_URI", "memory://hints")
+        reset_settings()
+
+        hint = file_tools.column_type_hint(
+            "costs.csv", "cost", FakeToolContext())["column_type_hint"]
+
+        assert hint["convertible_count"] == 3
+        assert hint["blank_count"] == 1
+        assert hint["unconvertible_count"] == 1
+        assert hint["example_unconvertible"] == ["N/A"]
+
+        # The last row stops before 'note'. The loader skips an absent key and
+        # leaves any earlier value alone, so counting it as blank would claim
+        # the build erases something it does not touch.
+        note = file_tools.column_type_hint(
+            "costs.csv", "note", FakeToolContext())["column_type_hint"]
+
+        assert note["missing_count"] == 1
+        assert note["blank_count"] == 0
+    finally:
+        fs.store.clear()
+        fs.pseudo_dirs.clear()
+
+
+def test_column_type_hints_returns_one_entry_per_column(bom_source):
+    context = FakeToolContext()
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv", ["lead_time_days", "preferred_supplier"], context)
+
+    assert result["status"] == "success"
+    hints = result["column_type_hints"]
+    assert [hint["column"] for hint in hints] == ["lead_time_days", "preferred_supplier"]
+    assert [hint["suggested_type"] for hint in hints] == ["integer", "boolean"]
+
+
+def test_suggested_type_does_not_downgrade_an_overflowing_integer_to_float():
+    """coerce refuses a value for two different reasons. Reading "integer
+    failed, float succeeded" as evidence of a fraction types the column float on
+    the strength of a whole number too big for Neo4j's INTEGER -- and float
+    stores 9223372036854775809 as 9.223372036854776e+18, a wrong number reported
+    as a clean conversion. Integer keeps the outlier on the counted-and-cleared
+    path instead, where the hint's own unconvertible_count shows it."""
+    values = ["1", "2", "9223372036854775809"]
+    assert file_tools._suggested_type(classify(values), values) == "integer"
+
+
+def test_suggested_type_still_sees_a_genuinely_fractional_column():
+    """The overflow fix must not cost the fractional detection it sits next to."""
+    assert file_tools._suggested_type(classify(["1.5", "2.5"]), ["1.5", "2.5"]) == "float"
+
+
+def test_column_type_hints_reads_the_source_once_for_all_columns(bom_source, monkeypatch):
+    """Source files are read through fsspec and may be remote, so one read per
+    requested column turns a hint request for N properties into N downloads and
+    N parses of the same file. The schema prompt directs the agent to inspect
+    every property, so N is not small."""
+    reads = []
+    real_read_csv_batches = file_tools.read_csv_batches
+
+    def counting_read(path, *args, **kwargs):
+        reads.append(path)
+        return real_read_csv_batches(path, *args, **kwargs)
+
+    monkeypatch.setattr(file_tools, "read_csv_batches", counting_read)
+
+    context = FakeToolContext()
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv",
+        ["lead_time_days", "preferred_supplier", "unit_cost"],
+        context)
+
+    assert result["status"] == "success"
+    assert len(result["column_type_hints"]) == 3
+    assert len(reads) == 1
+
+
+def test_column_type_hint_reads_a_header_only_file(monkeypatch):
+    """read_csv_batches yields nothing when a file has a header and no data
+    rows, because it only yields once it has collected a batch. Inferring "no
+    header" from "no batches" rejected a valid header-only file -- an empty
+    export, or a table whose rows have not landed yet -- with an error about a
+    header sitting right there in the file, and blocked analysis of columns that
+    are present."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    try:
+        with fs.open("/empty/parts.csv", "w") as handle:
+            handle.write("part_id,quantity\n")
+        monkeypatch.setenv("SOURCE_URI", "memory://empty")
+        reset_settings()
+
+        result = file_tools.column_type_hint("parts.csv", "quantity", FakeToolContext())
+        assert result["status"] == "success"
+        hint = result["column_type_hint"]
+        assert hint["convertible_count"] == 0
+        assert hint["blank_count"] == 0
+        assert hint["missing_count"] == 0
+
+        batched = file_tools.column_type_hints(
+            "parts.csv", ["part_id", "quantity"], FakeToolContext())
+        assert batched["status"] == "success"
+        assert len(batched["column_type_hints"]) == 2
+
+        # A misspelling in a header-only file must still be named, not silently
+        # answered with zero counts.
+        missing = file_tools.column_type_hint("parts.csv", "qty", FakeToolContext())
+        assert missing["status"] == "error"
+        assert "qty" in missing["error_message"]
+    finally:
+        fs.store.clear()
+        fs.pseudo_dirs.clear()
+
+
+def test_column_type_hints_rejects_a_bare_string_instead_of_spelling_it(bom_source):
+    """A model sending "price" where a list belongs would otherwise have it
+    iterated into ['p','r','i','c','e'] and get "Column 'p' is not in
+    products.csv" -- an answer about the data for what is a call-shape mistake,
+    sending the model to inspect a file that is perfectly fine. The error must
+    name the real problem and the single-column tool to use instead."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hints("products.csv", "price", context)
+
+    assert result["status"] == "error"
+    assert "list" in result["error_message"]
+    assert "column_type_hint" in result["error_message"]
+    assert "'p'" not in result["error_message"]
+
+
+def test_column_type_hints_names_a_missing_column_before_reading_rows(bom_source):
+    """Batched reading must not cost the caller the error message the
+    per-column path gave: the failure still names the column to correct."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv", ["lead_time_days", "leed_time"], context)
+
+    assert result["status"] == "error"
+    assert "leed_time" in result["error_message"]
+
+
+def test_column_type_hint_errors_on_a_missing_column(bom_source):
+    """A misspelled column must not come back as 'text, no suggestion' -- that
+    reads as an answer about the data rather than a typo."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hint("products.csv", "prcie", context)
+
+    assert result["status"] == "error"
+    assert "prcie" in result["error_message"]
+
+
+def test_the_hint_docstring_documents_every_key_it_returns(bom_source):
+    """This docstring is the tool description ADK sends to the model, so a key
+    the payload carries but the description never names is a number the model
+    has to guess the meaning of.
+
+    Cannot catch a description that is merely wrong -- 'blank_count' was
+    documented as always cleared when that is true only for a typed property --
+    but it does catch the half a test can check: a count added to the payload
+    and never explained."""
+    hint = file_tools.column_type_hint(
+        "products.csv", "price", FakeToolContext())["column_type_hint"]
+
+    for key in hint:
+        assert f"'{key}'" in file_tools.column_type_hint.__doc__, key

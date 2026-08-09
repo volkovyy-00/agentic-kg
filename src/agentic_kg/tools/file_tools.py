@@ -3,9 +3,11 @@ import logging
 from itertools import islice
 
 from google.adk.tools import ToolContext
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
-from agentic_kg.common.csv_reader import make_csv_reader, read_csv_batches
+from agentic_kg.common.csv_reader import (
+    make_csv_reader, read_csv_batches, read_csv_header,
+)
 from agentic_kg.common.tool_result import tool_success, tool_error
 from agentic_kg.common.file_source import (
     SourceError,
@@ -13,6 +15,10 @@ from agentic_kg.common.file_source import (
     list_source_files,
     open_source,
     source_exists,
+)
+from agentic_kg.common.value_types import (
+    BARE_NUMERIC, BLANK, BOOLEAN, BOOLEAN_LIKE, CONVERTED, FLOAT, INTEGER,
+    NUMERIC_AFTER_CLEANING, classify, coerce, has_fractional_part, is_blank,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,6 +221,13 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     }
     return tool_success("search_results", result_data)
 
+def _missing_column_error(file_path: str, column: str, header: List[str]) -> dict:
+    """One wording for a misspelled column, wherever it is noticed."""
+    return tool_error(
+        f"Column '{column}' is not in {file_path}. Available columns: {header}"
+    )
+
+
 def _collect_column_values(file_path: str, column: str):
     """Read every value of one column from a source CSV.
 
@@ -223,8 +236,10 @@ def _collect_column_values(file_path: str, column: str):
         tool_error dict when the file or column cannot be read.
 
     read_csv_batches omits the key entirely for a row shorter than the header, so
-    a ragged row contributes "" here rather than being skipped. That keeps one
-    value per row, which is what column_stats' row_count and empty_count report.
+    a ragged row contributes None here while a present-but-empty cell contributes
+    "". The two are the same absence to column_stats, whose row_count and
+    empty_count treat both as empty -- but not to the loader, which skips an
+    absent key and clears a blank one, so the hint tool counts them apart.
     """
     try:
         if not source_exists(file_path):
@@ -232,7 +247,7 @@ def _collect_column_values(file_path: str, column: str):
     except SourceError as exc:
         return None, tool_error(str(exc))
 
-    values: List[str] = []
+    values: List[Optional[str]] = []
     header: List[str] = []
     saw_header = False
     try:
@@ -241,16 +256,18 @@ def _collect_column_values(file_path: str, column: str):
                 header = batch_header
                 saw_header = True
                 if column not in header:
-                    return None, tool_error(
-                        f"Column '{column}' is not in {file_path}. Available columns: {header}"
-                    )
+                    return None, _missing_column_error(file_path, column, header)
             for row in rows:
-                values.append(row.get(column, ""))
+                values.append(row.get(column))
+        if not saw_header:
+            # No batches at all: either a header-only file or an empty one.
+            header = read_csv_header(file_path)
+            if not header:
+                return None, tool_error(f"CSV file has no header row: {file_path}")
+            if column not in header:
+                return None, _missing_column_error(file_path, column, header)
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
         return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
-
-    if not saw_header:
-        return None, tool_error(f"CSV file has no header row: {file_path}")
 
     return values, None
 
@@ -292,6 +309,223 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
         "empty_count": empty_count,
         "is_unique": empty_count == 0 and distinct_count == len(values),
     })
+
+
+def _suggested_type(shape: str, values) -> str | None:
+    """Map a column's shape to the type to suggest for it.
+
+    The shape decides, and for a column needing cleaning it decides alone: every
+    price in the bundled products.csv is a round dollar amount, so a
+    whole-number test would suggest integer for a currency column and then
+    refuse the first fractional price the data ever gains. Needing a currency
+    symbol or thousands separator stripped is itself the evidence it is money.
+
+    Wholeness is consulted only to split integer from float WITHIN the
+    bare_numeric shape, where there is nothing else to go on -- and only for
+    values that are numbers at all, so one "N/A" in a column of 400 integers
+    cannot make it look fractional.
+
+    It asks has_fractional_part rather than inferring the fraction from a failed
+    integer coercion. coerce refuses a value for two different reasons, and
+    treating them alike types a column float on the strength of a whole number
+    too large for Neo4j's INTEGER -- which then loads as a rounded, wrong number
+    and reports a clean conversion. An overflowing value leaves the suggestion
+    at integer, so the loader counts it, reports it as an example, and clears
+    it; one unstorable outlier does not cost the whole column its type, the same
+    tolerance classify() already applies.
+    """
+    if shape == BOOLEAN_LIKE:
+        return BOOLEAN
+    if shape == NUMERIC_AFTER_CLEANING:
+        return FLOAT
+    if shape == BARE_NUMERIC:
+        for value in values:
+            if has_fractional_part(value):
+                return FLOAT
+        return INTEGER
+    return None
+
+
+def _hint_from_values(file_path: str, column: str,
+                      values: List[Optional[str]]) -> dict:
+    """Build one column_type_hint payload from values already read.
+
+    Split out from column_type_hint so column_type_hints can reuse it after a
+    single file pass, rather than re-reading the source once per column.
+    """
+    shape = classify(values)
+    suggested = _suggested_type(shape, values)
+
+    convertible_count = 0
+    blank_count = 0
+    missing_count = 0
+    unconvertible_count = 0
+    examples: List[str] = []
+
+    for value in values:
+        # A row too short to reach this column is not the same as a row with an
+        # empty cell. An absent key is skipped whatever the property's type,
+        # leaving an earlier row's value alone; an empty cell is a value the row
+        # actually carried, and the loader either clears the property (typed) or
+        # stores "" (text). Reported together, blank_count would overstate what
+        # the build will erase -- and this tool's counts exist precisely to say
+        # what the build will do.
+        if value is None:
+            missing_count += 1
+            continue
+        if suggested is None:
+            if is_blank(value):
+                blank_count += 1
+            continue
+        _converted, outcome = coerce(value, suggested)
+        if outcome == CONVERTED:
+            convertible_count += 1
+        elif outcome == BLANK:
+            blank_count += 1
+        else:
+            unconvertible_count += 1
+            if len(examples) < 3:
+                examples.append(value)
+
+    return {
+        "path": file_path,
+        "column": column,
+        "shape": shape,
+        "suggested_type": suggested,
+        "convertible_count": convertible_count,
+        "blank_count": blank_count,
+        "missing_count": missing_count,
+        "unconvertible_count": unconvertible_count,
+        "example_unconvertible": examples,
+    }
+
+
+def _collect_columns_values(file_path: str, columns: List[str]):
+    """Read every value of several columns in ONE pass over a source CSV.
+
+    Returns:
+        (values_by_column, error) where values_by_column maps each requested
+        column to one entry per data row, and error is a tool_error dict when
+        the file or any requested column cannot be read.
+
+    Source files are read through fsspec and may be remote, so reading once per
+    requested column turns a hint request for N properties into N downloads and
+    N parses of the same file. Columns are validated against the header before
+    any row is collected, so an unreadable column still fails on the first
+    batch rather than after a full scan. A ragged row contributes None and a
+    present-but-empty cell contributes "", the distinction
+    _collect_column_values documents and _hint_from_values counts apart.
+    """
+    try:
+        if not source_exists(file_path):
+            return None, tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return None, tool_error(str(exc))
+
+    values_by_column: Dict[str, List[Optional[str]]] = {column: [] for column in columns}
+    saw_header = False
+    try:
+        for batch_header, rows in read_csv_batches(file_path):
+            if not saw_header:
+                saw_header = True
+                for column in columns:
+                    if column not in batch_header:
+                        return None, _missing_column_error(file_path, column, batch_header)
+            for row in rows:
+                for column in columns:
+                    values_by_column[column].append(row.get(column))
+        if not saw_header:
+            # No batches at all: either a header-only file or an empty one.
+            header = read_csv_header(file_path)
+            if not header:
+                return None, tool_error(f"CSV file has no header row: {file_path}")
+            for column in columns:
+                if column not in header:
+                    return None, _missing_column_error(file_path, column, header)
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    return values_by_column, None
+
+
+def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> dict:
+    """Reports what type one CSV column's values can actually be stored as.
+
+    Use this before declaring a property's type in a construction plan. It
+    answers one question only -- what the data supports -- and deliberately says
+    nothing about whether a column is a good identifier ('column_stats'), or
+    whether it survives being collapsed into a node ('collapse_check'). A
+    suggestion is evidence, not a decision: a column of bare digits can be a
+    product code, and only the column name and the user goal can tell.
+
+    The counts come from the same converter the loader runs, so they are exactly
+    what would happen at build time.
+
+    Args:
+      file_path: Path to the CSV file, relative to the source location.
+      column: The column to analyze.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'column_type_hint'
+              key with 'path', 'column', 'shape' (one of 'bare_numeric',
+              'numeric_after_cleaning', 'boolean_like', 'text'), 'suggested_type'
+              ('integer', 'float', 'boolean', or null when the column is text),
+              'convertible_count', 'blank_count' (empty cells: cleared if you
+              declare a type for the property, stored as an empty string if you
+              leave it text), 'missing_count' (rows too short to reach this
+              column, which the build leaves untouched either way),
+              'unconvertible_count' and up to three 'example_unconvertible'
+              values.
+    """
+    values, error = _collect_column_values(file_path, column)
+    if error is not None:
+        return error
+
+    return tool_success("column_type_hint", _hint_from_values(file_path, column, values))
+
+
+def column_type_hints(file_path: str, columns: List[str], tool_context: ToolContext) -> dict:
+    """Reports 'column_type_hint' for several columns of one file in a single call.
+
+    Each column is analyzed with the same rules as 'column_type_hint'. Analysis
+    stops at the first column that cannot be read, so the error names the column
+    to correct.
+
+    Args:
+      file_path: Path to the CSV file, relative to the source location.
+      columns: The columns to analyze.
+      tool_context: The ToolContext object.
+
+    Returns:
+        dict: 'status' of 'success' or 'error'. On success, a 'column_type_hints'
+              key holding one 'column_type_hint' payload per requested column, in
+              the order requested.
+    """
+    # The argument is produced by a model, and a bare "price" would otherwise be
+    # iterated into ['p', 'r', 'i', 'c', 'e'] and reported as "Column 'p' is not
+    # in products.csv" -- an error about the data for what is a call-shape
+    # mistake, sending the model to inspect a file that is fine. Same boundary
+    # set_suggested_files guards, for the same reason.
+    if columns is not None and not isinstance(columns, list):
+        return tool_error(
+            f"'columns' must be a list of column names, not {type(columns).__name__}. "
+            f"Call 'column_type_hint' for a single column."
+        )
+    requested = list(columns or [])
+    if not all(isinstance(column, str) for column in requested):
+        return tool_error("Every entry of 'columns' must be a column name.")
+    if not requested:
+        return tool_success("column_type_hints", [])
+
+    values_by_column, error = _collect_columns_values(file_path, requested)
+    if error is not None:
+        return error
+
+    return tool_success("column_type_hints", [
+        _hint_from_values(file_path, column, values_by_column[column])
+        for column in requested
+    ])
 
 
 def _collect_column_pairs(file_path: str, column_a: str, column_b: str):

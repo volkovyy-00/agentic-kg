@@ -542,3 +542,388 @@ def test_a_missing_source_file_names_itself_once(fake_db, monkeypatch, tmp_path)
     result = kg.load_nodes_from_csv("ghost.csv", "Person", "id", ["name"])
     assert result["status"] == "error"
     assert result["error_message"].lower().count("ghost.csv") == 1
+
+
+# --- typed properties -------------------------------------------------------
+
+@pytest.fixture
+def typed_batch(monkeypatch):
+    """One batch carrying a currency value, a count and a flag."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost", "days", "preferred"], [
+            {"id": "1", "cost": "$42.73", "days": "8", "preferred": "yes"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+def test_typed_values_are_converted_before_the_batch_is_sent(fake_db, typed_batch):
+    """Without conversion the graph stores '$42.73' and every aggregation over it
+    is wrong -- the defect itself."""
+    kg.load_nodes_from_csv("p.csv", "P", "id", ["cost", "days", "preferred"],
+                           {"cost": "float", "days": "integer", "preferred": "boolean"})
+
+    _query, params = fake_db.queries[0]
+    assert params["rows"][0]["cost"] == 42.73
+    assert params["rows"][0]["days"] == 8
+    assert params["rows"][0]["preferred"] is True
+
+
+def test_untyped_properties_keep_the_original_parameter(fake_db, typed_batch):
+    """$properties must carry untyped names only: the existing FOREACH over it is
+    the ragged-row guard, and a typed name in both lists would be written twice."""
+    kg.load_nodes_from_csv("p.csv", "P", "id", ["cost", "days"], {"cost": "float"})
+
+    _query, params = fake_db.queries[0]
+    assert params["properties"] == ["days"]
+    assert params["typed_properties"] == ["cost"]
+
+
+def test_the_query_has_a_write_pass_and_a_clear_pass_for_typed_properties(
+        fake_db, typed_batch):
+    """One pass cannot do both: SET n[k] = null deletes a property, so writing
+    and clearing have to be separate FOREACHes over different filters."""
+    kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    query, params = fake_db.queries[0]
+    assert "$typed_properties" in query
+    assert "SET n[k] = null" in query
+    assert params["clear"] == kg.CLEAR_SENTINEL
+
+
+def test_an_unconvertible_typed_value_becomes_the_sentinel(fake_db, monkeypatch):
+    """It must not stay a string (that is the untyped graph) and must not become
+    a plain null (Cypher cannot tell that from a ragged row's absent key)."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "1", "cost": "N/A"}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    _query, params = fake_db.queries[0]
+    assert params["rows"][0]["cost"] == kg.CLEAR_SENTINEL
+
+
+def test_a_blank_typed_value_becomes_the_sentinel(fake_db, monkeypatch):
+    """A blank clears a stale value on re-run exactly as an unparseable one does;
+    only the counting differs."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "1", "cost": ""}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    _query, params = fake_db.queries[0]
+    assert params["rows"][0]["cost"] == kg.CLEAR_SENTINEL
+
+
+def test_a_ragged_row_keeps_a_typed_key_absent(fake_db, monkeypatch):
+    """An absent key must stay absent, not become the sentinel: the sentinel
+    clears, and a ragged row must never erase an earlier row's value."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "1", "cost": "1"}, {"id": "1"}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    _query, params = fake_db.queries[0]
+    assert "cost" not in params["rows"][1]
+
+
+def test_a_typed_property_missing_from_the_header_fails_loudly(fake_db, typed_batch):
+    """A typed property whose column does not exist would clear that property on
+    every row, silently, for the whole file."""
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["csot"], {"csot": "float"})
+
+    assert result["status"] == "error"
+    assert "csot" in result["error_message"]
+    assert fake_db.queries == []
+
+
+def test_a_mostly_unconvertible_column_stops_the_rule(fake_db, monkeypatch):
+    """Three of four non-blank values failing is a wrong type, not dirty data --
+    and continuing would clear real values row by row."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [
+            {"id": "1", "cost": "N/A"}, {"id": "2", "cost": "N/A"},
+            {"id": "3", "cost": "N/A"}, {"id": "4", "cost": "5"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "error"
+    assert "cost" in result["error_message"]
+    assert "float" in result["error_message"]
+    assert "was not sent" in result["error_message"]
+    assert fake_db.queries == []
+
+
+def test_a_sparse_column_does_not_trip_the_gate(fake_db, monkeypatch):
+    """Blanks are absence, not a wrong type. Counting them would abort a correct
+    load of any optional column."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [
+            {"id": "1", "cost": ""}, {"id": "2", "cost": ""},
+            {"id": "3", "cost": ""}, {"id": "4", "cost": "5"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "success", result.get("error_message")
+
+
+def test_blank_and_unconvertible_counts_stay_separate(fake_db, monkeypatch):
+    """Merged into one 'N of M failed' figure, a sparse column and a mistyped one
+    read identically to whoever gets the result."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [
+            {"id": "1", "cost": ""}, {"id": "2", "cost": "N/A"}, {"id": "3", "cost": "5"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    tally = result["rows_loaded"]["type_conversion"]["cost"]
+    assert tally == {"converted": 1, "blank": 1, "unconvertible": 1, "examples": ["N/A"]}
+
+
+def test_several_flagged_properties_join_into_one_warning(fake_db, monkeypatch):
+    """'warning' is a single string with six existing assertions against it; a
+    second flagged property must not overwrite the first."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost", "days"], [
+            {"id": "1", "cost": "N/A", "days": "x"}, {"id": "2", "cost": "5", "days": "8"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost", "days"],
+                                    {"cost": "float", "days": "integer"})
+
+    warning = result["rows_loaded"]["warning"]
+    assert "cost" in warning and "days" in warning
+
+
+def test_the_gate_runs_on_every_batch_not_only_the_first(fake_db, monkeypatch):
+    """Every bundled file is under DEFAULT_BATCH_SIZE, so no test built from
+    data/bom can tell 'checked once' from 'checked every batch'. A first-batch-
+    only gate would let a file whose later rows drift keep clearing values."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "1", "cost": "1"}, {"id": "2", "cost": "2"}]
+        yield ["id", "cost"], [{"id": "3", "cost": "N/A"}, {"id": "4", "cost": "N/A"}]
+        yield ["id", "cost"], [{"id": "5", "cost": "5"}, {"id": "6", "cost": "6"}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "error"
+    assert "cost" in result["error_message"]
+    # Batch 1 was sent and committed; batches 2 and 3 were not.
+    assert len(fake_db.queries) == 1
+    assert [row["id"] for row in fake_db.queries[0][1]["rows"]] == ["1", "2"]
+    assert "2 rows committed" in result["error_message"]
+
+
+def test_import_nodes_passes_property_types_from_the_rule(monkeypatch, fake_db, typed_batch):
+    """A rule may legitimately not carry the key at all (a plan proposed before
+    this change), so the read must be defensive."""
+    monkeypatch.setattr(kg, "create_uniqueness_constraint",
+                        lambda label, column: {"status": "success"})
+
+    kg.import_nodes({"source_file": "p.csv", "label": "P", "unique_column_name": "id",
+                     "properties": ["cost"], "property_types": {"cost": "float"}})
+
+    _query, params = fake_db.queries[0]
+    assert params["rows"][0]["cost"] == 42.73
+
+
+def test_relationship_typed_values_are_converted(fake_db, typed_batch):
+    """Relationship properties carry the same per-row data (lead times, costs)
+    and need the same treatment; only the loader differs."""
+    kg.import_relationships({
+        "source_file": "p.csv", "relationship_type": "R",
+        "from_node_label": "A", "from_node_column": "id",
+        "to_node_label": "B", "to_node_column": "id",
+        "properties": ["cost"], "property_types": {"cost": "float"},
+    })
+
+    _query, params = fake_db.queries[0]
+    assert params["rows"][0]["cost"] == 42.73
+    assert params["typed_properties"] == ["cost"]
+
+
+def test_relationship_gate_stops_the_rule(fake_db, monkeypatch):
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [{"id": "1", "cost": "N/A"}, {"id": "2", "cost": "N/A"}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.import_relationships({
+        "source_file": "p.csv", "relationship_type": "R",
+        "from_node_label": "A", "from_node_column": "id",
+        "to_node_label": "B", "to_node_column": "id",
+        "properties": ["cost"], "property_types": {"cost": "float"},
+    })
+
+    assert result["status"] == "error"
+    assert fake_db.queries == []
+
+
+def test_relationship_type_warning_and_join_warning_combine(fake_db, monkeypatch):
+    """import_relationships already sets loaded["warning"] for its join
+    under-match case; a second `loaded["warning"] = ...` for the type warning
+    would silently overwrite that assignment instead of joining with it."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "cost"], [
+            {"id": "1", "cost": "N/A"}, {"id": "2", "cost": "5"},
+        ]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.import_relationships({
+        "source_file": "p.csv", "relationship_type": "R",
+        "from_node_label": "A", "from_node_column": "id",
+        "to_node_label": "B", "to_node_column": "id",
+        "properties": ["cost"], "property_types": {"cost": "float"},
+    })
+
+    warning = result["rows_loaded"]["warning"]
+    assert "cost" in warning
+    assert "rows matched both endpoints" in warning
+
+
+def test_a_type_declared_for_a_name_not_in_properties_is_ignored_by_the_loader(
+        fake_db, monkeypatch):
+    """Refused at approval time, so the loader only sees this via a hand-built
+    plan or a direct call -- but coercing off the raw map would let such a name
+    trip the gate and abort the whole rule for a property no FOREACH would have
+    written, and if the name were the key column the row's key would be replaced
+    by the sentinel and MERGE would key the node on it."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "q"], [{"id": "1", "q": "x"}, {"id": "2", "q": "y"}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["id"], {"q": "integer"})
+
+    assert result["status"] == "success", result.get("error_message")
+    _query, params = fake_db.queries[0]
+    assert params["typed_properties"] == []
+    assert params["rows"][0]["q"] == "x"
+
+
+@pytest.fixture
+def header_only(monkeypatch):
+    """A valid empty export: a header, no data rows. read_csv_batches yields
+    nothing for one, so the header has to come from somewhere else."""
+    def no_batches(relative_path, batch_size=1000):
+        return
+        yield  # pragma: no cover - makes this a generator
+
+    monkeypatch.setattr(kg, "read_csv_batches", no_batches)
+    monkeypatch.setattr(kg, "read_csv_header", lambda path: ["id", "name"], raising=False)
+
+
+def test_a_header_only_file_still_refuses_a_column_it_does_not_have(fake_db, header_only):
+    """Both loaders checked their columns inside the batch loop, which a
+    header-only file never enters -- so a rule naming a column the file does not
+    have came back as a clean zero-row success, and the promised missing-column
+    error never fired. Nothing was written, but the plan was wrong and the run
+    said it worked."""
+    missing_key = kg.load_nodes_from_csv("people.csv", "Person", "person_id", ["name"])
+    assert missing_key["status"] == "error"
+    assert "person_id" in missing_key["error_message"]
+
+    missing_typed = kg.load_nodes_from_csv(
+        "people.csv", "Person", "id", ["name", "aeg"], {"aeg": "integer"})
+    assert missing_typed["status"] == "error"
+    assert "aeg" in missing_typed["error_message"]
+
+    assert fake_db.queries == []
+
+
+def test_a_header_only_file_loads_zero_rows_when_the_columns_are_right(fake_db, header_only):
+    """An empty export is not an error. Refusing one would block a load whose
+    rows simply have not landed yet."""
+    result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
+    assert result["status"] == "success", result.get("error_message")
+    assert result["rows_loaded"]["rows"] == 0
+
+
+def _one_present_value_per_batch(value_per_batch):
+    """Batches where a typed column is blank on every row but one.
+
+    The shape that defeats a per-batch-only gate: no batch ever holds
+    TYPE_FAILURE_MIN_SAMPLE present values, however many batches there are.
+    """
+    def fake_batches(relative_path, batch_size=1000):
+        for index, value in enumerate(value_per_batch):
+            yield ["id", "cost"], [
+                {"id": f"{index}a", "cost": ""},
+                {"id": f"{index}b", "cost": value},
+                {"id": f"{index}c", "cost": ""},
+            ]
+    return fake_batches
+
+
+def test_a_sparse_column_cannot_outlast_the_gate_one_batch_at_a_time(fake_db, monkeypatch):
+    """The exemption for a too-small sample was measured per batch, so a column
+    holding one present value per batch never reached the two it takes to expire
+    -- permanently. Every value in the file could fail, every one of them be
+    CLEARED, and the load still report success with a warning. Five failures out
+    of five present values is the strongest evidence of a wrong type there is."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["N/A"] * 5))
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "error"
+    assert "cost" in result["error_message"]
+    # Fires on the second batch: two present values seen, both unconvertible.
+    assert len(fake_db.queries) == 1
+    assert "3 rows committed" in result["error_message"]
+    # The cumulative arm must say what it actually counted, not "in this batch".
+    assert "read so far" in result["error_message"]
+    assert "was not sent" in result["error_message"]
+
+
+def test_a_sparse_relationship_column_cannot_outlast_the_gate_either(fake_db, monkeypatch):
+    """The relationship loader carries its own copy of the batch loop, and its
+    existing gate test is single-batch -- which is exactly the case that cannot
+    tell the two arms apart."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["N/A"] * 5))
+
+    result = kg.import_relationships({
+        "source_file": "p.csv", "relationship_type": "R",
+        "from_node_label": "A", "from_node_column": "id",
+        "to_node_label": "B", "to_node_column": "id",
+        "properties": ["cost"], "property_types": {"cost": "float"},
+    })
+
+    assert result["status"] == "error"
+    assert "read so far" in result["error_message"]
+    assert len(fake_db.queries) == 1
+
+
+def test_a_sparse_column_that_is_merely_dirty_still_loads(fake_db, monkeypatch):
+    """The narrowed exemption must not start refusing sparse columns that are
+    right. One typo among five present values is 20% -- dirt, not a wrong type."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["1", "2", "N/A", "4", "5"]))
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "success", result.get("error_message")
+    sent = [query for query, _ in fake_db.queries if query.startswith("UNWIND")]
+    assert len(sent) == 5
+    assert "cost" in result["rows_loaded"]["warning"]
+
+
+def test_a_single_present_failing_value_in_the_whole_file_still_loads(fake_db, monkeypatch):
+    """The exemption itself survives: one present value that fails is one row,
+    not evidence of a wrong type, however many blank rows surround it."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["N/A"]))
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "success", result.get("error_message")

@@ -351,3 +351,213 @@ def test_null_properties_are_stored_as_an_empty_list(ctx, any_column_exists):
     propose_relationship_construction(
         "products.csv", "HAS_PART", "Product", "product_id", "Part", "part_id", None, ctx)
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["HAS_PART"]["properties"] == []
+
+
+# --- property types ---------------------------------------------------------
+
+def test_node_construction_stores_property_types(ctx, any_column_exists):
+    """Without this the model has nowhere to record a type and every property
+    reaches the loader as a string -- the defect itself."""
+    propose_node_construction(
+        "part_supplier_mapping.csv", "Part", "part_id",
+        ["unit_cost", "lead_time_days", "part_name"], ctx,
+        {"unit_cost": "float", "lead_time_days": "integer"})
+
+    rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Part"]
+    assert rule["property_types"] == {"unit_cost": "float", "lead_time_days": "integer"}
+    assert rule["properties"] == ["unit_cost", "lead_time_days", "part_name"]
+
+
+def test_relationship_construction_stores_property_types(ctx, any_column_exists):
+    propose_relationship_construction(
+        "part_supplier_mapping.csv", "SUPPLIED_BY", "Part", "part_id",
+        "Supplier", "supplier_id", ["unit_cost"], ctx, {"unit_cost": "float"})
+
+    rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]
+    assert rule["property_types"] == {"unit_cost": "float"}
+
+
+def test_batch_node_constructions_carry_property_types(ctx, any_column_exists):
+    propose_node_constructions([
+        {"approved_file": "products.csv", "proposed_label": "Product",
+         "unique_column_name": "product_id", "proposed_properties": ["price"],
+         "proposed_property_types": {"price": "float"}},
+    ], ctx)
+
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {
+        "price": "float"}
+
+
+def test_batch_relationship_constructions_carry_property_types(ctx, any_column_exists):
+    propose_relationship_constructions([
+        {"approved_file": "part_supplier_mapping.csv",
+         "proposed_relationship_type": "SUPPLIED_BY",
+         "from_node_label": "Part", "from_node_column": "part_id",
+         "to_node_label": "Supplier", "to_node_column": "supplier_id",
+         "proposed_properties": ["lead_time_days"],
+         "proposed_property_types": {"lead_time_days": "integer"}},
+    ], ctx)
+
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {
+        "lead_time_days": "integer"}
+
+
+def test_null_property_types_are_stored_as_an_empty_dict(ctx, any_column_exists):
+    """A model may send JSON null rather than omitting the field. Stored raw,
+    that null would reach the loader as a plan key that reads as 'typed' and
+    blow up on .items(); the plan must degrade to plain text properties instead."""
+    propose_node_construction("products.csv", "Product", "product_id",
+                              ["price"], ctx, None)
+    propose_relationship_construction(
+        "part_supplier_mapping.csv", "SUPPLIED_BY", "Part", "part_id",
+        "Supplier", "supplier_id", ["unit_cost"], ctx, None)
+
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {}
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {}
+
+
+# --- type consistency -------------------------------------------------------
+
+def _typed_plan(**overrides):
+    """A minimal two-node, one-relationship plan; overrides patch one rule."""
+    plan = {
+        "Part": {"construction_type": "node", "source_file": "parts.csv",
+                 "label": "Part", "unique_column_name": "part_id",
+                 "properties": ["unit_cost", "part_name"],
+                 "property_types": {"unit_cost": "float"}},
+        "Supplier": {"construction_type": "node", "source_file": "suppliers.csv",
+                     "label": "Supplier", "unique_column_name": "supplier_id",
+                     "properties": ["name"], "property_types": {}},
+        "SUPPLIED_BY": {"construction_type": "relationship",
+                        "source_file": "part_supplier_mapping.csv",
+                        "relationship_type": "SUPPLIED_BY",
+                        "from_node_label": "Part", "from_node_column": "part_id",
+                        "to_node_label": "Supplier", "to_node_column": "supplier_id",
+                        "properties": ["lead_time_days"],
+                        "property_types": {"lead_time_days": "integer"}},
+    }
+    for key, rule in overrides.items():
+        plan[key] = rule
+    return plan
+
+
+def test_a_legal_typed_plan_is_consistent():
+    assert check_construction_plan_consistency(_typed_plan()) == []
+
+
+def test_a_type_for_a_property_not_in_the_list_is_refused():
+    """A type on a name the loader never reads is a silent no-op: the plan looks
+    typed and the graph comes out as strings."""
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unti_cost": "float"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("unti_cost" in problem for problem in problems)
+
+
+def test_typing_the_unique_column_is_refused_even_when_also_a_property():
+    """Checked independently of properties-membership: nothing stops a model
+    listing the key column as a property too, and the first rule alone would
+    then let the identifier be typed."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["part_id", "part_name"]
+    plan["Part"]["property_types"] = {"part_id": "integer"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("part_id" in problem for problem in problems)
+
+
+def test_typing_a_column_a_relationship_joins_on_is_refused_and_names_both_exits():
+    """import_relationships' MATCH compares the raw CSV string against the stored
+    property, and Neo4j does not coerce '5' = 5 -- a typed node side matches
+    nothing, silently. The message must name both fixes because the refinement
+    loop gets one invocation per turn."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["part_id", "unit_cost", "part_name"]
+    plan["Part"]["property_types"] = {"part_id": "integer"}
+    plan["SUPPLIED_BY"]["from_node_column"] = "part_id"
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "part_id" in joined
+    assert "SUPPLIED_BY" in joined
+
+
+def test_a_relationship_typing_its_own_join_column_is_refused():
+    """Catches the gap where joined_columns is keyed by (node_label, column) but
+    looked up as (key, name): for a relationship rule, key is the relationship
+    type, so a lookup against a map keyed by node labels never matches. Without
+    this check, a relationship that lists its own from_node_column in
+    properties and declares a type for it was accepted with zero problems --
+    the value gets coerced at build time, the MATCH then compares a number
+    against the raw string the node loader stored, and the rule silently
+    produces zero relationships."""
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "part_id"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer", "part_id": "integer"}
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "part_id" in joined
+    assert "SUPPLIED_BY" in joined
+
+
+def test_a_relationship_typing_its_own_join_column_with_an_unresolved_endpoint_label_names_no_target():
+    """Catches the implementation that computed
+    join_target = (nodes.get(own_node_label) or {}).get("unique_column_name")
+    unconditionally: when own_node_label has no matching node construction in
+    the plan, that expression is None, and the refusal used to render the
+    literal string \"join SUPPLIED_BY on 'None' instead\" -- an unactionable
+    second exit that reads as though 'None' were a real column name, breaking
+    the two-exits contract the refinement loop depends on for a single-pass
+    fix."""
+    plan = _typed_plan()
+    del plan["Supplier"]
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_id"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer", "supplier_id": "integer"}
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "supplier_id" in joined
+    assert "'None'" not in joined
+
+
+def test_a_typed_join_column_is_refused_when_the_rule_key_differs_from_the_label():
+    """Catches the gap where joined_columns is keyed by (node_label, column) but
+    looked up as (key, name), where key is the plan-dict key of the rule under
+    inspection. That lookup only works by coincidence when key == rule['label'],
+    which propose_node_construction happens to arrange but nothing in the
+    checker guarantees -- this branch's own TYPED_PLAN integration fixture uses
+    key 'Part' with label 'TypedPart', so the rule silently did not apply to
+    that plan at all."""
+    plan = _typed_plan()
+    plan["PartKey"] = plan.pop("Part")
+    plan["SUPPLIED_BY"]["from_node_column"] = "unit_cost"
+
+    problems = check_construction_plan_consistency(plan)
+    joined = " ".join(problems)
+    assert "unit_cost" in joined
+    assert "SUPPLIED_BY" in joined
+
+
+def test_an_unknown_type_name_is_refused():
+    """'string', 'date' and 'int' are all plausible model output and none of them
+    is in the closed set; coerce() would fail every value of such a column."""
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unit_cost": "decimal"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("decimal" in problem for problem in problems)
+
+
+def test_approval_refuses_a_plan_with_an_illegal_type(ctx):
+    """The rules are only worth anything if approval enforces them."""
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unit_cost": "decimal"}
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = plan
+
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "error"
+    assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
