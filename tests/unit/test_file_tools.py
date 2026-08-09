@@ -342,17 +342,26 @@ def test_column_type_hint_counts_come_from_the_loader_converter(monkeypatch):
     fs.pseudo_dirs.clear()
     try:
         with fs.open("/hints/costs.csv", "w") as handle:
-            handle.write("cost\n$1,234.50\n42\nN/A\n\n")
+            handle.write('cost,note\n"$1,234.50",a\n42,b\nN/A,c\n,d\n99\n')
         monkeypatch.setenv("SOURCE_URI", "memory://hints")
         reset_settings()
 
-        result = file_tools.column_type_hint("costs.csv", "cost", FakeToolContext())
+        hint = file_tools.column_type_hint(
+            "costs.csv", "cost", FakeToolContext())["column_type_hint"]
 
-        hint = result["column_type_hint"]
-        assert hint["convertible_count"] == 2
+        assert hint["convertible_count"] == 3
         assert hint["blank_count"] == 1
         assert hint["unconvertible_count"] == 1
         assert hint["example_unconvertible"] == ["N/A"]
+
+        # The last row stops before 'note'. The loader skips an absent key and
+        # leaves any earlier value alone, so counting it as blank would claim
+        # the build erases something it does not touch.
+        note = file_tools.column_type_hint(
+            "costs.csv", "note", FakeToolContext())["column_type_hint"]
+
+        assert note["missing_count"] == 1
+        assert note["blank_count"] == 0
     finally:
         fs.store.clear()
         fs.pseudo_dirs.clear()
@@ -408,6 +417,44 @@ def test_column_type_hints_reads_the_source_once_for_all_columns(bom_source, mon
     assert result["status"] == "success"
     assert len(result["column_type_hints"]) == 3
     assert len(reads) == 1
+
+
+def test_column_type_hint_reads_a_header_only_file(monkeypatch):
+    """read_csv_batches yields nothing when a file has a header and no data
+    rows, because it only yields once it has collected a batch. Inferring "no
+    header" from "no batches" rejected a valid header-only file -- an empty
+    export, or a table whose rows have not landed yet -- with an error about a
+    header sitting right there in the file, and blocked analysis of columns that
+    are present."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    try:
+        with fs.open("/empty/parts.csv", "w") as handle:
+            handle.write("part_id,quantity\n")
+        monkeypatch.setenv("SOURCE_URI", "memory://empty")
+        reset_settings()
+
+        result = file_tools.column_type_hint("parts.csv", "quantity", FakeToolContext())
+        assert result["status"] == "success"
+        hint = result["column_type_hint"]
+        assert hint["convertible_count"] == 0
+        assert hint["blank_count"] == 0
+        assert hint["missing_count"] == 0
+
+        batched = file_tools.column_type_hints(
+            "parts.csv", ["part_id", "quantity"], FakeToolContext())
+        assert batched["status"] == "success"
+        assert len(batched["column_type_hints"]) == 2
+
+        # A misspelling in a header-only file must still be named, not silently
+        # answered with zero counts.
+        missing = file_tools.column_type_hint("parts.csv", "qty", FakeToolContext())
+        assert missing["status"] == "error"
+        assert "qty" in missing["error_message"]
+    finally:
+        fs.store.clear()
+        fs.pseudo_dirs.clear()
 
 
 def test_column_type_hints_rejects_a_bare_string_instead_of_spelling_it(bom_source):

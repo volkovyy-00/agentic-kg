@@ -3,7 +3,7 @@ import logging
 from itertools import islice
 
 from google.adk.tools import ToolContext
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from agentic_kg.common.csv_reader import make_csv_reader, read_csv_batches
 from agentic_kg.common.tool_result import tool_success, tool_error
@@ -219,6 +219,26 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
     }
     return tool_success("search_results", result_data)
 
+def _missing_column_error(file_path: str, column: str, header: List[str]) -> dict:
+    """One wording for a misspelled column, wherever it is noticed."""
+    return tool_error(
+        f"Column '{column}' is not in {file_path}. Available columns: {header}"
+    )
+
+
+def _read_header(file_path: str) -> List[str]:
+    """Read a source CSV's header without reading any data rows.
+
+    read_csv_batches yields nothing at all when a file holds a header and no
+    data rows, because it only yields a batch once it has collected one. A
+    caller that infers "no header" from "no batches" therefore rejects a
+    perfectly valid header-only file -- an empty export, or a table whose rows
+    have not landed yet -- with an error about a header that is right there.
+    """
+    with open_source(file_path, "r") as handle:
+        return next(make_csv_reader(handle, file_path), [])
+
+
 def _collect_column_values(file_path: str, column: str):
     """Read every value of one column from a source CSV.
 
@@ -227,8 +247,10 @@ def _collect_column_values(file_path: str, column: str):
         tool_error dict when the file or column cannot be read.
 
     read_csv_batches omits the key entirely for a row shorter than the header, so
-    a ragged row contributes "" here rather than being skipped. That keeps one
-    value per row, which is what column_stats' row_count and empty_count report.
+    a ragged row contributes None here while a present-but-empty cell contributes
+    "". The two are the same absence to column_stats, whose row_count and
+    empty_count treat both as empty -- but not to the loader, which skips an
+    absent key and clears a blank one, so the hint tool counts them apart.
     """
     try:
         if not source_exists(file_path):
@@ -236,7 +258,7 @@ def _collect_column_values(file_path: str, column: str):
     except SourceError as exc:
         return None, tool_error(str(exc))
 
-    values: List[str] = []
+    values: List[Optional[str]] = []
     header: List[str] = []
     saw_header = False
     try:
@@ -245,16 +267,18 @@ def _collect_column_values(file_path: str, column: str):
                 header = batch_header
                 saw_header = True
                 if column not in header:
-                    return None, tool_error(
-                        f"Column '{column}' is not in {file_path}. Available columns: {header}"
-                    )
+                    return None, _missing_column_error(file_path, column, header)
             for row in rows:
-                values.append(row.get(column, ""))
+                values.append(row.get(column))
+        if not saw_header:
+            # No batches at all: either a header-only file or an empty one.
+            header = _read_header(file_path)
+            if not header:
+                return None, tool_error(f"CSV file has no header row: {file_path}")
+            if column not in header:
+                return None, _missing_column_error(file_path, column, header)
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
         return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
-
-    if not saw_header:
-        return None, tool_error(f"CSV file has no header row: {file_path}")
 
     return values, None
 
@@ -344,10 +368,20 @@ def _hint_from_values(file_path: str, column: str, values: List[str]) -> dict:
 
     convertible_count = 0
     blank_count = 0
+    missing_count = 0
     unconvertible_count = 0
     examples: List[str] = []
 
     for value in values:
+        # A row too short to reach this column is not the same as a row with an
+        # empty cell, because the loader treats them oppositely: an absent key is
+        # skipped and leaves an earlier row's value alone, a blank one clears it.
+        # Reported together, blank_count would overstate what the build will
+        # erase -- and this tool's counts exist precisely to say what the build
+        # will do.
+        if value is None:
+            missing_count += 1
+            continue
         if suggested is None:
             if is_blank(value):
                 blank_count += 1
@@ -369,6 +403,7 @@ def _hint_from_values(file_path: str, column: str, values: List[str]) -> dict:
         "suggested_type": suggested,
         "convertible_count": convertible_count,
         "blank_count": blank_count,
+        "missing_count": missing_count,
         "unconvertible_count": unconvertible_count,
         "example_unconvertible": examples,
     }
@@ -395,7 +430,7 @@ def _collect_columns_values(file_path: str, columns: List[str]):
     except SourceError as exc:
         return None, tool_error(str(exc))
 
-    values_by_column: Dict[str, List[str]] = {column: [] for column in columns}
+    values_by_column: Dict[str, List[Optional[str]]] = {column: [] for column in columns}
     saw_header = False
     try:
         for batch_header, rows in read_csv_batches(file_path):
@@ -403,18 +438,20 @@ def _collect_columns_values(file_path: str, columns: List[str]):
                 saw_header = True
                 for column in columns:
                     if column not in batch_header:
-                        return None, tool_error(
-                            f"Column '{column}' is not in {file_path}. "
-                            f"Available columns: {batch_header}"
-                        )
+                        return None, _missing_column_error(file_path, column, batch_header)
             for row in rows:
                 for column in columns:
-                    values_by_column[column].append(row.get(column, ""))
+                    values_by_column[column].append(row.get(column))
+        if not saw_header:
+            # No batches at all: either a header-only file or an empty one.
+            header = _read_header(file_path)
+            if not header:
+                return None, tool_error(f"CSV file has no header row: {file_path}")
+            for column in columns:
+                if column not in header:
+                    return None, _missing_column_error(file_path, column, header)
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
         return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
-
-    if not saw_header:
-        return None, tool_error(f"CSV file has no header row: {file_path}")
 
     return values_by_column, None
 
@@ -442,7 +479,9 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
               key with 'path', 'column', 'shape' (one of 'bare_numeric',
               'numeric_after_cleaning', 'boolean_like', 'text'), 'suggested_type'
               ('integer', 'float', 'boolean', or null when the column is text),
-              'convertible_count', 'blank_count', 'unconvertible_count' and up to
+              'convertible_count', 'blank_count' (empty cells, which the build
+              clears), 'missing_count' (rows too short to reach this column,
+              which the build leaves untouched), 'unconvertible_count' and up to
               three 'example_unconvertible' values.
     """
     values, error = _collect_column_values(file_path, column)
