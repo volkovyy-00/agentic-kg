@@ -789,3 +789,22 @@ def test_relationship_type_warning_and_join_warning_combine(fake_db, monkeypatch
     warning = result["rows_loaded"]["warning"]
     assert "cost" in warning
     assert "rows matched both endpoints" in warning
+
+
+def test_a_type_declared_for_a_name_not_in_properties_is_ignored_by_the_loader(
+        fake_db, monkeypatch):
+    """Refused at approval time, so the loader only sees this via a hand-built
+    plan or a direct call -- but coercing off the raw map would let such a name
+    trip the gate and abort the whole rule for a property no FOREACH would have
+    written, and if the name were the key column the row's key would be replaced
+    by the sentinel and MERGE would key the node on it."""
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["id", "q"], [{"id": "1", "q": "x"}, {"id": "2", "q": "y"}]
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["id"], {"q": "integer"})
+
+    assert result["status"] == "success", result.get("error_message")
+    _query, params = fake_db.queries[0]
+    assert params["typed_properties"] == []
+    assert params["rows"][0]["q"] == "x"

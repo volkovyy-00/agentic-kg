@@ -106,3 +106,61 @@ def test_coerce_rejects_text_for_a_numeric_type():
 def test_is_blank():
     assert is_blank(None) and is_blank("") and is_blank("   ")
     assert not is_blank("0")
+
+
+# --- defects found by the pre-merge audit ------------------------------------
+
+def test_coerce_accepts_a_negative_with_the_sign_before_the_currency_symbol():
+    """'-$42.00' is what Excel and most ERP exports emit; '$-42.00' is what a
+    bare float formatter emits. Accepting only the second is worse than
+    accepting neither: a money column's positives convert while its refunds and
+    credits become unconvertible and get CLEARED, so a later sum() is wrong with
+    nothing in the graph showing why."""
+    assert coerce("-$42.00", FLOAT) == (-42.0, CONVERTED)
+    assert coerce("$-42.00", FLOAT) == (-42.0, CONVERTED)
+    assert coerce("-$1,234.50", FLOAT) == (-1234.50, CONVERTED)
+
+
+def test_coerce_reads_accounting_parentheses_as_negative():
+    """(42.00) is a negative in every accounting export. Left unhandled it is
+    unconvertible, and an unconvertible value is cleared -- so the credits
+    vanish from a column whose positives all loaded."""
+    assert coerce("(42.00)", FLOAT) == (-42.0, CONVERTED)
+    assert coerce("($1,234.50)", FLOAT) == (-1234.50, CONVERTED)
+    assert coerce("(42)", INTEGER) == (-42, CONVERTED)
+
+
+def test_coerce_still_refuses_a_doubled_sign():
+    """Widening the pattern to take a sign on either side of the symbol must not
+    start accepting both at once."""
+    assert coerce("+-42", FLOAT) == (None, UNCONVERTIBLE)
+
+
+def test_classify_sees_a_negative_currency_column_as_numeric():
+    values = ["$1,000.00", "$2,500.00", "-$42.00", "($300.00)"]
+    assert classify(values) == NUMERIC_AFTER_CLEANING
+
+
+def test_coerce_keeps_an_integer_too_large_for_a_float_exact():
+    """Parsing through float rounds anything past 2**53 to the nearest
+    representable value and still reports CONVERTED, because the fractional
+    check cannot see damage done before it ran. Neo4j's INTEGER is a full 64-bit
+    signed, so the wrong number would be stored without a murmur."""
+    assert coerce("9007199254740993", INTEGER) == (9007199254740993, CONVERTED)
+    assert coerce("12345678901234567890", INTEGER) == (12345678901234567890, CONVERTED)
+
+
+def test_classify_does_not_call_a_mostly_zero_one_count_a_flag():
+    """A backorder quantity that is overwhelmingly 0 or 1 wins the boolean
+    majority on those rows while carrying real 2s and 3s. Called boolean, every
+    value above 1 is unconvertible and the loader CLEARS it -- the large numbers,
+    the only ones that change an answer, are exactly the ones that disappear,
+    and at a minority share the refusal gate never fires."""
+    assert classify(["1", "0", "1", "2", "3"]) == BARE_NUMERIC
+
+
+def test_classify_still_prefers_boolean_for_a_genuine_flag():
+    """The count guard above must stay narrow enough to leave TRAP 5 intact: a
+    real 0/1 flag has nothing else in the column."""
+    assert classify(["1", "0", "1", "1", "0"]) == BOOLEAN_LIKE
+    assert classify(["yes", "no", "yes", "5"]) == BOOLEAN_LIKE

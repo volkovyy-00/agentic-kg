@@ -42,11 +42,14 @@ CLEAR_SENTINEL = "\x00__agentic_kg_clear__"
 # Above this share of a batch's present, non-blank values failing to convert,
 # the column is the wrong type rather than dirty, and continuing would clear
 # real values row by row. Deliberately the same number classify() uses to
-# suggest a type, imported rather than restated so the two cannot drift: a
-# column the hint tool suggests a type for is, by construction, one that will
-# not trip this gate. Still NOT inherited from import_relationships' join
-# under-match warning below, which is a different failure at a different
-# severity and keeps its own literal.
+# suggest a type, imported rather than restated so the two cannot drift.
+# Matching numbers do NOT make a suggested column safe from this gate, though:
+# classify() weighs a whole column, this weighs one batch, so a file whose
+# dirty rows are clustered can pass classification and still abort part-way
+# through the load. That is the intended loud failure, not a contradiction.
+# Still NOT inherited from import_relationships' join under-match warning
+# below, which is a different failure at a different severity and keeps its own
+# literal.
 TYPE_FAILURE_LIMIT = MAJORITY_SHARE
 
 # Below this many present, non-blank values, a failure is not evidence of a
@@ -77,11 +80,18 @@ def _split_properties(properties, property_types):
     A name must appear in exactly one of the two lists: $properties keeps the
     original ragged-row guard, and $typed_properties gets the write/clear pair.
     A name in both would be written twice per row.
+    Also returns the declared types NARROWED to the names that are actually in
+    'properties'. A type declared for a name the plan never lists is refused at
+    approval time, but the loader must not depend on that: coercing off the raw
+    map would let such a name be converted, tallied, and able to trip the gate
+    and abort the whole rule -- for a property no FOREACH would ever have
+    written. Worse, if that name were the unique_column_name, the row's key
+    would be replaced by CLEAR_SENTINEL and MERGE would key the node on it.
     """
     property_types = property_types or {}
     untyped = [name for name in properties if name not in property_types]
     typed = [name for name in properties if name in property_types]
-    return untyped, typed
+    return untyped, typed, {name: property_types[name] for name in typed}
 
 
 def _new_tally():
@@ -209,7 +219,8 @@ def load_nodes_from_csv(
         return tool_error(str(exc))
 
     property_types = property_types or {}
-    untyped_properties, typed_properties = _split_properties(properties, property_types)
+    untyped_properties, typed_properties, typed_types = _split_properties(
+        properties, property_types)
 
     # Only set properties the row actually carries. read_csv_batches omits the
     # key for a row shorter than the header, and SET n[k] = null *removes* the
@@ -253,8 +264,8 @@ def load_nodes_from_csv(
                     return tool_error(missing_typed)
                 header_checked = True
 
-            rows, tallies = _coerce_batch(batch, property_types)
-            failure = _type_failure(tallies, property_types, source_file, rows_committed)
+            rows, tallies = _coerce_batch(batch, typed_types)
+            failure = _type_failure(tallies, typed_types, source_file, rows_committed)
             if failure is not None:
                 return tool_error(failure)
             _merge_tallies(totals, tallies)
@@ -285,7 +296,7 @@ def load_nodes_from_csv(
     loaded = {"source_file": source_file, "rows": rows_committed}
     if totals:
         loaded["type_conversion"] = totals
-        warning = _type_warning(totals, property_types, source_file)
+        warning = _type_warning(totals, typed_types, source_file)
         if warning:
             loaded["warning"] = warning
             logger.warning(warning)
@@ -361,7 +372,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     properties = relationship_construction["properties"]
     # A rule proposed before types existed carries no such key at all.
     property_types = relationship_construction.get("property_types") or {}
-    untyped_properties, typed_properties = _split_properties(properties, property_types)
+    untyped_properties, typed_properties, typed_types = _split_properties(
+        properties, property_types)
 
     # The join columns are NOT coerced: they are matched against whatever the
     # node loader stored, which is raw CSV text for identifiers. That is why a
@@ -409,8 +421,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                     return tool_error(missing_typed)
                 header_checked = True
 
-            rows, tallies = _coerce_batch(batch, property_types)
-            failure = _type_failure(tallies, property_types, source_file, rows_committed)
+            rows, tallies = _coerce_batch(batch, typed_types)
+            failure = _type_failure(tallies, typed_types, source_file, rows_committed)
             if failure is not None:
                 return tool_error(failure)
             _merge_tallies(totals, tallies)
@@ -463,7 +475,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # is a single string that construct_domain_graph lifts verbatim. Collect and
     # join rather than assigning twice, or the second silently erases the first.
     warnings = []
-    type_warning = _type_warning(totals, property_types, source_file)
+    type_warning = _type_warning(totals, typed_types, source_file)
     if type_warning:
         warnings.append(type_warning)
 

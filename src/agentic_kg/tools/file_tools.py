@@ -301,11 +301,16 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
 def _suggested_type(shape: str, values) -> str | None:
     """Map a column's shape to the type to suggest for it.
 
-    Derived from the shape, never from whether the sampled values happen to look
-    whole. Every price in the bundled products.csv is a round dollar amount, so
-    a whole-number test would suggest integer for a currency column and then
+    The shape decides, and for a column needing cleaning it decides alone: every
+    price in the bundled products.csv is a round dollar amount, so a
+    whole-number test would suggest integer for a currency column and then
     refuse the first fractional price the data ever gains. Needing a currency
     symbol or thousands separator stripped is itself the evidence it is money.
+
+    Wholeness is consulted only to split integer from float WITHIN the
+    bare_numeric shape, where there is nothing else to go on -- and only for
+    values that are numbers at all, so one "N/A" in a column of 400 integers
+    cannot make it look fractional.
     """
     if shape == BOOLEAN_LIKE:
         return BOOLEAN

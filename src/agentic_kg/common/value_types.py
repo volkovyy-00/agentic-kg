@@ -40,12 +40,28 @@ BLANK = "blank"
 UNCONVERTIBLE = "unconvertible"
 
 _BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
-_NUMERIC_LIKE = re.compile(
-    r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
 
-# Applied only after _NUMERIC_LIKE has matched, so this cannot turn "1,2,3"
+_CURRENCY = r"[$€£¥₹]"
+_DIGITS = r"(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?"
+# The sign may sit on either side of the currency symbol. Both orders are real:
+# "$-42.00" is what a bare float formatter emits, "-$42.00" is what Excel and
+# most ERP exports emit. Accepting only one of them is worse than accepting
+# neither -- a money column's positive rows convert while its refunds and
+# credits become unconvertible and get CLEARED, so a later sum() is wrong in a
+# way nothing in the graph shows. Two alternatives rather than two optional
+# signs, so "+-42" still fails to match.
+_NUMERIC_LIKE = re.compile(
+    rf"^\s*(?:[-+]?\s*{_CURRENCY}?|{_CURRENCY}\s*[-+]?)\s*{_DIGITS}\s*$")
+
+# Accounting notation for a negative: (42.00), ($42.00). Handled separately
+# because the minus sign is implied by the brackets rather than written, so it
+# survives neither the pattern above nor _STRIP_FROM_NUMBERS.
+_PARENTHESISED_NEGATIVE = re.compile(
+    rf"^\s*\(\s*{_CURRENCY}?\s*{_DIGITS}\s*\)\s*$")
+
+# Applied only after a numeric pattern has matched, so this cannot turn "1,2,3"
 # into 123 -- that string never reaches here.
-_STRIP_FROM_NUMBERS = str.maketrans("", "", "$€£¥₹, ")
+_STRIP_FROM_NUMBERS = str.maketrans("", "", "$€£¥₹,() ")
 
 _TRUE_VALUES = frozenset({"yes", "true", "y", "1"})
 _FALSE_VALUES = frozenset({"no", "false", "n", "0"})
@@ -64,6 +80,32 @@ MAJORITY_SHARE = 0.5
 def is_blank(value: Any) -> bool:
     """True for a value that carries nothing: None, empty, or only whitespace."""
     return value is None or str(value).strip() == ""
+
+
+def _is_really_a_count(non_blank) -> bool:
+    """True for a column that only LOOKS boolean because most of its values are
+    0 or 1.
+
+    A quantity that is overwhelmingly 0 or 1 -- a backorder quantity, a defect
+    count, a discount count -- wins the boolean majority on those rows while
+    carrying real 2s and 3s. Calling it boolean would make every value above 1
+    unconvertible, and the loader clears an unconvertible value: the large
+    numbers, the only ones that change an answer, are exactly the ones that
+    would disappear, and at a minority share the refusal gate never fires.
+
+    Narrow on purpose, so TRAP 5 still holds: this fires only when the values
+    carrying the boolean majority are all drawn from the NUMERIC half of the
+    vocabulary. A genuine 0/1 flag has nothing else in the column and stays
+    boolean_like; a yes/no column with a stray "5" stays boolean_like too.
+    """
+    numeric_vocabulary = {"0", "1"}
+    fitting = [value.strip().lower() for value in non_blank
+               if value.strip().lower() in _BOOLEAN_VALUES]
+    if not all(value in numeric_vocabulary for value in fitting):
+        return False
+    return any(_BARE_NUMERIC.match(value)
+               and value.strip().lower() not in _BOOLEAN_VALUES
+               for value in non_blank)
 
 
 def classify(values: Iterable[Any]) -> str:
@@ -87,7 +129,10 @@ def classify(values: Iterable[Any]) -> str:
         fitting = sum(1 for value in non_blank if matches(value))
         return fitting > len(non_blank) * MAJORITY_SHARE
 
-    if majority(lambda value: value.strip().lower() in _BOOLEAN_VALUES):
+    def in_boolean_vocabulary(value) -> bool:
+        return value.strip().lower() in _BOOLEAN_VALUES
+
+    if majority(in_boolean_vocabulary) and not _is_really_a_count(non_blank):
         return BOOLEAN_LIKE
     if majority(_BARE_NUMERIC.match):
         return BARE_NUMERIC
@@ -121,11 +166,28 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
         return None, UNCONVERTIBLE
 
     if declared_type in (INTEGER, FLOAT):
-        if not _NUMERIC_LIKE.match(text):
+        negated_by_brackets = bool(_PARENTHESISED_NEGATIVE.match(text))
+        if not (negated_by_brackets or _NUMERIC_LIKE.match(text)):
             return None, UNCONVERTIBLE
+        cleaned = text.translate(_STRIP_FROM_NUMBERS)
+        if negated_by_brackets:
+            cleaned = f"-{cleaned}"
+
+        if declared_type == INTEGER:
+            # int() first, and only fall back to float for the fractional case.
+            # Parsing through float would round anything past 2**53 to the
+            # nearest representable value -- "9007199254740993" comes back as
+            # ...992 -- and report CONVERTED, because the fractional check below
+            # cannot see damage that happened before it ran. Neo4j's INTEGER is
+            # a full 64-bit signed, so the wrong number would be stored happily.
+            try:
+                return int(cleaned), CONVERTED
+            except ValueError:
+                pass
+
         try:
-            number = float(text.translate(_STRIP_FROM_NUMBERS))
-        except ValueError:  # pragma: no cover - guarded by the pattern above
+            number = float(cleaned)
+        except ValueError:  # pragma: no cover - guarded by the patterns above
             return None, UNCONVERTIBLE
         if declared_type == FLOAT:
             return number, CONVERTED
