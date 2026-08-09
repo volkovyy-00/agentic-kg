@@ -1,8 +1,10 @@
 # agentic-kg — living spec
 
-**Status:** living document. Every claim below was verified against the code and git state at the 0.4.0
-release (2026-08-03); for anything that landed since, check `CHANGELOG.md`'s `[Unreleased]` section and
-treat this document as the thing to update. This is the "what is this and why does it exist" document.
+**Status:** living document. Every claim below was verified against `main` at commit `8d714cb`
+(2026-08-09). The latest **tagged** release is still `v0.4.0` (2026-08-03); `CHANGELOG.md` also has a
+dated `[0.5.0] - 2026-08-08` section, but no `v0.5.0` git tag exists as of this writing — see §6 for what
+that means for what you can rely on. For anything that lands after this, check `CHANGELOG.md` and git log,
+and treat this document as the thing to update. This is the "what is this and why does it exist" document.
 For the architecture map you need while editing code, read `CLAUDE.md`. For the PR/branch/CHANGELOG
 workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate either.
 
@@ -24,10 +26,12 @@ Construction* (GitHub still lists it as forked from `neo4j-contrib/agentic-kg`, 
 local `upstream` remote), but it is now developed as a real
 program rather than a teaching artifact. What makes that true, concretely, rather than as a claim:
 
-- Five tagged releases (`v0.1.0` … `v0.4.0`) and five merged PRs beyond the fork point; `main` is six
-  commits ahead of `neo4j-contrib/agentic-kg`'s `main` and zero behind.
-- A substantially expanded test suite: 280 passing unit tests (4 skipped without Docker) across 4
-  integration modules, against upstream's 2 unit and 2 integration files.
+- Five tagged releases (`v0.1.0` … `v0.4.0`) and thirteen merged PRs beyond the fork point (#1–#13, none
+  currently open); `main` is 47 commits ahead of `neo4j-contrib/agentic-kg`'s `main` and zero behind.
+- A substantially expanded test suite: 1,011 passing unit tests (5 skipped without Docker) — over half
+  of that count is one heavily parametrised invariant-test file for typed-property coercion
+  (`test_value_types_invariants.py`) — across 5 integration modules, against upstream's 2 unit and 2
+  integration files.
 - Capabilities built here that the course does not have: retrieval grounding (§4), client-side CSV
   loading that works against Aura, `fsspec`-based file sources, and per-job model selection.
 - A contributor workflow, changelog discipline, and a design-decision record.
@@ -38,11 +42,6 @@ history, not a constraint to preserve. Four of the seven agents now have only a 
 three `_v1`/`_v2` pairs that remain, `graphrag_agent` selects v2 and keeps v1 unchanged for an explicit
 A/B comparison — the one pair documented as a deliberate retention; `user_intent_agent` selects v2; and
 `cypher_agent` selects v1, leaving its v2 unselected.
-
-> Known inconsistency: `README.md:9` still describes the project as "a reference implementation for
-> learning and experimentation, not a production tool," which contradicts this section, `CLAUDE.md`, and
-> `CONTRIBUTING.md`. `.github/copilot-instructions.md:3` does not make that claim, but still calls the
-> project a companion to the course. The README has not been revised since 2026-07-29.
 
 ---
 
@@ -58,8 +57,8 @@ A/B comparison — the one pair documented as a deliberate retention; `user_inte
 | Coordinator tools | `get_physical_schema`, `get_source_location`, `neo4j_is_ready` | **none** — its only capability is transferring away |
 | Can read source files | Yes — the whole `SOURCE_URI` seam | **No** — has no file tools at all |
 | Approval gates | Yes, between every stage | None |
-| Session state | Nine keys across five stages | `{}` — uses none |
-| Commits since the fork | 3 — all three feature PRs (#2, #3, #4) | 1 — mechanical repairs in #2 |
+| Session state | Eleven keys across five stages | `{}` — uses none |
+| Commits since the fork | 21 — PRs #2, #3, #4, #8, #9, #11, #12, #13 | 1 — mechanical repairs in #2 |
 | Test coverage | Yes | Zero tests reference it |
 
 **Use `multi_agent`.** It is the system this project is about.
@@ -90,6 +89,12 @@ The sequence below is as it actually executes, from a traced six-turn session th
 Agents do not pass data by return value. Each stage reads and writes keys on ADK session state, and a
 later stage's tools fail fast with `tool_error(...)` when an earlier key is missing — that, not the
 coordinator's prose, is what actually enforces the ordering.
+
+Only stages 1, 4 and 5 enforce that ordering at the *exit* too: each gates its `finished` tool behind an
+explicit confirmation and strips ADK's own injected `transfer_to_agent`, so the model has no other way
+out mid-phase. Stages 2 and 3 have neither — a model could call the native `transfer_to_agent` tool and
+skip straight past `approve_suggested_files` or `approve_proposed_construction_plan`. Nothing stops that
+except the next stage's tools failing on the missing state key, the same fail-fast pattern above.
 
 1. **`user_intent_agent_v2`** — interviews the user for the kind of graph and its description.
    Writes `perceived_user_goal`, then `approved_user_goal` on confirmation. `finished` refuses
@@ -218,7 +223,7 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
   pointing at `neo4j-contrib/agentic-kg` existed early on and was removed once the project stopped
   tracking the parent's history — GitHub's own "forked from" display is independent of local git config
   and is unaffected. `gh` should resolve to `origin` without an explicit `--repo`.
-- **Design notes are local-only.** `.gitignore:26` and `:29` exclude `docs/superpowers/` and
+- **Design notes are local-only.** `.gitignore:27` and `:30` exclude `docs/superpowers/` and
   `docs/backlog/`. Documents there are absent from a fresh clone — do not cite those paths as if a
   reader can open them. Only those two subdirectories are excluded; the rest of `docs/`, including this
   file, is tracked normally and is where a durable, shared project doc belongs.
@@ -227,6 +232,12 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 - **Ruff lints and formats.** `ruff check .` / `ruff format --check .` (config: `pyproject.toml`'s
   `[tool.ruff]`) — see `CONTRIBUTING.md`. CI is still not configured, so these are self-run before a PR,
   not automatically enforced.
+- **Merge commits, not squash.** PRs are merged with a real merge commit (`gh pr merge --merge`),
+  preserving every internal commit — enforced at the GitHub-settings level (squash and rebase merge are
+  disabled). Older history is mixed: #8 and #13 landed as single squash commits, while #9, #11 and #12
+  each landed as a real merge preserving every internal commit (8–15 apiece), from when
+  `CONTRIBUTING.md`'s stated squash policy didn't match actual practice. Don't assume a uniform shape
+  when reading `git log` on PRs merged before this policy took effect.
 
 ---
 
@@ -242,8 +253,14 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 | 0.2.0 | 2026-07-29 | Foundation: `fsspec` file sources, driver-side CSV loading, OpenRouter + per-job models (#2) |
 | 0.1.0 | 2026-07-26 | Test-suite fixes (#1) |
 
-`## [Unreleased]` in `CHANGELOG.md` accumulates merged-but-unreleased changes; check it for anything
-landed since 0.4.0.
+**Merged since 0.4.0, not yet tagged.** `CHANGELOG.md` has a dated `[0.5.0] - 2026-08-08` section —
+typed CSV properties (#13), this document (#6), explicit construction/retrieval handoff confirmation
+(#8, #9), Neo4j connection recovery after a close (#10), closing the `transfer_to_agent` bypass in both
+handoff gates (#11), and gating the intent phase on a recorded approval (#12) — but **no `v0.5.0` git tag
+exists**. Above that, `## [Unreleased]` now holds three more merged PRs: dropping the local `upstream`
+remote (#14), adding Ruff (#15), and enforcing real merge commits over squash (#16). Until a tag is cut,
+`git tag -l` and `git log` are the source of truth for what actually shipped, not either CHANGELOG
+header.
 
 **Next**, in order — designs are settled and recorded in local notes; specs are not yet written:
 
@@ -258,15 +275,14 @@ bundled furniture example must keep working throughout.
 
 **Known rough edges**, verified in code rather than assumed:
 
-- **Stale driver binding.** Five modules bind the `Neo4jForADK` singleton at import time.
-  `close_graphdb()` clears the module global but leaves those references pointing at a closed driver
-  with no reconnect path — so `neo4j_is_ready`, the one production caller that closes on a failed
-  readiness check, permanently disables every Neo4j tool for the life of the process, and silently,
-  since tool bodies return `tool_error`.
-- **Types are declared, not inferred.** The CSV path stores a property as `INTEGER`, `FLOAT` or
-  `BOOLEAN` only when the construction plan declares that type for it; anything undeclared stays a
-  STRING, as do identifiers and join columns, which are matched as raw CSV text. Dates are not
-  supported. §4's `numeric_like` annotation therefore still matters for undeclared columns.
+- **Types are declared, not inferred.** The CSV path (`common/value_types.py`, #13) stores a property as
+  `INTEGER`, `FLOAT` or `BOOLEAN` only when the construction plan's `property_types` map declares that
+  type for it; anything undeclared stays a STRING, as do identifiers and join columns, which
+  `check_construction_plan_consistency` refuses to let be typed since they're matched as raw CSV text.
+  Dates are not supported. §4's `numeric_like` annotation therefore still matters for undeclared columns
+  — and now duplicates logic: `graph_profile.py`'s own numeric-pattern regexes have diverged from
+  `value_types.py`'s (the construction path handles negative currency written either way round and
+  accounting-parenthesis negatives; the profile's copy does not), a gap #13 knowingly left unclosed.
 - **`pyproject.toml:3` still reads `version = "0.1.0"`**, four releases behind, as does its mirror in
   `uv.lock:21`. These are the only machine-readable versions in the repo.
 - Model configuration drifts from documentation: the models named in `CLAUDE.md` and `CHANGELOG.md` 0.4.0
