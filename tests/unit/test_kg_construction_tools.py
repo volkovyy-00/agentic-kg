@@ -808,3 +808,41 @@ def test_a_type_declared_for_a_name_not_in_properties_is_ignored_by_the_loader(
     _query, params = fake_db.queries[0]
     assert params["typed_properties"] == []
     assert params["rows"][0]["q"] == "x"
+
+
+@pytest.fixture
+def header_only(monkeypatch):
+    """A valid empty export: a header, no data rows. read_csv_batches yields
+    nothing for one, so the header has to come from somewhere else."""
+    def no_batches(relative_path, batch_size=1000):
+        return
+        yield  # pragma: no cover - makes this a generator
+
+    monkeypatch.setattr(kg, "read_csv_batches", no_batches)
+    monkeypatch.setattr(kg, "read_csv_header", lambda path: ["id", "name"], raising=False)
+
+
+def test_a_header_only_file_still_refuses_a_column_it_does_not_have(fake_db, header_only):
+    """Both loaders checked their columns inside the batch loop, which a
+    header-only file never enters -- so a rule naming a column the file does not
+    have came back as a clean zero-row success, and the promised missing-column
+    error never fired. Nothing was written, but the plan was wrong and the run
+    said it worked."""
+    missing_key = kg.load_nodes_from_csv("people.csv", "Person", "person_id", ["name"])
+    assert missing_key["status"] == "error"
+    assert "person_id" in missing_key["error_message"]
+
+    missing_typed = kg.load_nodes_from_csv(
+        "people.csv", "Person", "id", ["name", "aeg"], {"aeg": "integer"})
+    assert missing_typed["status"] == "error"
+    assert "aeg" in missing_typed["error_message"]
+
+    assert fake_db.queries == []
+
+
+def test_a_header_only_file_loads_zero_rows_when_the_columns_are_right(fake_db, header_only):
+    """An empty export is not an error. Refusing one would block a load whose
+    rows simply have not landed yet."""
+    result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
+    assert result["status"] == "success", result.get("error_message")
+    assert result["rows_loaded"]["rows"] == 0

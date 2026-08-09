@@ -11,11 +11,12 @@ MergeUniqueNode, so they cannot use the uniqueness index and every row
 triggers an all-nodes scan.
 """
 import logging
+from itertools import chain
 
 from google.adk.tools import ToolContext
 from typing import Any, Dict, List
 
-from agentic_kg.common.csv_reader import read_csv_batches
+from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked as _checked
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
@@ -118,6 +119,27 @@ def _missing_typed_columns_error(typed_properties, header, source_file, loaded_i
         f"typed property of {loaded_into}, so nothing was loaded. "
         f"Available columns: {header}"
     )
+
+
+def _batches_and_header(source_file):
+    """Return (batches, header) with the header available before any row loads.
+
+    Both loaders used to check their columns inside the batch loop, on the first
+    batch. read_csv_batches yields nothing at all for a header-only file -- a
+    valid empty export -- so that check never ran for one, and a rule naming a
+    column the file does not have was reported as a clean zero-row success
+    rather than the promised missing-column error.
+
+    The header comes from the first batch when there is one, so an ordinary load
+    still reads the source exactly once; only the no-batch case pays for a
+    second open, and it has nothing else to read. The consumed first batch is put
+    back in front of the iterator, so the caller still streams.
+    """
+    batches = read_csv_batches(source_file)
+    first = next(batches, None)
+    if first is None:
+        return iter(()), read_csv_header(source_file)
+    return chain([first], batches), first[0]
 
 
 def _coerce_batch(batch, property_types):
@@ -248,22 +270,20 @@ def load_nodes_from_csv(
     # actually has, which is what tells an agent how to correct the plan.
     # (The relationship loader below is the case that genuinely fails silently.)
     rows_committed = 0
-    header_checked = False
     totals: Dict[str, Any] = {}
     try:
-        for header, batch in read_csv_batches(source_file):
-            if not header_checked:
-                if unique_column_name not in header:
-                    return tool_error(
-                        f"{source_file} has no column '{unique_column_name}' to key {label} "
-                        f"nodes by, so nothing was loaded. Available columns: {header}"
-                    )
-                missing_typed = _missing_typed_columns_error(
-                    typed_properties, header, source_file, label)
-                if missing_typed is not None:
-                    return tool_error(missing_typed)
-                header_checked = True
+        batches, header = _batches_and_header(source_file)
+        if unique_column_name not in header:
+            return tool_error(
+                f"{source_file} has no column '{unique_column_name}' to key {label} "
+                f"nodes by, so nothing was loaded. Available columns: {header}"
+            )
+        missing_typed = _missing_typed_columns_error(
+            typed_properties, header, source_file, label)
+        if missing_typed is not None:
+            return tool_error(missing_typed)
 
+        for _batch_header, batch in batches:
             rows, tallies = _coerce_batch(batch, typed_types)
             failure = _type_failure(tallies, typed_types, source_file, rows_committed)
             if failure is not None:
@@ -401,26 +421,24 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # than an error. Check the header before sending anything.
     rows_committed = 0
     rows_matched = 0
-    header_checked = False
     totals: Dict[str, Any] = {}
     try:
-        for header, batch in read_csv_batches(source_file):
-            if not header_checked:
-                missing = [
-                    column for column in (from_column, to_column) if column not in header
-                ]
-                if missing:
-                    return tool_error(
-                        f"{source_file} has no column {' or '.join(repr(c) for c in missing)} "
-                        f"to join {relationship_type} on, so nothing was loaded. "
-                        f"Available columns: {header}"
-                    )
-                missing_typed = _missing_typed_columns_error(
-                    typed_properties, header, source_file, relationship_type)
-                if missing_typed is not None:
-                    return tool_error(missing_typed)
-                header_checked = True
+        batches, header = _batches_and_header(source_file)
+        missing = [
+            column for column in (from_column, to_column) if column not in header
+        ]
+        if missing:
+            return tool_error(
+                f"{source_file} has no column {' or '.join(repr(c) for c in missing)} "
+                f"to join {relationship_type} on, so nothing was loaded. "
+                f"Available columns: {header}"
+            )
+        missing_typed = _missing_typed_columns_error(
+            typed_properties, header, source_file, relationship_type)
+        if missing_typed is not None:
+            return tool_error(missing_typed)
 
+        for _batch_header, batch in batches:
             rows, tallies = _coerce_batch(batch, typed_types)
             failure = _type_failure(tallies, typed_types, source_file, rows_committed)
             if failure is not None:

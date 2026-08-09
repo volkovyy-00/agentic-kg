@@ -5,7 +5,9 @@ from itertools import islice
 from google.adk.tools import ToolContext
 from typing import Dict, Any, List, Optional
 
-from agentic_kg.common.csv_reader import make_csv_reader, read_csv_batches
+from agentic_kg.common.csv_reader import (
+    make_csv_reader, read_csv_batches, read_csv_header,
+)
 from agentic_kg.common.tool_result import tool_success, tool_error
 from agentic_kg.common.file_source import (
     SourceError,
@@ -226,19 +228,6 @@ def _missing_column_error(file_path: str, column: str, header: List[str]) -> dic
     )
 
 
-def _read_header(file_path: str) -> List[str]:
-    """Read a source CSV's header without reading any data rows.
-
-    read_csv_batches yields nothing at all when a file holds a header and no
-    data rows, because it only yields a batch once it has collected one. A
-    caller that infers "no header" from "no batches" therefore rejects a
-    perfectly valid header-only file -- an empty export, or a table whose rows
-    have not landed yet -- with an error about a header that is right there.
-    """
-    with open_source(file_path, "r") as handle:
-        return next(make_csv_reader(handle, file_path), [])
-
-
 def _collect_column_values(file_path: str, column: str):
     """Read every value of one column from a source CSV.
 
@@ -272,7 +261,7 @@ def _collect_column_values(file_path: str, column: str):
                 values.append(row.get(column))
         if not saw_header:
             # No batches at all: either a header-only file or an empty one.
-            header = _read_header(file_path)
+            header = read_csv_header(file_path)
             if not header:
                 return None, tool_error(f"CSV file has no header row: {file_path}")
             if column not in header:
@@ -421,8 +410,9 @@ def _collect_columns_values(file_path: str, columns: List[str]):
     requested column turns a hint request for N properties into N downloads and
     N parses of the same file. Columns are validated against the header before
     any row is collected, so an unreadable column still fails on the first
-    batch rather than after a full scan. Ragged rows contribute "" for the same
-    reason _collect_column_values documents.
+    batch rather than after a full scan. A ragged row contributes None and a
+    present-but-empty cell contributes "", the distinction
+    _collect_column_values documents and _hint_from_values counts apart.
     """
     try:
         if not source_exists(file_path):
@@ -444,7 +434,7 @@ def _collect_columns_values(file_path: str, columns: List[str]):
                     values_by_column[column].append(row.get(column))
         if not saw_header:
             # No batches at all: either a header-only file or an empty one.
-            header = _read_header(file_path)
+            header = read_csv_header(file_path)
             if not header:
                 return None, tool_error(f"CSV file has no header row: {file_path}")
             for column in columns:
