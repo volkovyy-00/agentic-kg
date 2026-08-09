@@ -45,21 +45,33 @@ CLEAR_SENTINEL = "\x00__agentic_kg_clear__"
 # real values row by row. Deliberately the same number classify() uses to
 # suggest a type, imported rather than restated so the two cannot drift.
 # Matching numbers do NOT make a suggested column safe from this gate, though:
-# classify() weighs a whole column, this weighs one batch, so a file whose
-# dirty rows are clustered can pass classification and still abort part-way
-# through the load. That is the intended loud failure, not a contradiction.
+# classify() weighs a whole column, this weighs one batch AND the batches read
+# so far (see _type_failure), so a file whose dirty rows are clustered can pass
+# classification and still abort part-way through the load. That is the intended
+# loud failure, not a contradiction. A column exactly half unconvertible passes
+# both arms, which is the same strict majority classify() applies -- the
+# remaining case where wrong values are cleared with only a warning.
 # Still NOT inherited from import_relationships' join under-match warning
 # below, which is a different failure at a different severity and keeps its own
 # literal.
 TYPE_FAILURE_LIMIT = MAJORITY_SHARE
 
 # Below this many present, non-blank values, a failure is not evidence of a
-# wrong type; it is one row. The column still counts toward the warning. This
-# composes with the blank exemption above rather than sitting apart from it: a
-# column so sparse that a batch only ever holds 0-1 present values was already
-# exempt from the gate when those values were blank; it is now exempt when the
-# rare present value fails too, for the same reason -- neither case is enough
-# evidence to call a column the wrong type.
+# wrong type; it is one row. The column still counts toward the warning.
+#
+# Counted ACROSS batches as well as within one. The exemption was originally
+# per-batch only, which made it permanent for a sparse column: one present value
+# per batch never reaches two, so a column whose every value failed was cleared
+# in full and the load reported success. The evidence bar is the same, the
+# window it is measured over is the whole rule -- so the exemption now expires
+# once the file has shown two present values, wherever they fell.
+#
+# This narrows the exemption on purpose. A column whose first two present values
+# both fail is refused before any later good value is read. That is not a new
+# behaviour so much as a consistent one: the batch arm already refused exactly
+# that when the two landed in the same batch, so the outcome no longer depends
+# on where the batch boundaries happen to fall -- or on DEFAULT_BATCH_SIZE,
+# which anyone may tune.
 TYPE_FAILURE_MIN_SAMPLE = 2
 
 # Re-exported for backward compatibility: this module used to define its own
@@ -185,26 +197,65 @@ def _merge_tallies(totals, tallies):
     return totals
 
 
-def _type_failure(tallies, property_types, source_file, rows_committed):
+def _type_failure(tallies, totals, property_types, source_file, rows_committed):
     """The gate: an error message when a column is the wrong type, else None.
 
-    Blanks are excluded from the denominator on purpose -- they are absence, not
-    a wrong type, and counting them would abort a correct load of any sparse
-    optional column.
+    Two arms, and both are needed. 'totals' must already include this batch.
+
+    The BATCH arm catches dirt that is clustered: a file whose bad rows sit
+    together can pass whole-column classification and still be wrong where it
+    lands, and aborting there is the intended loud failure.
+
+    The CUMULATIVE arm closes a bypass the batch arm cannot see. A column sparse
+    enough that each batch holds a single present value never reaches
+    TYPE_FAILURE_MIN_SAMPLE, so the exemption below never expires: every value
+    in the file could fail, every one of them be cleared, and the load still
+    report success with only a warning. Judged across batches, five failures out
+    of five present values is not one row -- it is the strongest evidence of a
+    wrong type there is.
+
+    Neither arm subsumes the other. On the first batch they are the same test,
+    because the totals are the batch. From the second batch on, the cumulative
+    arm can be diluted by earlier clean batches (which is what makes clustered
+    dirt need its own arm) and the batch arm can be starved by sparsity (which
+    is what makes the sparse case need its own).
+
+    Blanks stay out of both denominators on purpose -- they are absence, not a
+    wrong type, and counting them would abort a correct load of any sparse
+    optional column. A column that is exactly half unconvertible passes both
+    arms, matching classify()'s strict majority so the two cannot disagree about
+    a column it suggested a type for.
     """
     for name, tally in tallies.items():
-        present = tally[CONVERTED] + tally[UNCONVERTIBLE]
-        if (present >= TYPE_FAILURE_MIN_SAMPLE
-                and tally[UNCONVERTIBLE] > present * TYPE_FAILURE_LIMIT):
-            examples = ", ".join(repr(example) for example in tally["examples"])
-            return (
-                f"{source_file}: '{name}' is declared {property_types[name]} but "
-                f"{tally[UNCONVERTIBLE]} of {present} non-blank values in this "
-                f"batch could not be read as one (e.g. {examples}). Load stopped "
-                f"after {rows_committed} rows committed (this batch was not sent). "
-                f"Correct or remove the declared type for '{name}' in the "
-                f"construction plan, then run the build again."
-            )
+        running = totals[name]
+        batch_present = tally[CONVERTED] + tally[UNCONVERTIBLE]
+        total_present = running[CONVERTED] + running[UNCONVERTIBLE]
+
+        by_batch = (batch_present >= TYPE_FAILURE_MIN_SAMPLE
+                    and tally[UNCONVERTIBLE] > batch_present * TYPE_FAILURE_LIMIT)
+        by_total = (total_present >= TYPE_FAILURE_MIN_SAMPLE
+                    and running[UNCONVERTIBLE] > total_present * TYPE_FAILURE_LIMIT)
+        if not (by_batch or by_total):
+            continue
+
+        examples = ", ".join(repr(example) for example in running["examples"])
+        if by_batch:
+            counted = (f"{tally[UNCONVERTIBLE]} of {batch_present} non-blank "
+                       f"values in this batch")
+        else:
+            # "read so far", not "in this file": the rest of the file is unread.
+            counted = (f"{running[UNCONVERTIBLE]} of {total_present} non-blank "
+                       f"values read so far ({tally[UNCONVERTIBLE]} of "
+                       f"{batch_present} in the batch just read)")
+        return (
+            f"{source_file}: '{name}' is declared {property_types[name]} but "
+            f"{counted} could not be read as one (e.g. {examples}). Load stopped "
+            f"after {rows_committed} rows committed (this batch was not sent; the "
+            f"committed rows stay in the graph, with '{name}' already cleared on "
+            f"every row where it could not be converted). Correct or remove the "
+            f"declared type for '{name}' in the construction plan, then run the "
+            f"build again."
+        )
     return None
 
 
@@ -285,10 +336,13 @@ def load_nodes_from_csv(
 
         for _batch_header, batch in batches:
             rows, tallies = _coerce_batch(batch, typed_types)
-            failure = _type_failure(tallies, typed_types, source_file, rows_committed)
+            # Merged BEFORE the gate: the cumulative arm has to see this batch,
+            # and on a refusal the totals are discarded with the error anyway.
+            _merge_tallies(totals, tallies)
+            failure = _type_failure(
+                tallies, totals, typed_types, source_file, rows_committed)
             if failure is not None:
                 return tool_error(failure)
-            _merge_tallies(totals, tallies)
 
             result = graphdb.send_query(query, {
                 "rows": rows,
@@ -440,10 +494,13 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
 
         for _batch_header, batch in batches:
             rows, tallies = _coerce_batch(batch, typed_types)
-            failure = _type_failure(tallies, typed_types, source_file, rows_committed)
+            # Merged BEFORE the gate: the cumulative arm has to see this batch,
+            # and on a refusal the totals are discarded with the error anyway.
+            _merge_tallies(totals, tallies)
+            failure = _type_failure(
+                tallies, totals, typed_types, source_file, rows_committed)
             if failure is not None:
                 return tool_error(failure)
-            _merge_tallies(totals, tallies)
 
             result = graphdb.send_query(query, {
                 "rows": rows,

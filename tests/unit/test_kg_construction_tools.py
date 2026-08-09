@@ -846,3 +846,84 @@ def test_a_header_only_file_loads_zero_rows_when_the_columns_are_right(fake_db, 
     result = kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
     assert result["status"] == "success", result.get("error_message")
     assert result["rows_loaded"]["rows"] == 0
+
+
+def _one_present_value_per_batch(value_per_batch):
+    """Batches where a typed column is blank on every row but one.
+
+    The shape that defeats a per-batch-only gate: no batch ever holds
+    TYPE_FAILURE_MIN_SAMPLE present values, however many batches there are.
+    """
+    def fake_batches(relative_path, batch_size=1000):
+        for index, value in enumerate(value_per_batch):
+            yield ["id", "cost"], [
+                {"id": f"{index}a", "cost": ""},
+                {"id": f"{index}b", "cost": value},
+                {"id": f"{index}c", "cost": ""},
+            ]
+    return fake_batches
+
+
+def test_a_sparse_column_cannot_outlast_the_gate_one_batch_at_a_time(fake_db, monkeypatch):
+    """The exemption for a too-small sample was measured per batch, so a column
+    holding one present value per batch never reached the two it takes to expire
+    -- permanently. Every value in the file could fail, every one of them be
+    CLEARED, and the load still report success with a warning. Five failures out
+    of five present values is the strongest evidence of a wrong type there is."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["N/A"] * 5))
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "error"
+    assert "cost" in result["error_message"]
+    # Fires on the second batch: two present values seen, both unconvertible.
+    assert len(fake_db.queries) == 1
+    assert "3 rows committed" in result["error_message"]
+    # The cumulative arm must say what it actually counted, not "in this batch".
+    assert "read so far" in result["error_message"]
+    assert "was not sent" in result["error_message"]
+
+
+def test_a_sparse_relationship_column_cannot_outlast_the_gate_either(fake_db, monkeypatch):
+    """The relationship loader carries its own copy of the batch loop, and its
+    existing gate test is single-batch -- which is exactly the case that cannot
+    tell the two arms apart."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["N/A"] * 5))
+
+    result = kg.import_relationships({
+        "source_file": "p.csv", "relationship_type": "R",
+        "from_node_label": "A", "from_node_column": "id",
+        "to_node_label": "B", "to_node_column": "id",
+        "properties": ["cost"], "property_types": {"cost": "float"},
+    })
+
+    assert result["status"] == "error"
+    assert "read so far" in result["error_message"]
+    assert len(fake_db.queries) == 1
+
+
+def test_a_sparse_column_that_is_merely_dirty_still_loads(fake_db, monkeypatch):
+    """The narrowed exemption must not start refusing sparse columns that are
+    right. One typo among five present values is 20% -- dirt, not a wrong type."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["1", "2", "N/A", "4", "5"]))
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "success", result.get("error_message")
+    sent = [query for query, _ in fake_db.queries if query.startswith("UNWIND")]
+    assert len(sent) == 5
+    assert "cost" in result["rows_loaded"]["warning"]
+
+
+def test_a_single_present_failing_value_in_the_whole_file_still_loads(fake_db, monkeypatch):
+    """The exemption itself survives: one present value that fails is one row,
+    not evidence of a wrong type, however many blank rows surround it."""
+    monkeypatch.setattr(kg, "read_csv_batches",
+                        _one_present_value_per_batch(["N/A"]))
+
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
+
+    assert result["status"] == "success", result.get("error_message")
