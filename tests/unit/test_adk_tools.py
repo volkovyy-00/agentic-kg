@@ -30,6 +30,7 @@ def test_finished_takes_no_arguments_beyond_context():
     """A zero-argument tool is more reliable than one requiring the model to
     reproduce an agent name, which is why this is not ADK's transfer_to_agent."""
     import inspect
+
     finished = make_finished("x")
     parameters = list(inspect.signature(finished).parameters)
     assert parameters == ["tool_context"]
@@ -42,5 +43,6 @@ def test_tool_is_still_named_finished():
 def test_no_private_attribute_access():
     """The old implementation reached into tool_context._invocation_context."""
     import inspect
+
     source = inspect.getsource(make_finished)
     assert "_invocation_context" not in source

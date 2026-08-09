@@ -4,21 +4,23 @@ This module defines functions that return instruction prompts for the graphrag
 (retrieval) agent. These instructions guide the agent's behavior, workflow, and
 tool usage.
 """
+
 from typing import Any, Dict
 
 from google.adk.tools import ToolContext
 
+from agentic_kg.common.adk_context import drop_foreign_context
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.common.tool_result import tool_error
+from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.cypher_tools import (
     get_graph_schema_with_profile,
     get_physical_schema,
     read_neo4j_cypher,
 )
-from agentic_kg.tools.adk_tools import make_finished
-from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
-from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools.graphrag_handoff_tools import (
-    GRAPHRAG_HANDOFF_CONFIRMED_KEY, confirm_graphrag_handoff,
+    GRAPHRAG_HANDOFF_CONFIRMED_KEY,
+    confirm_graphrag_handoff,
 )
 
 # v1's exit, ungated and unchanged in behaviour. v1 is a controlled A/B
@@ -57,8 +59,8 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
         )
     return _transfer_to_coordinator(tool_context)
 
-variants = {
 
+variants = {
     # graphrag_agent_v1
     "graphrag_agent_v1": {
         "instruction": """
@@ -76,13 +78,8 @@ variants = {
         2. Consider whether a specialized tool is the best way to answer the user's question
         3. If a specialized tool is not available, take time reasoning about the schema before running a cypher query with 'read_neo4j_cypher'
         """,
-        "tools": [
-            get_physical_schema, 
-            read_neo4j_cypher,
-            _transfer_to_coordinator
-        ]
+        "tools": [get_physical_schema, read_neo4j_cypher, _transfer_to_coordinator],
     },
-
     # graphrag_agent_v2 -- grounded in the graph rather than in the transcript.
     # v1 is retained unchanged so the acceptance run can A/B the two.
     "graphrag_agent_v2": {

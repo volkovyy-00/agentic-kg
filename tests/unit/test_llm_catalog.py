@@ -1,5 +1,5 @@
-from agentic_kg.common.config import reset_settings
 from agentic_kg.common import llm_catalog
+from agentic_kg.common.config import reset_settings
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 
 
@@ -73,6 +73,7 @@ def test_returns_a_litellm_instance_not_a_string(monkeypatch):
     """ADK never registers LiteLlm in its LLMRegistry, so agents must be handed
     an instance. A bare model string raises at agent construction."""
     from google.adk.models.lite_llm import LiteLlm
+
     reset_settings()
     _clear_cache()
     assert isinstance(get_llm(LlmKind.reasoning), LiteLlm)

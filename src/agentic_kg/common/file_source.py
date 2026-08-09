@@ -9,6 +9,7 @@ The relative-name convention matters: construction plans record files as
 folder still works when the same files move elsewhere. This module is the one
 place that knows the difference.
 """
+
 import logging
 from pathlib import Path, PureWindowsPath
 from typing import Any, Tuple
@@ -142,7 +143,7 @@ def list_source_files() -> list[str]:
     # root with no trailing separator, so it silently depended on that rstrip:
     # anyone who made the root keep its trailing "/" would have cut a character
     # off every name here instead of getting an error.
-    return sorted(found[len(root):].lstrip("/") for found in fs.find(root))
+    return sorted(found[len(root) :].lstrip("/") for found in fs.find(root))
 
 
 def source_exists(relative_path: str) -> bool:

@@ -31,6 +31,7 @@ is unreachable here because LiteLlm does not override BaseLlm.connect
 (base_llm.py:118), which raises NotImplementedError, so no agent in this tree
 can run live at all.
 """
+
 import logging
 from typing import Any, Optional
 
@@ -93,7 +94,9 @@ _TRANSFER_PARENT_ADDENDUM_OPENING = "Your parent agent is"
 _TRANSFER_PARENT_ADDENDUM_ENDING = "to your parent agent."
 
 
-def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional[LlmResponse]:
+def strip_transfer_to_agent(
+    callback_context: Any, llm_request: Any
+) -> Optional[LlmResponse]:
     """Remove the injected transfer tool from the request, in place.
 
     The parameter NAMES are load-bearing: ADK invokes this purely by keyword,
@@ -120,7 +123,7 @@ def strip_transfer_to_agent(callback_context: Any, llm_request: Any) -> Optional
         return None
 
     kept = []
-    for tool in (config.tools or []):
+    for tool in config.tools or []:
         declarations = getattr(tool, "function_declarations", None)
         if not declarations:
             # A built-in tool with no function declarations (search, code

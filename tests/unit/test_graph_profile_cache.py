@@ -6,6 +6,7 @@ outside this process, and those happen in this workflow -- so a counter-only
 cache would serve a schema for a database that no longer exists and state it
 as fact, which is the exact failure class this work exists to fix.
 """
+
 import pytest
 
 from agentic_kg.common import graph_profile
@@ -24,9 +25,14 @@ class FakeDb:
             records = [{"nodes": self.nodes, "rels": self.rels}]
         else:
             records = []
-        return {"status": "success",
-                "query_result": {"records": records, "row_count": len(records),
-                                 "truncated": False}}
+        return {
+            "status": "success",
+            "query_result": {
+                "records": records,
+                "row_count": len(records),
+                "truncated": False,
+            },
+        }
 
 
 @pytest.fixture
@@ -43,6 +49,7 @@ def _loader(counter):
     def load():
         counter.append(1)
         return {"node_props": {}, "rel_props": {}, "relationships": []}
+
     return load
 
 
@@ -65,7 +72,7 @@ def test_fingerprint_change_invalidates_without_a_counter_change(db):
     """The out-of-process write case -- the reason one layer is not enough."""
     calls = []
     graph_profile.get_cached_profile(_loader(calls))
-    db.nodes = 0          # someone wiped the graph from a script
+    db.nodes = 0  # someone wiped the graph from a script
     graph_profile.get_cached_profile(_loader(calls))
     assert len(calls) == 2
 
@@ -95,7 +102,7 @@ def test_unreadable_fingerprint_does_not_poison_the_cache(db, monkeypatch):
     """
     calls = []
     graph_profile.get_cached_profile(_loader(calls))
-    assert len(calls) == 1                      # cold build, cache now warm
+    assert len(calls) == 1  # cold build, cache now warm
 
     # One transient failure: the fingerprint query returns no rows.
     real_send = db.send_read_query
@@ -115,4 +122,5 @@ def test_unreadable_fingerprint_does_not_poison_the_cache(db, monkeypatch):
     graph_profile.get_cached_profile(_loader(calls))
     assert len(calls) == 2, (
         "the failed call cached fingerprint=None, so the recovered call missed "
-        "and rebuilt a second time")
+        "and rebuilt a second time"
+    )

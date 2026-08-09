@@ -6,6 +6,7 @@ likely to be lost during implementation: the two bugs that motivated these
 annotations landed on opposite sides of that split, so defining either one
 over only its own half would fit the design to the bugs instead of the class.
 """
+
 import pytest
 
 from agentic_kg.common.graph_profile import (
@@ -27,15 +28,24 @@ from agentic_kg.common.graph_profile import (
 
 
 def test_complete_when_values_match_distinct_count():
-    prop = {"property": "flag", "type": "STRING", "values": ["a", "b"], "distinct_count": 2}
+    prop = {
+        "property": "flag",
+        "type": "STRING",
+        "values": ["a", "b"],
+        "distinct_count": 2,
+    }
     out = annotate_property(prop, entity_count=100)
     assert out["completeness"] == "complete"
     assert out["values"] == ["a", "b"]
 
 
 def test_partial_when_values_are_truncated():
-    prop = {"property": "n", "type": "STRING",
-            "values": [str(i) for i in range(10)], "distinct_count": 27}
+    prop = {
+        "property": "n",
+        "type": "STRING",
+        "values": [str(i) for i in range(10)],
+        "distinct_count": 27,
+    }
     out = annotate_property(prop, entity_count=100)
     assert out["completeness"] == "partial"
     assert out["values"] == [str(i) for i in range(10)]
@@ -81,24 +91,35 @@ def test_uniqueness_unknown_when_entity_count_unavailable():
 
 
 def test_numeric_like_string_is_flagged():
-    prop = {"property": "days", "type": "STRING",
-            "values": ["8", "12", "30"], "distinct_count": 3}
+    prop = {
+        "property": "days",
+        "type": "STRING",
+        "values": ["8", "12", "30"],
+        "distinct_count": 3,
+    }
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] == "yes"
 
 
 def test_non_numeric_string_is_not_flagged():
-    prop = {"property": "city", "type": "STRING",
-            "values": ["Berlin", "Lisbon"], "distinct_count": 2}
+    prop = {
+        "property": "city",
+        "type": "STRING",
+        "values": ["Berlin", "Lisbon"],
+        "distinct_count": 2,
+    }
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] == "no"
 
 
-@pytest.mark.parametrize("values", [
-    ["$42.73", "$1,299.00"],   # currency symbol
-    ["1,234", "9,000"],        # thousands separator
-    ["8", "$42.73"],           # mixed: one value needs cleaning, so all do
-])
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["$42.73", "$1,299.00"],  # currency symbol
+        ["1,234", "9,000"],  # thousands separator
+        ["8", "$42.73"],  # mixed: one value needs cleaning, so all do
+    ],
+)
 def test_numeric_like_separates_castable_text_from_text_needing_cleaning(values):
     """Would catch: one "yes" covering both bare numerals and currency.
 
@@ -106,8 +127,12 @@ def test_numeric_like_separates_castable_text_from_text_needing_cleaning(values)
     toFloat('$42.73') and toFloat('1,234') both return null in Neo4j, and an
     aggregation over nulls reports a confident wrong number rather than failing.
     """
-    prop = {"property": "unit_cost", "type": "STRING",
-            "values": values, "distinct_count": len(values)}
+    prop = {
+        "property": "unit_cost",
+        "type": "STRING",
+        "values": values,
+        "distinct_count": len(values),
+    }
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] == "numeric_after_cleaning"
 
@@ -115,8 +140,12 @@ def test_numeric_like_separates_castable_text_from_text_needing_cleaning(values)
 def test_identifier_shaped_strings_are_still_not_numeric():
     """The currency class stays explicit rather than "any non-digit prefix":
     a wildcard would flag 'Q3'/'#5'/'a1' and invite a cast on a key column."""
-    prop = {"property": "code", "type": "STRING",
-            "values": ["Q3", "#5", "a1"], "distinct_count": 3}
+    prop = {
+        "property": "code",
+        "type": "STRING",
+        "values": ["Q3", "#5", "a1"],
+        "distinct_count": 3,
+    }
     out = annotate_property(prop, entity_count=10)
     assert out["numeric_like"] == "no"
 
@@ -131,7 +160,9 @@ def test_every_annotation_uses_the_same_string_vocabulary():
     """Catches a bool/str mix, where a truthy "unknown" reads as consent."""
     out = annotate_property({"property": "x"}, entity_count=None)
     for key in ("completeness", "uniqueness", "numeric_like"):
-        assert isinstance(out[key], str), f"{key} must be a string, got {type(out[key])}"
+        assert isinstance(out[key], str), (
+            f"{key} must be a string, got {type(out[key])}"
+        )
     assert out["numeric_like"] == "unknown"
 
 
@@ -157,14 +188,14 @@ def test_input_is_not_mutated():
 
 def test_value_count_threshold_matches_the_library_limit():
     from neo4j_graphrag.schema import DISTINCT_VALUE_LIMIT
+
     assert VALUE_COUNT_MAX_DISTINCT == DISTINCT_VALUE_LIMIT
 
 
+from fakes import ScriptedGraphDb
+
 from agentic_kg.common import graph_profile
 from agentic_kg.common.graph_profile import build_profile, quote
-
-
-from fakes import ScriptedGraphDb
 
 # Shared with the rest of the unit suite; see tests/unit/fakes.py.
 FakeGraphDbForProfile = ScriptedGraphDb
@@ -179,8 +210,16 @@ def fake_profile_db(monkeypatch):
 
 SCHEMA = {
     "node_props": {"Alpha": [{"property": "code", "type": "STRING"}]},
-    "rel_props": {"LINKS": [{"property": "kind", "type": "STRING",
-                             "values": ["x", "y"], "distinct_count": 2}]},
+    "rel_props": {
+        "LINKS": [
+            {
+                "property": "kind",
+                "type": "STRING",
+                "values": ["x", "y"],
+                "distinct_count": 2,
+            }
+        ]
+    },
     "relationships": [
         {"start": "Alpha", "type": "LINKS", "end": "Beta"},
         {"start": "Alpha", "type": "LINKS", "end": "Gamma"},
@@ -197,6 +236,7 @@ def test_quote_backticks_names_and_escapes_embedded_backticks():
 def test_quote_accepts_names_that_checked_would_reject():
     """checked() is for model-supplied identifiers; these come from the DB."""
     from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
+
     with pytest.raises(InvalidIdentifier):
         checked("label", "Legal Entity")
     assert quote("Legal Entity") == "`Legal Entity`"
@@ -212,10 +252,21 @@ FAILING_SCHEMA = {
     # Alpha needs a qualifying property (distinct_count <= 10) or no per-entity
     # query is ever issued for it and fail_on has nothing to match -- the
     # earlier version of this test passed vacuously.
-    "node_props": {"Alpha": [{"property": "code", "type": "STRING",
-                              "values": ["a"], "distinct_count": 2}]},
-    "rel_props": {"LINKS": [{"property": "kind", "type": "STRING",
-                             "values": ["x", "y"], "distinct_count": 2}]},
+    "node_props": {
+        "Alpha": [
+            {"property": "code", "type": "STRING", "values": ["a"], "distinct_count": 2}
+        ]
+    },
+    "rel_props": {
+        "LINKS": [
+            {
+                "property": "kind",
+                "type": "STRING",
+                "values": ["x", "y"],
+                "distinct_count": 2,
+            }
+        ]
+    },
     "relationships": [],
 }
 
@@ -230,24 +281,43 @@ def test_one_failing_entity_degrades_only_itself(monkeypatch):
 
 def test_value_counts_only_for_small_distinct_counts(fake_profile_db):
     schema = {
-        "node_props": {"Alpha": [
-            {"property": "small", "type": "STRING", "values": ["a"], "distinct_count": 2},
-            {"property": "big", "type": "STRING", "values": ["a"], "distinct_count": 900},
-        ]},
-        "rel_props": {}, "relationships": [],
+        "node_props": {
+            "Alpha": [
+                {
+                    "property": "small",
+                    "type": "STRING",
+                    "values": ["a"],
+                    "distinct_count": 2,
+                },
+                {
+                    "property": "big",
+                    "type": "STRING",
+                    "values": ["a"],
+                    "distinct_count": 900,
+                },
+            ]
+        },
+        "rel_props": {},
+        "relationships": [],
     }
     build_profile(schema)
     counted = [q for q in fake_profile_db.queries if "count(*)" in q and "`small`" in q]
-    not_counted = [q for q in fake_profile_db.queries if "count(*)" in q and "`big`" in q]
+    not_counted = [
+        q for q in fake_profile_db.queries if "count(*)" in q and "`big`" in q
+    ]
     assert counted and not not_counted
 
 
-@pytest.mark.parametrize("is_relationship,expected,forbidden", [
-    (False, "MATCH (n:`Thing`)", "-[r:`Thing`]->"),
-    (True, "MATCH ()-[r:`Thing`]->()", "MATCH (n:`Thing`)"),
-])
+@pytest.mark.parametrize(
+    "is_relationship,expected,forbidden",
+    [
+        (False, "MATCH (n:`Thing`)", "-[r:`Thing`]->"),
+        (True, "MATCH ()-[r:`Thing`]->()", "MATCH (n:`Thing`)"),
+    ],
+)
 def test_value_counts_query_shape_differs_by_kind(
-        fake_profile_db, is_relationship, expected, forbidden):
+    fake_profile_db, is_relationship, expected, forbidden
+):
     """The one place node vs relationship genuinely changes the emitted Cypher.
 
     This is the real content behind the spec's "asserted twice, once per
@@ -261,9 +331,16 @@ def test_value_counts_query_shape_differs_by_kind(
 
 
 @pytest.mark.parametrize("collection", ["node_props", "rel_props"])
-def test_both_property_collections_are_annotated_identically(fake_profile_db, collection):
+def test_both_property_collections_are_annotated_identically(
+    fake_profile_db, collection
+):
     """Same property dict, either collection, same annotations."""
-    prop = {"property": "flag", "type": "STRING", "values": ["a", "b"], "distinct_count": 2}
+    prop = {
+        "property": "flag",
+        "type": "STRING",
+        "values": ["a", "b"],
+        "distinct_count": 2,
+    }
     schema = {"node_props": {}, "rel_props": {}, "relationships": []}
     schema[collection] = {"Thing": [dict(prop)]}
     profile = build_profile(schema)
@@ -279,7 +356,8 @@ def test_budget_marks_unprofiled_entities_rather_than_dropping_them(monkeypatch)
     monkeypatch.setattr(graph_profile, "graphdb", db)
     schema = {
         "node_props": {"Alpha": [], "Beta": [], "Gamma": []},
-        "rel_props": {}, "relationships": [],
+        "rel_props": {},
+        "relationships": [],
     }
     profile = build_profile(schema)
     # list(), not set(): a profiled entity's value is a (possibly empty) list
@@ -313,10 +391,12 @@ def test_label_and_relationship_type_sharing_a_name_do_not_overwrite(monkeypatch
     prompt rule 4 then acts on -- and one entity's profile vanishes from the
     output entirely while budget.entities_profiled still counts both.
     """
-    db = FakeGraphDbForProfile(responses={
-        "UNWIND labels(n)": [{"name": "FOLLOWS", "n": 7}],
-        "type(r) AS name": [{"name": "FOLLOWS", "n": 900}],
-    })
+    db = FakeGraphDbForProfile(
+        responses={
+            "UNWIND labels(n)": [{"name": "FOLLOWS", "n": 7}],
+            "type(r) AS name": [{"name": "FOLLOWS", "n": 900}],
+        }
+    )
     monkeypatch.setattr(graph_profile, "graphdb", db)
     schema = {
         "node_props": {"FOLLOWS": [{"property": "a", "type": "STRING"}]},
@@ -358,28 +438,50 @@ def test_value_counts_keep_distinct_values_of_different_types_apart(monkeypatch)
     # Needle is the quoted property name, which appears only in the
     # value-counts query. "count(*)" would also match the entity-count query,
     # whose rows carry different columns.
-    db = FakeGraphDbForProfile(responses={
-        "`status`": [{"value": 1, "n": 700}, {"value": "1", "n": 300}],
-    })
+    db = FakeGraphDbForProfile(
+        responses={
+            "`status`": [{"value": 1, "n": 700}, {"value": "1", "n": 300}],
+        }
+    )
     monkeypatch.setattr(graph_profile, "graphdb", db)
     schema = {
-        "node_props": {"Thing": [{"property": "status", "type": "STRING",
-                                  "values": ["1"], "distinct_count": 2}]},
-        "rel_props": {}, "relationships": [],
+        "node_props": {
+            "Thing": [
+                {
+                    "property": "status",
+                    "type": "STRING",
+                    "values": ["1"],
+                    "distinct_count": 2,
+                }
+            ]
+        },
+        "rel_props": {},
+        "relationships": [],
     }
     counts = build_profile(schema)["properties"]["Thing"][0]["value_counts"]
     assert counts == [{"value": 1, "count": 700}, {"value": "1", "count": 300}]
     assert sum(c["count"] for c in counts) == 1000
 
 
-def test_value_counts_empty_result_is_an_empty_distribution_not_unknown(fake_profile_db):
+def test_value_counts_empty_result_is_an_empty_distribution_not_unknown(
+    fake_profile_db,
+):
     """A successful query returning no rows means "no non-null values" -- a
     real answer. Reporting it as "unknown" conflates it with "could not
     determine", which is what a FAILED query yields (profile_error)."""
     schema = {
-        "node_props": {"Thing": [{"property": "flag", "type": "STRING",
-                                  "values": [], "distinct_count": 1}]},
-        "rel_props": {}, "relationships": [],
+        "node_props": {
+            "Thing": [
+                {
+                    "property": "flag",
+                    "type": "STRING",
+                    "values": [],
+                    "distinct_count": 1,
+                }
+            ]
+        },
+        "rel_props": {},
+        "relationships": [],
     }
     profile = build_profile(schema)
     assert profile["properties"]["Thing"][0]["value_counts"] == []
@@ -406,14 +508,20 @@ def test_summarised_property_values_are_declared_in_the_profile(monkeypatch):
     flag exists to signal, reappearing one layer up in the tool graphrag is
     told to call first.
     """
-    db = FakeSummarisingDb(responses={
-        "`tags`": [{"value": "<list of 40 str values, omitted>", "n": 5}],
-    })
+    db = FakeSummarisingDb(
+        responses={
+            "`tags`": [{"value": "<list of 40 str values, omitted>", "n": 5}],
+        }
+    )
     monkeypatch.setattr(graph_profile, "graphdb", db)
     schema = {
-        "node_props": {"Thing": [{"property": "tags", "type": "LIST",
-                                  "values": [], "distinct_count": 1}]},
-        "rel_props": {}, "relationships": [],
+        "node_props": {
+            "Thing": [
+                {"property": "tags", "type": "LIST", "values": [], "distinct_count": 1}
+            ]
+        },
+        "rel_props": {},
+        "relationships": [],
     }
     prop = build_profile(schema)["properties"]["Thing"][0]
     assert prop["value_counts_complete"] == "no"
@@ -422,20 +530,40 @@ def test_summarised_property_values_are_declared_in_the_profile(monkeypatch):
 def test_value_counts_complete_is_yes_when_nothing_was_summarised(fake_profile_db):
     """Negative control: the annotation must not be always-'no'."""
     schema = {
-        "node_props": {"Thing": [{"property": "flag", "type": "STRING",
-                                  "values": ["a"], "distinct_count": 2}]},
-        "rel_props": {}, "relationships": [],
+        "node_props": {
+            "Thing": [
+                {
+                    "property": "flag",
+                    "type": "STRING",
+                    "values": ["a"],
+                    "distinct_count": 2,
+                }
+            ]
+        },
+        "rel_props": {},
+        "relationships": [],
     }
     prop = build_profile(schema)["properties"]["Thing"][0]
     assert prop["value_counts_complete"] == "yes"
 
 
-def test_value_counts_complete_is_unknown_when_counts_were_not_computed(fake_profile_db):
+def test_value_counts_complete_is_unknown_when_counts_were_not_computed(
+    fake_profile_db,
+):
     """Never silently 'yes' for a property the profile did not count."""
     schema = {
-        "node_props": {"Thing": [{"property": "big", "type": "STRING",
-                                  "values": ["a"], "distinct_count": 900}]},
-        "rel_props": {}, "relationships": [],
+        "node_props": {
+            "Thing": [
+                {
+                    "property": "big",
+                    "type": "STRING",
+                    "values": ["a"],
+                    "distinct_count": 900,
+                }
+            ]
+        },
+        "rel_props": {},
+        "relationships": [],
     }
     prop = build_profile(schema)["properties"]["Thing"][0]
     assert prop["value_counts"] == "unknown"
@@ -446,8 +574,16 @@ def test_value_counts_complete_is_unknown_when_counts_were_not_computed(fake_pro
 
 PARTITIONED_SCHEMA = {
     "node_props": {},
-    "rel_props": {"SUPPLIES": [{"property": "preferred", "type": "STRING",
-                                "values": ["yes", "no"], "distinct_count": 2}]},
+    "rel_props": {
+        "SUPPLIES": [
+            {
+                "property": "preferred",
+                "type": "STRING",
+                "values": ["yes", "no"],
+                "distinct_count": 2,
+            }
+        ]
+    },
     "relationships": [{"start": "Supplier", "type": "SUPPLIES", "end": "Part"}],
 }
 
@@ -469,11 +605,16 @@ def test_pattern_names_the_property_that_divides_its_edges(monkeypatch):
     pattern = build_profile(PARTITIONED_SCHEMA)["patterns"][0]
 
     assert pattern["partitioned_by"] == [
-        {"property": "preferred",
-         "distribution": [{"value": "yes", "count": 88},
-                          {"value": "no", "count": 88}],
-         "values_are": "categories",
-         "distribution_covers": "this_pattern"}]
+        {
+            "property": "preferred",
+            "distribution": [
+                {"value": "yes", "count": 88},
+                {"value": "no", "count": 88},
+            ],
+            "values_are": "categories",
+            "distribution_covers": "this_pattern",
+        }
+    ]
 
 
 def test_partitioning_costs_no_extra_query(monkeypatch):
@@ -495,7 +636,7 @@ def test_a_single_valued_property_is_not_a_partition(monkeypatch):
 
 
 def test_partitioned_by_is_unknown_when_the_type_was_not_profiled(monkeypatch):
-    """"Nothing partitions these edges" and "we never looked" are different
+    """ "Nothing partitions these edges" and "we never looked" are different
     claims; an empty list would assert the first while meaning the second."""
     monkeypatch.setattr(graph_profile, "MAX_PROFILED_ENTITIES", 0)
     monkeypatch.setattr(graph_profile, "graphdb", FakeGraphDbForProfile())
@@ -515,13 +656,17 @@ def test_partitioned_by_survives_the_pattern_budget(monkeypatch):
 
 
 def test_partitioned_by_is_present_on_a_relationship_type_with_no_properties(
-        fake_profile_db):
+    fake_profile_db,
+):
     """A type absent from rel_props has no properties at all -- an empty
     partition list. Reading `unknown` there would have the agent disclose
     missing information that is not missing; a KeyError would take down the
     whole profile, which is the tool graphrag is told to call first."""
-    schema = {"node_props": {}, "rel_props": {},
-              "relationships": [{"start": "A", "type": "LINKS", "end": "B"}]}
+    schema = {
+        "node_props": {},
+        "rel_props": {},
+        "relationships": [{"start": "A", "type": "LINKS", "end": "B"}],
+    }
     pattern = build_profile(schema)["patterns"][0]
     assert pattern["partitioned_by"] == []
 
@@ -539,12 +684,21 @@ def test_numeric_valued_properties_are_reported_but_marked_as_numbers(monkeypatc
     """
     schema = {
         "node_props": {},
-        "rel_props": {"HAS_PART": [{"property": "quantity", "type": "STRING",
-                                    "values": ["1", "2"], "distinct_count": 2}]},
+        "rel_props": {
+            "HAS_PART": [
+                {
+                    "property": "quantity",
+                    "type": "STRING",
+                    "values": ["1", "2"],
+                    "distinct_count": 2,
+                }
+            ]
+        },
         "relationships": [{"start": "Assembly", "type": "HAS_PART", "end": "Part"}],
     }
-    db = FakeGraphDbForProfile(responses={
-        "`quantity`": [{"value": "1", "n": 66}, {"value": "2", "n": 22}]})
+    db = FakeGraphDbForProfile(
+        responses={"`quantity`": [{"value": "1", "n": 66}, {"value": "2", "n": 22}]}
+    )
     monkeypatch.setattr(graph_profile, "graphdb", db)
     entry = build_profile(schema)["patterns"][0]["partitioned_by"][0]
     assert entry["property"] == "quantity"
@@ -565,8 +719,16 @@ def test_pooled_distribution_says_it_is_pooled(monkeypatch):
     """
     schema = {
         "node_props": {},
-        "rel_props": {"SUPPLIES": [{"property": "preferred", "type": "STRING",
-                                    "values": ["yes", "no"], "distinct_count": 2}]},
+        "rel_props": {
+            "SUPPLIES": [
+                {
+                    "property": "preferred",
+                    "type": "STRING",
+                    "values": ["yes", "no"],
+                    "distinct_count": 2,
+                }
+            ]
+        },
         "relationships": [
             {"start": "Supplier", "type": "SUPPLIES", "end": "Part"},
             {"start": "Supplier", "type": "SUPPLIES", "end": "Service"},
@@ -577,8 +739,10 @@ def test_pooled_distribution_says_it_is_pooled(monkeypatch):
     patterns = build_profile(schema)["patterns"]
     assert len(patterns) == 2
     for pattern in patterns:
-        assert pattern["partitioned_by"][0]["distribution_covers"] == \
-            "all_patterns_of_this_type"
+        assert (
+            pattern["partitioned_by"][0]["distribution_covers"]
+            == "all_patterns_of_this_type"
+        )
 
 
 def test_a_property_the_library_only_sampled_is_reported_as_unknown(monkeypatch):
@@ -593,11 +757,17 @@ def test_a_property_the_library_only_sampled_is_reported_as_unknown(monkeypatch)
     """
     schema = {
         "node_props": {},
-        "rel_props": {"SUPPLIES": [
-            {"property": "sampled", "type": "STRING", "values": ["a", "b"]},
-            {"property": "many", "type": "STRING", "values": ["a"],
-             "distinct_count": 900},
-        ]},
+        "rel_props": {
+            "SUPPLIES": [
+                {"property": "sampled", "type": "STRING", "values": ["a", "b"]},
+                {
+                    "property": "many",
+                    "type": "STRING",
+                    "values": ["a"],
+                    "distinct_count": 900,
+                },
+            ]
+        },
         "relationships": [{"start": "Supplier", "type": "SUPPLIES", "end": "Part"}],
     }
     monkeypatch.setattr(graph_profile, "graphdb", FakeGraphDbForProfile())

@@ -1,4 +1,5 @@
-from typing import Callable, TypedDict, List
+from typing import Callable, List, TypedDict
+
 
 class ToolSet(TypedDict):
     """
@@ -9,7 +10,7 @@ class ToolSet(TypedDict):
         description: How the tools are used together
         tools: List of tools in the set
     """
+
     name: str
     description: str
     tools: List[Callable]
-

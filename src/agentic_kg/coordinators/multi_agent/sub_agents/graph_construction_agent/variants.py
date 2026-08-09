@@ -1,22 +1,9 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the root agent.
 These instructions guide the agent's behavior, workflow, and tool usage.
 """
 
-from agentic_kg.tools.user_goal_tools import (
-    get_user_goal,  get_approved_user_goal, 
-)
-from agentic_kg.tools.construction_plan_tools import (
-    get_approved_construction_plan, 
-)
-from agentic_kg.tools.cypher_tools import (
-    read_neo4j_cypher, write_neo4j_cypher, create_uniqueness_constraint, 
-    get_physical_schema,
-)
-from agentic_kg.tools.file_tools import get_approved_files
-from agentic_kg.tools.kg_construction_tools import build_graph_from_construction_rules
 from typing import Any, Dict
 
 from google.adk.tools import ToolContext
@@ -24,8 +11,23 @@ from google.adk.tools import ToolContext
 from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_handoff_tools import (
-    HANDOFF_CONFIRMED_KEY, confirm_construction_handoff,
+    HANDOFF_CONFIRMED_KEY,
+    confirm_construction_handoff,
 )
+from agentic_kg.tools.construction_plan_tools import (
+    get_approved_construction_plan,
+)
+from agentic_kg.tools.cypher_tools import (
+    create_uniqueness_constraint,
+    get_physical_schema,
+    read_neo4j_cypher,
+)
+from agentic_kg.tools.file_tools import get_approved_files
+from agentic_kg.tools.kg_construction_tools import build_graph_from_construction_rules
+from agentic_kg.tools.user_goal_tools import (
+    get_approved_user_goal,
+)
+
 # Imported live rather than copied: only the selected variant is built into an
 # Agent and registered in the tree, and this project already runs two A/B
 # sub-agents on different generations (cypher_agent on v1, graphrag_agent on
@@ -60,6 +62,7 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
             "the same reply, confirming first."
         )
     return _transfer_to_retrieval(tool_context)
+
 
 variants = {
     "graph_construction_agent_v1": {
@@ -107,10 +110,15 @@ variants = {
 
         """,
         "tools": [
-            get_approved_user_goal, get_approved_files, get_approved_construction_plan,
-            create_uniqueness_constraint, build_graph_from_construction_rules,
-            get_physical_schema, read_neo4j_cypher,
-            confirm_construction_handoff, finished
-        ]
+            get_approved_user_goal,
+            get_approved_files,
+            get_approved_construction_plan,
+            create_uniqueness_constraint,
+            build_graph_from_construction_rules,
+            get_physical_schema,
+            read_neo4j_cypher,
+            confirm_construction_handoff,
+            finished,
+        ],
     },
 }

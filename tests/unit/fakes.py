@@ -33,9 +33,10 @@ class RecordingGraphDb:
 
     def send_read_query(self, query, parameters=None, max_rows=None):
         self.read_queries.append((query, parameters, max_rows))
-        return {"status": "success",
-                "query_result": {"records": [], "row_count": 0,
-                                 "truncated": False}}
+        return {
+            "status": "success",
+            "query_result": {"records": [], "row_count": 0, "truncated": False},
+        }
 
     # _physical_schema reads both of these before its try block, so a fake
     # without them raises AttributeError instead of exercising the tool.
@@ -70,10 +71,15 @@ class ScriptedGraphDb(RecordingGraphDb):
                 return {"status": "error", "error_message": "boom"}
         for needle, records in self.responses.items():
             if needle in query:
-                return {"status": "success",
-                        "query_result": {"records": records,
-                                         "row_count": len(records),
-                                         "truncated": False}}
-        return {"status": "success",
-                "query_result": {"records": [], "row_count": 0,
-                                 "truncated": False}}
+                return {
+                    "status": "success",
+                    "query_result": {
+                        "records": records,
+                        "row_count": len(records),
+                        "truncated": False,
+                    },
+                }
+        return {
+            "status": "success",
+            "query_result": {"records": [], "row_count": 0, "truncated": False},
+        }

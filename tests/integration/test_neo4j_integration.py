@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 # Mark entire module as integration tests
@@ -7,6 +8,7 @@ pytestmark = pytest.mark.integration
 # Sanity check: ensure Docker daemon is reachable; otherwise skip at module level
 try:
     import docker  # type: ignore
+
     client = docker.from_env()
     client.ping()
 except Exception as e:  # pragma: no cover

@@ -3,6 +3,7 @@
 The goal is the description every later agent reasons from, so an absent
 field must not be storable.
 """
+
 from agentic_kg.tools.user_goal_tools import (
     APPROVED_USER_GOAL,
     approve_perceived_user_goal,
@@ -19,7 +20,9 @@ class FakeToolContext:
 
 def test_a_goal_with_both_fields_is_stored():
     context = FakeToolContext()
-    result = set_perceived_user_goal("supply chain", "Parts and who supplies them.", context)
+    result = set_perceived_user_goal(
+        "supply chain", "Parts and who supplies them.", context
+    )
     assert result["status"] == "success"
     assert context.state["perceived_user_goal"]["kind_of_graph"] == "supply chain"
 
@@ -48,4 +51,6 @@ def test_approval_carries_the_goal_forward():
     set_perceived_user_goal("supply chain", "Parts and suppliers.", context)
     result = approve_perceived_user_goal(context)
     assert result["status"] == "success"
-    assert context.state[APPROVED_USER_GOAL]["graph_description"] == "Parts and suppliers."
+    assert (
+        context.state[APPROVED_USER_GOAL]["graph_description"] == "Parts and suppliers."
+    )

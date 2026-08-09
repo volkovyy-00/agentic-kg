@@ -4,6 +4,7 @@ The container fixture lives here rather than in one test module because two
 files need it: the CSV loading tests and the connection-recovery regression
 test.
 """
+
 import pytest
 
 
@@ -50,8 +51,9 @@ def _neo4j_graph(monkeypatch, container):
         monkeypatch.setenv("SOURCE_URI", "./data/bom")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
 
-        from agentic_kg.common.config import reset_settings
         import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
+        from agentic_kg.common.config import reset_settings
+
         # reset_settings() then close: the singleton reconnects lazily on next
         # use and re-derives its config, picking up the container DSN set above.
         reset_settings()

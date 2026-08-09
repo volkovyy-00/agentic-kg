@@ -12,20 +12,21 @@ Two layers are covered here:
     so the drift was not a state-management bug; and
   * approval now mechanically refuses the inconsistent plan the drift produced.
 """
+
 import pytest
 
 from agentic_kg.tools import construction_plan_tools as cpt
 from agentic_kg.tools.construction_plan_tools import (
+    APPROVED_CONSTRUCTION_PLAN,
+    PROPOSED_CONSTRUCTION_PLAN,
+    approve_proposed_construction_plan,
+    check_construction_plan_consistency,
+    get_proposed_construction_plan,
     propose_node_construction,
     propose_node_constructions,
     propose_relationship_construction,
     propose_relationship_constructions,
     remove_node_construction,
-    get_proposed_construction_plan,
-    approve_proposed_construction_plan,
-    check_construction_plan_consistency,
-    PROPOSED_CONSTRUCTION_PLAN,
-    APPROVED_CONSTRUCTION_PLAN,
 )
 
 
@@ -42,19 +43,31 @@ def ctx():
 @pytest.fixture
 def any_column_exists(monkeypatch):
     """Make the propose tools' search_file sanity check always pass."""
+
     def fake_search_file(file_path, pattern):
-        return {"status": "success",
-                "search_results": {"metadata": {"lines_found": 1}}}
+        return {"status": "success", "search_results": {"metadata": {"lines_found": 1}}}
+
     monkeypatch.setattr(cpt, "search_file", fake_search_file)
 
 
 # --- state layer: overwrite semantics ---------------------------------------
 
+
 def test_propose_node_twice_same_label_overwrites_unique_column(ctx, any_column_exists):
-    propose_node_construction("assemblies.csv", "Assembly", "assembly_id",
-                              ["component_name", "quantity", "product_id"], ctx)
-    propose_node_construction("assemblies.csv", "Assembly", "assembly_name",
-                              ["assembly_id", "product_id"], ctx)
+    propose_node_construction(
+        "assemblies.csv",
+        "Assembly",
+        "assembly_id",
+        ["component_name", "quantity", "product_id"],
+        ctx,
+    )
+    propose_node_construction(
+        "assemblies.csv",
+        "Assembly",
+        "assembly_name",
+        ["assembly_id", "product_id"],
+        ctx,
+    )
 
     plan = get_proposed_construction_plan(ctx)
     assert list(plan) == ["Assembly"], "same label must replace, not accumulate"
@@ -67,10 +80,16 @@ def test_propose_node_overwrite_is_total_not_a_merge(ctx, any_column_exists):
 
     This is why a from-scratch re-derivation silently undoes a targeted fix.
     """
-    propose_node_construction("assemblies.csv", "Assembly", "assembly_name",
-                              ["assembly_id", "product_id"], ctx)
-    propose_node_construction("assemblies.csv", "Assembly", "assembly_id",
-                              ["component_name"], ctx)
+    propose_node_construction(
+        "assemblies.csv",
+        "Assembly",
+        "assembly_name",
+        ["assembly_id", "product_id"],
+        ctx,
+    )
+    propose_node_construction(
+        "assemblies.csv", "Assembly", "assembly_id", ["component_name"], ctx
+    )
 
     plan = get_proposed_construction_plan(ctx)
     assert plan["Assembly"]["unique_column_name"] == "assembly_id"
@@ -97,27 +116,45 @@ def test_get_proposed_plan_reflects_state_not_a_snapshot(ctx, any_column_exists)
 
 # --- batch proposal ---------------------------------------------------------
 
+
 def _only_these_columns_exist(monkeypatch, known_columns, searched):
     """Stub the propose tools' sanity check so a chosen column is missing.
 
     Every lookup is appended to `searched`, which is how a test can tell an
     entry was never attempted from an entry that was attempted and rejected.
     """
+
     def fake_search_file(file_path, pattern):
         searched.append(pattern)
         found = 1 if pattern in known_columns else 0
-        return {"status": "success",
-                "search_results": {"metadata": {"lines_found": found}}}
+        return {
+            "status": "success",
+            "search_results": {"metadata": {"lines_found": found}},
+        }
+
     monkeypatch.setattr(cpt, "search_file", fake_search_file)
 
 
-def test_propose_node_constructions_adds_every_entry_to_the_plan(ctx, any_column_exists):
-    result = propose_node_constructions([
-        {"approved_file": "products.csv", "proposed_label": "Product",
-         "unique_column_name": "product_id", "proposed_properties": ["product_name"]},
-        {"approved_file": "suppliers.csv", "proposed_label": "Supplier",
-         "unique_column_name": "supplier_id", "proposed_properties": ["name"]},
-    ], ctx)
+def test_propose_node_constructions_adds_every_entry_to_the_plan(
+    ctx, any_column_exists
+):
+    result = propose_node_constructions(
+        [
+            {
+                "approved_file": "products.csv",
+                "proposed_label": "Product",
+                "unique_column_name": "product_id",
+                "proposed_properties": ["product_name"],
+            },
+            {
+                "approved_file": "suppliers.csv",
+                "proposed_label": "Supplier",
+                "unique_column_name": "supplier_id",
+                "proposed_properties": ["name"],
+            },
+        ],
+        ctx,
+    )
 
     assert result["status"] == "success"
     assert len(result[cpt.NODE_CONSTRUCTION]) == 2
@@ -133,18 +170,39 @@ def test_propose_node_constructions_stops_at_the_first_failing_entry(ctx, monkey
     """Earlier entries must survive the failure so the agent only has to correct
     the one entry the error names, instead of re-proposing the whole batch."""
     searched = []
-    _only_these_columns_exist(monkeypatch, {"product_id", "supplier_id", "part_id"}, searched)
+    _only_these_columns_exist(
+        monkeypatch, {"product_id", "supplier_id", "part_id"}, searched
+    )
 
-    result = propose_node_constructions([
-        {"approved_file": "products.csv", "proposed_label": "Product",
-         "unique_column_name": "product_id", "proposed_properties": []},
-        {"approved_file": "suppliers.csv", "proposed_label": "Supplier",
-         "unique_column_name": "supplier_id", "proposed_properties": []},
-        {"approved_file": "assemblies.csv", "proposed_label": "Assembly",
-         "unique_column_name": "assembly_name", "proposed_properties": []},
-        {"approved_file": "parts.csv", "proposed_label": "Part",
-         "unique_column_name": "part_id", "proposed_properties": []},
-    ], ctx)
+    result = propose_node_constructions(
+        [
+            {
+                "approved_file": "products.csv",
+                "proposed_label": "Product",
+                "unique_column_name": "product_id",
+                "proposed_properties": [],
+            },
+            {
+                "approved_file": "suppliers.csv",
+                "proposed_label": "Supplier",
+                "unique_column_name": "supplier_id",
+                "proposed_properties": [],
+            },
+            {
+                "approved_file": "assemblies.csv",
+                "proposed_label": "Assembly",
+                "unique_column_name": "assembly_name",
+                "proposed_properties": [],
+            },
+            {
+                "approved_file": "parts.csv",
+                "proposed_label": "Part",
+                "unique_column_name": "part_id",
+                "proposed_properties": [],
+            },
+        ],
+        ctx,
+    )
 
     assert result["status"] == "error"
     assert "2" in result["error_message"], "the error must name the entry's index"
@@ -152,21 +210,38 @@ def test_propose_node_constructions_stops_at_the_first_failing_entry(ctx, monkey
     assert "assembly_name" in result["error_message"]
 
     plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
-    assert set(plan) == {"Product", "Supplier"}, "entries before the failure stay in the plan"
+    assert set(plan) == {"Product", "Supplier"}, (
+        "entries before the failure stay in the plan"
+    )
     assert "part_id" not in searched, "entries after the failure are never attempted"
 
 
-def test_propose_relationship_constructions_adds_every_entry_to_the_plan(ctx, any_column_exists):
-    result = propose_relationship_constructions([
-        {"approved_file": "assemblies.csv", "proposed_relationship_type": "ASSEMBLY_OF",
-         "from_node_label": "Assembly", "from_node_column": "assembly_name",
-         "to_node_label": "Product", "to_node_column": "product_id",
-         "proposed_properties": ["quantity"]},
-        {"approved_file": "parts.csv", "proposed_relationship_type": "SUPPLIED_BY",
-         "from_node_label": "Part", "from_node_column": "part_id",
-         "to_node_label": "Supplier", "to_node_column": "supplier_id",
-         "proposed_properties": []},
-    ], ctx)
+def test_propose_relationship_constructions_adds_every_entry_to_the_plan(
+    ctx, any_column_exists
+):
+    result = propose_relationship_constructions(
+        [
+            {
+                "approved_file": "assemblies.csv",
+                "proposed_relationship_type": "ASSEMBLY_OF",
+                "from_node_label": "Assembly",
+                "from_node_column": "assembly_name",
+                "to_node_label": "Product",
+                "to_node_column": "product_id",
+                "proposed_properties": ["quantity"],
+            },
+            {
+                "approved_file": "parts.csv",
+                "proposed_relationship_type": "SUPPLIED_BY",
+                "from_node_label": "Part",
+                "from_node_column": "part_id",
+                "to_node_label": "Supplier",
+                "to_node_column": "supplier_id",
+                "proposed_properties": [],
+            },
+        ],
+        ctx,
+    )
 
     assert result["status"] == "success"
     assert len(result[cpt.RELATIONSHIP_CONSTRUCTION]) == 2
@@ -178,25 +253,46 @@ def test_propose_relationship_constructions_adds_every_entry_to_the_plan(ctx, an
     assert plan["ASSEMBLY_OF"]["properties"] == ["quantity"]
 
 
-def test_propose_relationship_constructions_stops_at_the_first_failing_entry(ctx, monkeypatch):
+def test_propose_relationship_constructions_stops_at_the_first_failing_entry(
+    ctx, monkeypatch
+):
     searched = []
     _only_these_columns_exist(
-        monkeypatch, {"assembly_name", "product_id", "part_id", "supplier_id"}, searched)
+        monkeypatch, {"assembly_name", "product_id", "part_id", "supplier_id"}, searched
+    )
 
-    result = propose_relationship_constructions([
-        {"approved_file": "assemblies.csv", "proposed_relationship_type": "ASSEMBLY_OF",
-         "from_node_label": "Assembly", "from_node_column": "assembly_name",
-         "to_node_label": "Product", "to_node_column": "product_id",
-         "proposed_properties": []},
-        {"approved_file": "parts.csv", "proposed_relationship_type": "INCLUDED_IN",
-         "from_node_label": "Part", "from_node_column": "part_id",
-         "to_node_label": "Assembly", "to_node_column": "assembly_id",
-         "proposed_properties": []},
-        {"approved_file": "parts.csv", "proposed_relationship_type": "SUPPLIED_BY",
-         "from_node_label": "Part", "from_node_column": "part_id",
-         "to_node_label": "Supplier", "to_node_column": "supplier_id",
-         "proposed_properties": []},
-    ], ctx)
+    result = propose_relationship_constructions(
+        [
+            {
+                "approved_file": "assemblies.csv",
+                "proposed_relationship_type": "ASSEMBLY_OF",
+                "from_node_label": "Assembly",
+                "from_node_column": "assembly_name",
+                "to_node_label": "Product",
+                "to_node_column": "product_id",
+                "proposed_properties": [],
+            },
+            {
+                "approved_file": "parts.csv",
+                "proposed_relationship_type": "INCLUDED_IN",
+                "from_node_label": "Part",
+                "from_node_column": "part_id",
+                "to_node_label": "Assembly",
+                "to_node_column": "assembly_id",
+                "proposed_properties": [],
+            },
+            {
+                "approved_file": "parts.csv",
+                "proposed_relationship_type": "SUPPLIED_BY",
+                "from_node_label": "Part",
+                "from_node_column": "part_id",
+                "to_node_label": "Supplier",
+                "to_node_column": "supplier_id",
+                "proposed_properties": [],
+            },
+        ],
+        ctx,
+    )
 
     assert result["status"] == "error"
     assert "1" in result["error_message"], "the error must name the entry's index"
@@ -205,25 +301,41 @@ def test_propose_relationship_constructions_stops_at_the_first_failing_entry(ctx
 
     plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
     assert set(plan) == {"ASSEMBLY_OF"}, "entries before the failure stay in the plan"
-    assert "supplier_id" not in searched, "entries after the failure are never attempted"
+    assert "supplier_id" not in searched, (
+        "entries after the failure are never attempted"
+    )
 
 
 # --- consistency check ------------------------------------------------------
 
+
 def _drifted_plan():
     """The exact shape that was approved and built in the failing session."""
     return {
-        "Product": {"construction_type": "node", "source_file": "products.csv",
-                    "label": "Product", "unique_column_name": "product_id",
-                    "properties": ["product_name"]},
-        "Assembly": {"construction_type": "node", "source_file": "assemblies.csv",
-                     "label": "Assembly", "unique_column_name": "assembly_id",
-                     "properties": ["component_name", "quantity", "product_id"]},
-        "ASSEMBLY_OF": {"construction_type": "relationship", "source_file": "assemblies.csv",
-                        "relationship_type": "ASSEMBLY_OF",
-                        "from_node_label": "Assembly", "from_node_column": "assembly_name",
-                        "to_node_label": "Product", "to_node_column": "product_id",
-                        "properties": ["quantity"]},
+        "Product": {
+            "construction_type": "node",
+            "source_file": "products.csv",
+            "label": "Product",
+            "unique_column_name": "product_id",
+            "properties": ["product_name"],
+        },
+        "Assembly": {
+            "construction_type": "node",
+            "source_file": "assemblies.csv",
+            "label": "Assembly",
+            "unique_column_name": "assembly_id",
+            "properties": ["component_name", "quantity", "product_id"],
+        },
+        "ASSEMBLY_OF": {
+            "construction_type": "relationship",
+            "source_file": "assemblies.csv",
+            "relationship_type": "ASSEMBLY_OF",
+            "from_node_label": "Assembly",
+            "from_node_column": "assembly_name",
+            "to_node_label": "Product",
+            "to_node_column": "product_id",
+            "properties": ["quantity"],
+        },
     }
 
 
@@ -267,6 +379,7 @@ def test_consistency_check_ignores_non_dict_and_empty_plans():
 
 # --- approval gate ----------------------------------------------------------
 
+
 def test_approve_refuses_the_drifted_plan_and_does_not_record_it(ctx):
     ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _drifted_plan()
     result = approve_proposed_construction_plan(ctx)
@@ -284,7 +397,9 @@ def test_approve_records_a_consistent_plan(ctx):
     assert ctx.state[APPROVED_CONSTRUCTION_PLAN] == _consistent_plan()
 
 
-def test_approve_refuses_a_plan_whose_relationship_endpoint_has_no_node(ctx, any_column_exists):
+def test_approve_refuses_a_plan_whose_relationship_endpoint_has_no_node(
+    ctx, any_column_exists
+):
     """A dangling endpoint is refused, not just detected.
 
     A live session showed a revision presenting a node list that omitted a label a
@@ -311,12 +426,14 @@ def test_approve_refuses_when_there_is_no_proposed_plan(ctx):
 
 # Required values must be present
 
+
 def test_node_construction_without_a_label_is_refused(ctx, any_column_exists):
     """An absent label used to be stored as a plan entry keyed None with
     "label": None, which check_construction_plan_consistency accepts and which
     only surfaces much later at import time."""
     result = propose_node_constructions(
-        [{"approved_file": "products.csv", "unique_column_name": "product_id"}], ctx)
+        [{"approved_file": "products.csv", "unique_column_name": "product_id"}], ctx
+    )
     assert result["status"] == "error"
     assert "proposed_label" in result["error_message"]
     assert ctx.state.get(PROPOSED_CONSTRUCTION_PLAN, {}) == {}
@@ -330,11 +447,16 @@ def test_node_construction_names_every_missing_value(ctx, any_column_exists):
 
 
 def test_relationship_construction_without_endpoints_is_refused(ctx, any_column_exists):
-    result = propose_relationship_constructions([{
-        "approved_file": "products.csv",
-        "proposed_relationship_type": "HAS_PART",
-        "from_node_label": "Product",
-    }], ctx)
+    result = propose_relationship_constructions(
+        [
+            {
+                "approved_file": "products.csv",
+                "proposed_relationship_type": "HAS_PART",
+                "from_node_label": "Product",
+            }
+        ],
+        ctx,
+    )
     assert result["status"] == "error"
     for field in ("from_node_column", "to_node_label", "to_node_column"):
         assert field in result["error_message"]
@@ -349,19 +471,32 @@ def test_null_properties_are_stored_as_an_empty_list(ctx, any_column_exists):
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["properties"] == []
 
     propose_relationship_construction(
-        "products.csv", "HAS_PART", "Product", "product_id", "Part", "part_id", None, ctx)
+        "products.csv",
+        "HAS_PART",
+        "Product",
+        "product_id",
+        "Part",
+        "part_id",
+        None,
+        ctx,
+    )
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["HAS_PART"]["properties"] == []
 
 
 # --- property types ---------------------------------------------------------
 
+
 def test_node_construction_stores_property_types(ctx, any_column_exists):
     """Without this the model has nowhere to record a type and every property
     reaches the loader as a string -- the defect itself."""
     propose_node_construction(
-        "part_supplier_mapping.csv", "Part", "part_id",
-        ["unit_cost", "lead_time_days", "part_name"], ctx,
-        {"unit_cost": "float", "lead_time_days": "integer"})
+        "part_supplier_mapping.csv",
+        "Part",
+        "part_id",
+        ["unit_cost", "lead_time_days", "part_name"],
+        ctx,
+        {"unit_cost": "float", "lead_time_days": "integer"},
+    )
 
     rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Part"]
     assert rule["property_types"] == {"unit_cost": "float", "lead_time_days": "integer"}
@@ -370,47 +505,80 @@ def test_node_construction_stores_property_types(ctx, any_column_exists):
 
 def test_relationship_construction_stores_property_types(ctx, any_column_exists):
     propose_relationship_construction(
-        "part_supplier_mapping.csv", "SUPPLIED_BY", "Part", "part_id",
-        "Supplier", "supplier_id", ["unit_cost"], ctx, {"unit_cost": "float"})
+        "part_supplier_mapping.csv",
+        "SUPPLIED_BY",
+        "Part",
+        "part_id",
+        "Supplier",
+        "supplier_id",
+        ["unit_cost"],
+        ctx,
+        {"unit_cost": "float"},
+    )
 
     rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]
     assert rule["property_types"] == {"unit_cost": "float"}
 
 
 def test_batch_node_constructions_carry_property_types(ctx, any_column_exists):
-    propose_node_constructions([
-        {"approved_file": "products.csv", "proposed_label": "Product",
-         "unique_column_name": "product_id", "proposed_properties": ["price"],
-         "proposed_property_types": {"price": "float"}},
-    ], ctx)
+    propose_node_constructions(
+        [
+            {
+                "approved_file": "products.csv",
+                "proposed_label": "Product",
+                "unique_column_name": "product_id",
+                "proposed_properties": ["price"],
+                "proposed_property_types": {"price": "float"},
+            },
+        ],
+        ctx,
+    )
 
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {
-        "price": "float"}
+        "price": "float"
+    }
 
 
 def test_batch_relationship_constructions_carry_property_types(ctx, any_column_exists):
-    propose_relationship_constructions([
-        {"approved_file": "part_supplier_mapping.csv",
-         "proposed_relationship_type": "SUPPLIED_BY",
-         "from_node_label": "Part", "from_node_column": "part_id",
-         "to_node_label": "Supplier", "to_node_column": "supplier_id",
-         "proposed_properties": ["lead_time_days"],
-         "proposed_property_types": {"lead_time_days": "integer"}},
-    ], ctx)
+    propose_relationship_constructions(
+        [
+            {
+                "approved_file": "part_supplier_mapping.csv",
+                "proposed_relationship_type": "SUPPLIED_BY",
+                "from_node_label": "Part",
+                "from_node_column": "part_id",
+                "to_node_label": "Supplier",
+                "to_node_column": "supplier_id",
+                "proposed_properties": ["lead_time_days"],
+                "proposed_property_types": {"lead_time_days": "integer"},
+            },
+        ],
+        ctx,
+    )
 
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {
-        "lead_time_days": "integer"}
+        "lead_time_days": "integer"
+    }
 
 
 def test_null_property_types_are_stored_as_an_empty_dict(ctx, any_column_exists):
     """A model may send JSON null rather than omitting the field. Stored raw,
     that null would reach the loader as a plan key that reads as 'typed' and
     blow up on .items(); the plan must degrade to plain text properties instead."""
-    propose_node_construction("products.csv", "Product", "product_id",
-                              ["price"], ctx, None)
+    propose_node_construction(
+        "products.csv", "Product", "product_id", ["price"], ctx, None
+    )
     propose_relationship_construction(
-        "part_supplier_mapping.csv", "SUPPLIED_BY", "Part", "part_id",
-        "Supplier", "supplier_id", ["unit_cost"], ctx, None)
+        "part_supplier_mapping.csv",
+        "SUPPLIED_BY",
+        "Part",
+        "part_id",
+        "Supplier",
+        "supplier_id",
+        ["unit_cost"],
+        ctx,
+        None,
+    )
 
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Product"]["property_types"] == {}
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPPLIED_BY"]["property_types"] == {}
@@ -418,23 +586,37 @@ def test_null_property_types_are_stored_as_an_empty_dict(ctx, any_column_exists)
 
 # --- type consistency -------------------------------------------------------
 
+
 def _typed_plan(**overrides):
     """A minimal two-node, one-relationship plan; overrides patch one rule."""
     plan = {
-        "Part": {"construction_type": "node", "source_file": "parts.csv",
-                 "label": "Part", "unique_column_name": "part_id",
-                 "properties": ["unit_cost", "part_name"],
-                 "property_types": {"unit_cost": "float"}},
-        "Supplier": {"construction_type": "node", "source_file": "suppliers.csv",
-                     "label": "Supplier", "unique_column_name": "supplier_id",
-                     "properties": ["name"], "property_types": {}},
-        "SUPPLIED_BY": {"construction_type": "relationship",
-                        "source_file": "part_supplier_mapping.csv",
-                        "relationship_type": "SUPPLIED_BY",
-                        "from_node_label": "Part", "from_node_column": "part_id",
-                        "to_node_label": "Supplier", "to_node_column": "supplier_id",
-                        "properties": ["lead_time_days"],
-                        "property_types": {"lead_time_days": "integer"}},
+        "Part": {
+            "construction_type": "node",
+            "source_file": "parts.csv",
+            "label": "Part",
+            "unique_column_name": "part_id",
+            "properties": ["unit_cost", "part_name"],
+            "property_types": {"unit_cost": "float"},
+        },
+        "Supplier": {
+            "construction_type": "node",
+            "source_file": "suppliers.csv",
+            "label": "Supplier",
+            "unique_column_name": "supplier_id",
+            "properties": ["name"],
+            "property_types": {},
+        },
+        "SUPPLIED_BY": {
+            "construction_type": "relationship",
+            "source_file": "part_supplier_mapping.csv",
+            "relationship_type": "SUPPLIED_BY",
+            "from_node_label": "Part",
+            "from_node_column": "part_id",
+            "to_node_label": "Supplier",
+            "to_node_column": "supplier_id",
+            "properties": ["lead_time_days"],
+            "property_types": {"lead_time_days": "integer"},
+        },
     }
     for key, rule in overrides.items():
         plan[key] = rule
@@ -495,7 +677,9 @@ def test_a_relationship_typing_its_own_join_column_is_refused():
     plan = _typed_plan()
     plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "part_id"]
     plan["SUPPLIED_BY"]["property_types"] = {
-        "lead_time_days": "integer", "part_id": "integer"}
+        "lead_time_days": "integer",
+        "part_id": "integer",
+    }
 
     problems = check_construction_plan_consistency(plan)
     joined = " ".join(problems)
@@ -516,7 +700,9 @@ def test_a_relationship_typing_its_own_join_column_with_an_unresolved_endpoint_l
     del plan["Supplier"]
     plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_id"]
     plan["SUPPLIED_BY"]["property_types"] = {
-        "lead_time_days": "integer", "supplier_id": "integer"}
+        "lead_time_days": "integer",
+        "supplier_id": "integer",
+    }
 
     problems = check_construction_plan_consistency(plan)
     joined = " ".join(problems)

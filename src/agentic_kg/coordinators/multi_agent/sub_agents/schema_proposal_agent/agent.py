@@ -1,26 +1,28 @@
-from google.adk.agents import LoopAgent, LlmAgent, BaseAgent
-from google.adk.agents.invocation_context import InvocationContext
-from google.adk.agents.callback_context import CallbackContext
-
-from google.adk.tools import agent_tool
-
 from typing import AsyncGenerator, Optional
+
+from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
+from google.adk.tools import agent_tool
 from google.genai import types
 
-from agentic_kg.common.llm_catalog import get_llm, LlmKind
-from agentic_kg.tools.construction_plan_tools import (
-    get_proposed_construction_plan, 
-    approve_proposed_construction_plan,
-)
-from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.common.llm_catalog import LlmKind, get_llm
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.tools.construction_plan_tools import (
+    approve_proposed_construction_plan,
+    get_proposed_construction_plan,
+)
 
 finished = make_finished(MULTI_AGENT_COORDINATOR)
 
 from .variants import variants
 
-def prepare_refinement_loop_invocation(callback_context: CallbackContext) -> Optional[types.Content]:
+
+def prepare_refinement_loop_invocation(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
     """Runs once per schema_refinement_loop invocation (never mid-loop, since
     this is attached to refinement_loop itself, not to schema_proposal_agent
     -- a LoopAgent's own before_agent_callback fires once per call to
@@ -46,12 +48,16 @@ def prepare_refinement_loop_invocation(callback_context: CallbackContext) -> Opt
         last_feedback = callback_context.state.get("feedback", "")
         return types.Content(
             role="model",
-            parts=[types.Part(text=(
-                "stopped: schema_refinement_loop already ran once this turn "
-                f"(last verdict: {last_feedback}). Do not call it again this "
-                "turn -- call get_proposed_construction_plan and present that "
-                "plan together with the verdict above, and let the user decide."
-            ))],
+            parts=[
+                types.Part(
+                    text=(
+                        "stopped: schema_refinement_loop already ran once this turn "
+                        f"(last verdict: {last_feedback}). Do not call it again this "
+                        "turn -- call get_proposed_construction_plan and present that "
+                        "plan together with the verdict above, and let the user decide."
+                    )
+                )
+            ],
         )
     callback_context.state["feedback"] = ""
     return None
@@ -67,27 +73,31 @@ def initialize_schema_and_construction_plan(callback_context: CallbackContext) -
     callback_context.state["proposed_schema"] = ""
     callback_context.state["proposed_construction_plan"] = []
 
+
 AGENT_NAME = "schema_proposal_agent_v1"
 schema_proposal_agent = LlmAgent(
     name=AGENT_NAME,
     description="Proposes a knowledge graph schema based on the user goal and approved file list",
     model=get_llm(LlmKind.reasoning),
     instruction=variants[AGENT_NAME]["instruction"],
-    tools=variants[AGENT_NAME]["tools"], 
+    tools=variants[AGENT_NAME]["tools"],
 )
-    
+
 CRITIC_NAME = "schema_critic_agent_v1"
 schema_critic_agent = LlmAgent(
     name=CRITIC_NAME,
     description="Criticizes the proposed construction plan for relevance and correctness.",
     model=get_llm(LlmKind.reasoning),
     instruction=variants[CRITIC_NAME]["instruction"],
-    tools=variants[CRITIC_NAME]["tools"], 
-    output_key="feedback"
+    tools=variants[CRITIC_NAME]["tools"],
+    output_key="feedback",
 )
 
+
 class CheckStatusAndEscalate(BaseAgent):
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
         feedback = ctx.session.state.get("feedback", "valid")
         # Only the leading *word* decides the route: the critic may append a
         # "Warnings:" section to a 'valid' verdict for data-quality issues that
@@ -117,10 +127,14 @@ class CheckStatusAndEscalate(BaseAgent):
         # false for every result the loop can return. An absent verdict means
         # the critic did not answer, not that it found problems, so point the
         # coordinator at the plan rather than at another blind re-run.
-        summary = text if text else (
-            "retry: the critic produced no verdict. Call "
-            "'get_proposed_construction_plan' and judge the plan yourself rather "
-            "than running the loop again on no feedback."
+        summary = (
+            text
+            if text
+            else (
+                "retry: the critic produced no verdict. Call "
+                "'get_proposed_construction_plan' and judge the plan yourself rather "
+                "than running the loop again on no feedback."
+            )
         )
         yield Event(
             author=self.name,
@@ -128,11 +142,16 @@ class CheckStatusAndEscalate(BaseAgent):
             actions=EventActions(escalate=should_stop),
         )
 
+
 refinement_loop = LoopAgent(
     name="schema_refinement_loop",
     description="Analyzes approved files to propose a graph construction plan based on user intent and feedback",
     max_iterations=2,
-    sub_agents=[schema_proposal_agent, schema_critic_agent, CheckStatusAndEscalate(name="StopChecker")],
+    sub_agents=[
+        schema_proposal_agent,
+        schema_critic_agent,
+        CheckStatusAndEscalate(name="StopChecker"),
+    ],
     before_agent_callback=prepare_refinement_loop_invocation,
     # before_agent_callback=initialize_schema_and_construction_plan
 )
@@ -195,9 +214,10 @@ root_agent = LlmAgent(
       again. Never tell the user the schema is approved unless that tool returned success.
     - Finally, use the 'finished' tool to signal that schema proposal is complete and construction can begin
     """,
-    tools=[agent_tool.AgentTool(refinement_loop), 
-        get_proposed_construction_plan, 
+    tools=[
+        agent_tool.AgentTool(refinement_loop),
+        get_proposed_construction_plan,
         approve_proposed_construction_plan,
-        finished
-    ]
+        finished,
+    ],
 )

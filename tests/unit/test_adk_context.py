@@ -6,6 +6,7 @@ than asserting on our copy of the sentinel string: asserting our constant
 equals our constant proves nothing. google-adk is pinned >=1.10,<2, so a
 routine `uv sync` can change that wording; this test is what notices.
 """
+
 from google.adk.events.event import Event
 from google.adk.flows.llm_flows.contents import _convert_foreign_event
 from google.adk.models.llm_request import LlmRequest
@@ -36,8 +37,11 @@ def _human_turn():
 
 
 def test_drops_content_carrying_the_sentinel():
-    foreign = _content("user", types.Part(text=FOREIGN_CONTEXT_SENTINEL),
-                       types.Part(text="[other_agent] said: 4 suppliers are orphaned"))
+    foreign = _content(
+        "user",
+        types.Part(text=FOREIGN_CONTEXT_SENTINEL),
+        types.Part(text="[other_agent] said: 4 suppliers are orphaned"),
+    )
     human = _human_turn()
     req = _request(foreign, human)
     drop_foreign_context(None, req)
@@ -53,8 +57,11 @@ def test_all_foreign_request_is_left_unfiltered_rather_than_emptied():
     lesser harm. Unreachable through the coordinator, where a real user turn
     always survives; this is a guard, not a live path.
     """
-    foreign = _content("user", types.Part(text=FOREIGN_CONTEXT_SENTINEL),
-                       types.Part(text="[other_agent] said: anything"))
+    foreign = _content(
+        "user",
+        types.Part(text=FOREIGN_CONTEXT_SENTINEL),
+        types.Part(text="[other_agent] said: anything"),
+    )
     req = _request(foreign)
     drop_foreign_context(None, req)
     assert req.contents == [foreign], "an empty contents must never be sent"
@@ -69,10 +76,22 @@ def test_keeps_real_user_message():
 
 def test_keeps_own_model_turn_and_tool_parts():
     said = _content("model", types.Part(text="let me check the schema"))
-    call = _content("model", types.Part(
-        function_call=types.FunctionCall(name="read_neo4j_cypher", args={"query": "MATCH (n) RETURN n"})))
-    resp = _content("user", types.Part(
-        function_response=types.FunctionResponse(name="read_neo4j_cypher", response={"status": "success"})))
+    call = _content(
+        "model",
+        types.Part(
+            function_call=types.FunctionCall(
+                name="read_neo4j_cypher", args={"query": "MATCH (n) RETURN n"}
+            )
+        ),
+    )
+    resp = _content(
+        "user",
+        types.Part(
+            function_response=types.FunctionResponse(
+                name="read_neo4j_cypher", response={"status": "success"}
+            )
+        ),
+    )
     req = _request(said, call, resp)
     drop_foreign_context(None, req)
     assert req.contents == [said, call, resp]
@@ -80,8 +99,11 @@ def test_keeps_own_model_turn_and_tool_parts():
 
 def test_drops_only_the_foreign_content_from_a_mixed_history():
     human = _content("user", types.Part(text="hello"))
-    foreign = _content("user", types.Part(text=FOREIGN_CONTEXT_SENTINEL),
-                       types.Part(text="[x] said: hi"))
+    foreign = _content(
+        "user",
+        types.Part(text=FOREIGN_CONTEXT_SENTINEL),
+        types.Part(text="[x] said: hi"),
+    )
     own = _content("model", types.Part(text="hi back"))
     req = _request(human, foreign, own)
     drop_foreign_context(None, req)

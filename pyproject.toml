@@ -36,6 +36,7 @@ build-backend = "uv_build"
 dev = [
     "ipykernel>=6.30.1",
     "pytest>=8.2.0",
+    "ruff>=0.16.2",
     "testcontainers>=4.7.2",
 ]
 
@@ -46,3 +47,26 @@ testpaths = ["tests"]
 markers = [
     "integration: mark tests that require external services such as Docker/Neo4j",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+# Pinned explicitly rather than left as the implicit default: this Ruff version's actual
+# built-in default already covers many more categories (pyupgrade, bugbear, pylint-refactor,
+# ruff-specific...) than the classic E4/E7/E9/F baseline, and several of those require real
+# code changes rather than a mechanical fix. `select` (not `extend-select`) replaces that
+# broader default outright, keeping this first pass to auto-fixable style/import issues only.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Deliberate late imports: env validation / a module-level DB singleton must run
+# before importing sibling modules that depend on it having already run.
+"src/agentic_kg/coordinators/multi_agent/agent.py" = ["E402"]
+"src/agentic_kg/coordinators/multi_agent/sub_agents/schema_proposal_agent/agent.py" = ["E402"]
+"src/agentic_kg/coordinators/single_agent/agent.py" = ["E402"]
+"src/agentic_kg/tools/construction_plan_tools.py" = ["E402"]
+"tests/unit/test_cypher_tools.py" = ["E402"]
+"tests/unit/test_graph_profile.py" = ["E402"]
+"tests/unit/test_neo4j_for_adk.py" = ["E402"]

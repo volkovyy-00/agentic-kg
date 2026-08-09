@@ -7,42 +7,44 @@ These tests cover the mechanism only -- whether the model actually stays and
 invites the next question is not unit-testable and is verified by hand (see
 PR #9's description for the verification steps).
 """
-import inspect
 
 import asyncio
+import inspect
 
 import pytest
-from google.genai import types
 from google.adk.agents import Agent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
+from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.common.tool_result import is_error, is_success
+
 # Imported for the side effect of building the real agent tree: this parents
 # graphrag_agent under full_workflow_agent, which is what makes ADK actually
 # inject transfer_to_agent into it. Without this import, graphrag_agent has no
 # parent/peers at test time and every "transfer_to_agent is absent" assertion
 # below would pass vacuously regardless of whether the strip callback works.
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
-from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import agent as graphrag_module
-
-from agentic_kg.common.tool_result import is_error, is_success
-from agentic_kg.tools.graphrag_handoff_tools import (
-    GRAPHRAG_HANDOFF_CONFIRMED_KEY,
-    confirm_graphrag_handoff,
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import (
+    agent as graphrag_module,
 )
-from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import (
+    graphrag_agent,
+    reset_graphrag_handoff_confirmation,
+)
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
     _transfer_to_coordinator,
     finished,
     variants,
 )
-from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import (
-    graphrag_agent,
-    reset_graphrag_handoff_confirmation,
+from agentic_kg.tools.graphrag_handoff_tools import (
+    GRAPHRAG_HANDOFF_CONFIRMED_KEY,
+    confirm_graphrag_handoff,
 )
 
 
@@ -53,6 +55,7 @@ class CapturingLlm(BaseLlm):
     tests/unit/fakes.py deliberately does not centralize fakes of this kind.
     Do not extract it.
     """
+
     responses: list = Field(default_factory=list)
     requests: list = Field(default_factory=list)
     call_count: int = 0
@@ -65,19 +68,28 @@ class CapturingLlm(BaseLlm):
 
 
 def _text(text):
-    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=text)])
+    )
 
 
 def _call(name, args=None):
-    return LlmResponse(content=types.Content(role="model", parts=[
-        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
-    ]))
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(name=name, args=args or {})
+                ),
+            ],
+        )
+    )
 
 
 def _declaration_names(request):
     names = []
-    for tool in (request.config.tools or []):
-        for declaration in (getattr(tool, "function_declarations", None) or []):
+    for tool in request.config.tools or []:
+        for declaration in getattr(tool, "function_declarations", None) or []:
             names.append(declaration.name)
     return names
 
@@ -86,11 +98,14 @@ async def _run_one_turn(agent, app_name, message="hello"):
     """Drive one real user turn through ADK and return the events it produced."""
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
-        app_name=app_name, user_id="u1",
+        app_name=app_name,
+        user_id="u1",
     )
     return [
-        event async for event in runner.run_async(
-            user_id="u1", session_id=session.id,
+        event
+        async for event in runner.run_async(
+            user_id="u1",
+            session_id=session.id,
             new_message=types.Content(role="user", parts=[types.Part(text=message)]),
         )
     ]
@@ -229,9 +244,7 @@ def test_reset_parameter_is_named_callback_context():
     """Catches a rename. ADK invokes these callbacks by keyword
     (base_agent.py:385-387), so a different parameter name fails at request
     time with a TypeError rather than at import."""
-    parameters = list(
-        inspect.signature(reset_graphrag_handoff_confirmation).parameters
-    )
+    parameters = list(inspect.signature(reset_graphrag_handoff_confirmation).parameters)
     assert parameters == ["callback_context"]
 
 
@@ -301,9 +314,14 @@ def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
     sub-agent with a parent or peers, and it does not consult this agent's
     handoff gate. Asserting on what reached the model is the only way to know
     it is gone."""
-    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("what would you like to know?")],
-    ))
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("what would you like to know?")],
+        ),
+    )
     asyncio.run(_run_one_turn(graphrag_agent, "graphrag_door_test"))
 
     requests = graphrag_agent.model.requests
@@ -317,9 +335,14 @@ def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
 
 def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     """Catches an over-broad strip that empties config.tools."""
-    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("what would you like to know?")],
-    ))
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("what would you like to know?")],
+        ),
+    )
     asyncio.run(_run_one_turn(graphrag_agent, "graphrag_tools_survive_test"))
 
     names = _declaration_names(graphrag_agent.model.requests[0])
@@ -332,10 +355,16 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
     """Pins what happens if a model emits the call from memory of an earlier
     turn. The strip pops it from tools_dict, so ADK raises
     (functions.py:565-568) rather than silently transferring."""
-    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[_call("transfer_to_agent", {"agent_name": MULTI_AGENT_COORDINATOR})],
-    ))
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("transfer_to_agent", {"agent_name": MULTI_AGENT_COORDINATOR})
+            ],
+        ),
+    )
     with pytest.raises(ValueError, match="transfer_to_agent"):
         asyncio.run(_run_one_turn(graphrag_agent, "graphrag_hard_error_test"))
 
@@ -389,22 +418,34 @@ def test_a_confirmed_handoff_still_reaches_the_coordinator(monkeypatch):
     (base_llm_flow.py:536-542), so the coordinator's real model would
     otherwise be invoked for real.
     """
-    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[
-            _call("confirm_graphrag_handoff"),
-            _call("finished"),
-            _text("handing you back to the coordinator"),
-        ],
-    ))
-    monkeypatch.setattr(full_workflow_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("coordinator speaking")],
-    ))
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("confirm_graphrag_handoff"),
+                _call("finished"),
+                _text("handing you back to the coordinator"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        full_workflow_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("coordinator speaking")],
+        ),
+    )
 
-    events = asyncio.run(_run_one_turn(
-        graphrag_agent, "graphrag_handoff_test",
-        message="that's everything, thanks",
-    ))
+    events = asyncio.run(
+        _run_one_turn(
+            graphrag_agent,
+            "graphrag_handoff_test",
+            message="that's everything, thanks",
+        )
+    )
 
     authors = [event.author for event in events]
     assert MULTI_AGENT_COORDINATOR in authors, (

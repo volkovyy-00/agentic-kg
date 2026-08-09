@@ -1,25 +1,24 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the cypher agent.
 These instructions guide the agent's behavior, workflow, and tool usage.
 """
-from agentic_kg.tools.cypher_tools import (
-    neo4j_is_ready, 
-    get_physical_schema, 
-    read_neo4j_cypher,
-    write_neo4j_cypher,
-    reset_neo4j_data,
-    create_uniqueness_constraint,
-    merge_node_into_graph
-)
-from agentic_kg.tools.adk_tools import make_finished
+
 from agentic_kg.common.agent_names import SINGLE_AGENT_COORDINATOR
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.tools.cypher_tools import (
+    create_uniqueness_constraint,
+    get_physical_schema,
+    merge_node_into_graph,
+    neo4j_is_ready,
+    read_neo4j_cypher,
+    reset_neo4j_data,
+    write_neo4j_cypher,
+)
 
 finished = make_finished(SINGLE_AGENT_COORDINATOR)
 
 variants = {
-
     # cypher_agent_v1
     # first version as a sub-agent, lacking any approval workflow so may go a bit wild
     "cypher_agent_v1": {
@@ -36,16 +35,15 @@ variants = {
         For any other user interactions, use the finished tool to defer back to a parent.
         """,
         "tools": [
-            neo4j_is_ready, 
+            neo4j_is_ready,
             reset_neo4j_data,
-            get_physical_schema, 
+            get_physical_schema,
             read_neo4j_cypher,
             write_neo4j_cypher,
             create_uniqueness_constraint,
-            finished
-        ]
+            finished,
+        ],
     },
-
     # cypher_agent_v2
     # second version, with approval workflow for a collaborative workflow
     # benefits:
@@ -79,14 +77,14 @@ variants = {
         For any other user interactions, use the finished tool to defer back to a parent.
     """,
         "tools": [
-            neo4j_is_ready, 
+            neo4j_is_ready,
             reset_neo4j_data,
-            get_physical_schema, 
+            get_physical_schema,
             read_neo4j_cypher,
             write_neo4j_cypher,
             create_uniqueness_constraint,
             merge_node_into_graph,
-            finished
-        ]
-    }
+            finished,
+        ],
+    },
 }

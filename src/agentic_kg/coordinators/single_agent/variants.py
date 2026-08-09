@@ -1,4 +1,3 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the root agent.
@@ -24,6 +23,6 @@ variants = {
         2. design a graph schema that would be relevant for the user goal
         3. delegate to the cypher_agent to create the graph and query the database
         """,
-        "tools": []
+        "tools": [],
     }
 }

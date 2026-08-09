@@ -1,8 +1,11 @@
 import logging
 from typing import Optional
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from agentic_kg.common.pydantic_neo4j import Neo4jDsn
+
 
 class agentic_kgSettings(BaseSettings):
     """Application configuration loaded from environment variables or .env file."""
@@ -32,9 +35,11 @@ class agentic_kgSettings(BaseSettings):
         extra="ignore",
     )
 
+
 # Global settings instance
 _settings: Optional[agentic_kgSettings] = None
 logger = logging.getLogger(__name__)
+
 
 def get_settings() -> agentic_kgSettings:
     """Get the application settings singleton, loading and initializing if necessary."""

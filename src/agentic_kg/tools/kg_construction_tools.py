@@ -10,18 +10,25 @@ Cypher dynamic labels: dynamic labels plan as Merge instead of
 MergeUniqueNode, so they cannot use the uniqueness index and every row
 triggers an all-nodes scan.
 """
+
 import logging
 from itertools import chain
-
-from google.adk.tools import ToolContext
 from typing import Any, Dict, List, Optional
 
+from google.adk.tools import ToolContext
+
 from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked as _checked
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier
+from agentic_kg.common.cypher_identifiers import checked as _checked
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import (
-    BLANK, CONVERTED, MAJORITY_SHARE, UNCONVERTIBLE, coerce)
+    BLANK,
+    CONVERTED,
+    MAJORITY_SHARE,
+    UNCONVERTIBLE,
+    coerce,
+)
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
 
 logger = logging.getLogger(__name__)
@@ -231,22 +238,30 @@ def _type_failure(tallies, totals, property_types, source_file, rows_committed):
         batch_present = tally[CONVERTED] + tally[UNCONVERTIBLE]
         total_present = running[CONVERTED] + running[UNCONVERTIBLE]
 
-        by_batch = (batch_present >= TYPE_FAILURE_MIN_SAMPLE
-                    and tally[UNCONVERTIBLE] > batch_present * TYPE_FAILURE_LIMIT)
-        by_total = (total_present >= TYPE_FAILURE_MIN_SAMPLE
-                    and running[UNCONVERTIBLE] > total_present * TYPE_FAILURE_LIMIT)
+        by_batch = (
+            batch_present >= TYPE_FAILURE_MIN_SAMPLE
+            and tally[UNCONVERTIBLE] > batch_present * TYPE_FAILURE_LIMIT
+        )
+        by_total = (
+            total_present >= TYPE_FAILURE_MIN_SAMPLE
+            and running[UNCONVERTIBLE] > total_present * TYPE_FAILURE_LIMIT
+        )
         if not (by_batch or by_total):
             continue
 
         examples = ", ".join(repr(example) for example in running["examples"])
         if by_batch:
-            counted = (f"{tally[UNCONVERTIBLE]} of {batch_present} non-blank "
-                       f"values in this batch")
+            counted = (
+                f"{tally[UNCONVERTIBLE]} of {batch_present} non-blank "
+                f"values in this batch"
+            )
         else:
             # "read so far", not "in this file": the rest of the file is unread.
-            counted = (f"{running[UNCONVERTIBLE]} of {total_present} non-blank "
-                       f"values read so far ({tally[UNCONVERTIBLE]} of "
-                       f"{batch_present} in the batch just read)")
+            counted = (
+                f"{running[UNCONVERTIBLE]} of {total_present} non-blank "
+                f"values read so far ({tally[UNCONVERTIBLE]} of "
+                f"{batch_present} in the batch just read)"
+            )
         return (
             f"{source_file}: '{name}' is declared {property_types[name]} but "
             f"{counted} could not be read as one (e.g. {examples}). Load stopped "
@@ -273,7 +288,8 @@ def _type_warning(totals, property_types, source_file):
         examples = ", ".join(repr(example) for example in tally["examples"])
         parts.append(
             f"{source_file}: {tally[UNCONVERTIBLE]} value(s) of '{name}' could not "
-            f"be read as {property_types[name]} and were not stored (e.g. {examples})")
+            f"be read as {property_types[name]} and were not stored (e.g. {examples})"
+        )
     return "; ".join(parts)
 
 
@@ -297,7 +313,8 @@ def load_nodes_from_csv(
 
     property_types = property_types or {}
     untyped_properties, typed_properties, typed_types = _split_properties(
-        properties, property_types)
+        properties, property_types
+    )
 
     # Only set properties the row actually carries. read_csv_batches omits the
     # key for a row shorter than the header, and SET n[k] = null *removes* the
@@ -334,7 +351,8 @@ def load_nodes_from_csv(
                 f"nodes by, so nothing was loaded. Available columns: {header}"
             )
         missing_typed = _missing_typed_columns_error(
-            typed_properties, header, source_file, label)
+            typed_properties, header, source_file, label
+        )
         if missing_typed is not None:
             return tool_error(missing_typed)
 
@@ -344,17 +362,21 @@ def load_nodes_from_csv(
             # and on a refusal the totals are discarded with the error anyway.
             _merge_tallies(totals, tallies)
             failure = _type_failure(
-                tallies, totals, typed_types, source_file, rows_committed)
+                tallies, totals, typed_types, source_file, rows_committed
+            )
             if failure is not None:
                 return tool_error(failure)
 
-            result = graphdb.send_query(query, {
-                "rows": rows,
-                "unique_column_name": unique_column_name,
-                "properties": untyped_properties,
-                "typed_properties": typed_properties,
-                "clear": CLEAR_SENTINEL,
-            })
+            result = graphdb.send_query(
+                query,
+                {
+                    "rows": rows,
+                    "unique_column_name": unique_column_name,
+                    "properties": untyped_properties,
+                    "typed_properties": typed_properties,
+                    "clear": CLEAR_SENTINEL,
+                },
+            )
             if result["status"] == "error":
                 return tool_error(
                     f"{source_file}: load failed after {rows_committed} rows committed "
@@ -438,10 +460,13 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     """Import relationships as defined by a relationship construction rule."""
     try:
         relationship_type = _checked(
-            "relationship type", relationship_construction["relationship_type"])
+            "relationship type", relationship_construction["relationship_type"]
+        )
         from_label = _checked("label", relationship_construction["from_node_label"])
         to_label = _checked("label", relationship_construction["to_node_label"])
-        from_column = _checked("column name", relationship_construction["from_node_column"])
+        from_column = _checked(
+            "column name", relationship_construction["from_node_column"]
+        )
         to_column = _checked("column name", relationship_construction["to_node_column"])
     except InvalidIdentifier as exc:
         return tool_error(str(exc))
@@ -451,7 +476,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # A rule proposed before types existed carries no such key at all.
     property_types = relationship_construction.get("property_types") or {}
     untyped_properties, typed_properties, typed_types = _split_properties(
-        properties, property_types)
+        properties, property_types
+    )
 
     # The join columns are NOT coerced: they are matched against whatever the
     # node loader stored, which is raw CSV text for identifiers. That is why a
@@ -492,7 +518,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                 f"Available columns: {header}"
             )
         missing_typed = _missing_typed_columns_error(
-            typed_properties, header, source_file, relationship_type)
+            typed_properties, header, source_file, relationship_type
+        )
         if missing_typed is not None:
             return tool_error(missing_typed)
 
@@ -502,18 +529,22 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             # and on a refusal the totals are discarded with the error anyway.
             _merge_tallies(totals, tallies)
             failure = _type_failure(
-                tallies, totals, typed_types, source_file, rows_committed)
+                tallies, totals, typed_types, source_file, rows_committed
+            )
             if failure is not None:
                 return tool_error(failure)
 
-            result = graphdb.send_query(query, {
-                "rows": rows,
-                "from_node_column": from_column,
-                "to_node_column": to_column,
-                "properties": untyped_properties,
-                "typed_properties": typed_properties,
-                "clear": CLEAR_SENTINEL,
-            })
+            result = graphdb.send_query(
+                query,
+                {
+                    "rows": rows,
+                    "from_node_column": from_column,
+                    "to_node_column": to_column,
+                    "properties": untyped_properties,
+                    "typed_properties": typed_properties,
+                    "clear": CLEAR_SENTINEL,
+                },
+            )
             if result["status"] == "error":
                 return tool_error(
                     f"{source_file}: load failed after {rows_committed} rows committed "
@@ -546,7 +577,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # idempotent-re-run property above is kept. count() over a relationship
     # type is a count-store lookup, not a scan, so this is cheap per type.
     counted = _count_in_graph(
-        f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) AS count")
+        f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) AS count"
+    )
     if counted is not None:
         loaded["relationships_in_graph"] = counted
 
@@ -585,8 +617,10 @@ def _loaded_summary(key: str, loaded: dict) -> str:
     the number most likely to be repeated verbatim to the user — it must not
     say "rows" where the user will hear "nodes".
     """
-    for field, noun in (("nodes_in_graph", "nodes"),
-                        ("relationships_in_graph", "relationships")):
+    for field, noun in (
+        ("nodes_in_graph", "nodes"),
+        ("relationships_in_graph", "relationships"),
+    ):
         if loaded.get(field) is not None:
             # "from N rows" would claim this load produced that many nodes,
             # but the count is label-wide (see _count_in_graph) and can
@@ -611,20 +645,28 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
     # .get() here, and catching KeyError per rule below, keeps a malformed
     # rule from raising an unhandled KeyError into ADK instead of reporting
     # a tool_error.
-    node_rules = [rule for rule in construction_plan.values()
-                  if rule.get("construction_type") == "node"]
+    node_rules = [
+        rule
+        for rule in construction_plan.values()
+        if rule.get("construction_type") == "node"
+    ]
     for rule in node_rules:
         key = rule.get("label", rule.get("source_file", "?"))
         try:
             result = import_nodes(rule)
         except KeyError as exc:
-            result = tool_error(f"{key}: node construction rule is missing required key {exc}")
+            result = tool_error(
+                f"{key}: node construction rule is missing required key {exc}"
+            )
         outcomes[key] = result
         if result["status"] == "error":
             failures.append(f"{key}: {result['error_message']}")
 
-    relationship_rules = [rule for rule in construction_plan.values()
-                          if rule.get("construction_type") == "relationship"]
+    relationship_rules = [
+        rule
+        for rule in construction_plan.values()
+        if rule.get("construction_type") == "relationship"
+    ]
     for rule in relationship_rules:
         key = rule.get("relationship_type", rule.get("source_file", "?"))
         try:

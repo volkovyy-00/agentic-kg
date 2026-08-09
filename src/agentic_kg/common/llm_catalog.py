@@ -1,9 +1,8 @@
+import logging
 from enum import Enum
 
-import logging
-
-from google.adk.models.lite_llm import LiteLlm
 import litellm
+from google.adk.models.lite_llm import LiteLlm
 
 from .config import get_settings
 
@@ -11,14 +10,14 @@ logger = logging.getLogger(__name__)
 
 litellm.log_raw_request_response = False
 litellm.suppress_debug_info = True
-litellm.turn_off_message_logging=True
+litellm.turn_off_message_logging = True
 litellm.logging = False
 litellm._logging._disable_debugging()
 
 
 class LlmKind(str, Enum):
-    reasoning = 'reasoning'
-    conversational = 'conversational'
+    reasoning = "reasoning"
+    conversational = "conversational"
 
 
 _OPENROUTER_PREFIX = "openrouter/"

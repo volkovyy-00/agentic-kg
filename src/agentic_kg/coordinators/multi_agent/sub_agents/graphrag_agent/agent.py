@@ -1,9 +1,8 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
-
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
-from agentic_kg.common.llm_catalog import get_llm, LlmKind
+from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED_KEY
 
 from .variants import variants
@@ -43,7 +42,7 @@ graphrag_agent = Agent(
     # better information alone fixes the framing errors. Changing information
     # and model together would make the result uninterpretable.
     model=get_llm(LlmKind.conversational),
-    description="Information retrieval from a knowledge graph using a range of query tools.", # Crucial for delegation later
+    description="Information retrieval from a knowledge graph using a range of query tools.",  # Crucial for delegation later
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
     # v2 holds two model callbacks: drop_foreign_context (from the variant

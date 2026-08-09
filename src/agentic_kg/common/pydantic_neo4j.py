@@ -1,29 +1,23 @@
-from pydantic import AnyUrl, BaseModel, field_validator, computed_field
+from pydantic import AnyUrl, BaseModel, computed_field, field_validator
+
 
 class Neo4jDsn(AnyUrl):
-    allowed_schemes = {
-        'neo4j',
-        'neo4j+s', 
-        'neo4j+ssc', 
-        'bolt', 
-        'bolt+s', 
-        'bolt+ssc'
-    }
-    user_required = False # assume "neo4j" if not provided
+    allowed_schemes = {"neo4j", "neo4j+s", "neo4j+ssc", "bolt", "bolt+s", "bolt+ssc"}
+    user_required = False  # assume "neo4j" if not provided
 
 
 class Neo4jConfig(BaseModel):
     dsn: Neo4jDsn
-    
+
     # validators
-    @field_validator('dsn')
+    @field_validator("dsn")
     @classmethod
     def validate_dsn(cls, v: Neo4jDsn) -> Neo4jDsn:
         """Ensure DSN includes both a scheme and a host."""
-        if not getattr(v, 'scheme', None) or not getattr(v, 'host', None):
-            raise ValueError('DSN must include both a scheme and a host')
+        if not getattr(v, "scheme", None) or not getattr(v, "host", None):
+            raise ValueError("DSN must include both a scheme and a host")
         # Enforce allowed schemes explicitly to guard against AnyUrl accepting others
-        allowed = getattr(Neo4jDsn, 'allowed_schemes', None)
+        allowed = getattr(Neo4jDsn, "allowed_schemes", None)
         if allowed and v.scheme not in allowed:
             raise ValueError(f"Invalid scheme '{v.scheme}'. Allowed: {sorted(allowed)}")
         return v
@@ -57,8 +51,8 @@ class Neo4jConfig(BaseModel):
     @computed_field
     @property
     def database(self) -> str:
-        path = (self.dsn.path or '').lstrip('/')
-        path_db = path.split('/', 1)[0] if path else None
+        path = (self.dsn.path or "").lstrip("/")
+        path_db = path.split("/", 1)[0] if path else None
         return path_db or "neo4j"
 
     @computed_field
@@ -78,4 +72,3 @@ class Neo4jConfig(BaseModel):
         """
         # Use computed accessors to centralize defaults/derivations
         return {"uri": self.uri, "auth": self.auth}
-    

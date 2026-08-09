@@ -1,7 +1,6 @@
-from google.adk.agents import Agent, SequentialAgent, LoopAgent
+from google.adk.agents import Agent
 
-
-from agentic_kg.common.llm_catalog import get_llm, LlmKind
+from agentic_kg.common.llm_catalog import LlmKind, get_llm
 
 from .variants import variants
 
@@ -11,7 +10,7 @@ file_suggestion_agent = Agent(
     description="Helps the user select files to import.",
     model=get_llm(LlmKind.conversational),
     instruction=variants[AGENT_NAME]["instruction"],
-    tools=variants[AGENT_NAME]["tools"]
+    tools=variants[AGENT_NAME]["tools"],
 )
 
 root_agent = file_suggestion_agent

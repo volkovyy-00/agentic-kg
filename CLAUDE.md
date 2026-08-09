@@ -96,7 +96,7 @@ uv run pytest -q -m integration
   APOC-only (`apoc.meta.data`/`apoc.meta.graph`), and a stock `neo4j:5` image doesn't have it.
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
-- No linter/formatter is configured in this project.
+- Ruff lints and formats (`ruff check`, `ruff format`); config is `pyproject.toml`'s `[tool.ruff]`.
 - Only one remote is configured (`origin`). GitHub still shows this repo as forked from
   `neo4j-contrib/agentic-kg`, but there's no local `upstream` remote to resolve against, so `gh` no longer
   needs an explicit `--repo` flag.

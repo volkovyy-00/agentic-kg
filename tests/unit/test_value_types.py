@@ -3,10 +3,22 @@
 This module is where correctness lives for KG-7: every other piece is wiring.
 It needs no database and no source files.
 """
+
 from agentic_kg.common.value_types import (
-    BARE_NUMERIC, BLANK, BOOLEAN, BOOLEAN_LIKE, CONVERTED, FLOAT, INTEGER,
-    NUMERIC_AFTER_CLEANING, TEXT, UNCONVERTIBLE, classify, coerce,
-    has_fractional_part, is_blank,
+    BARE_NUMERIC,
+    BLANK,
+    BOOLEAN,
+    BOOLEAN_LIKE,
+    CONVERTED,
+    FLOAT,
+    INTEGER,
+    NUMERIC_AFTER_CLEANING,
+    TEXT,
+    UNCONVERTIBLE,
+    classify,
+    coerce,
+    has_fractional_part,
+    is_blank,
 )
 
 
@@ -110,6 +122,7 @@ def test_is_blank():
 
 
 # --- defects found by the pre-merge audit ------------------------------------
+
 
 def test_coerce_accepts_a_negative_with_the_sign_before_the_currency_symbol():
     """'-$42.00' is what Excel and most ERP exports emit; '$-42.00' is what a
