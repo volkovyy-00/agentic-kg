@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Ruff for linting and formatting (#15)**: `ruff check` / `ruff format --check` now cover `src/` and
   `tests/`; config lives in `pyproject.toml`'s `[tool.ruff]`. Dev-only — no user-facing behavior change.
 
+### Changed
+- **PRs now merge with a real merge commit, not squash (#16)**: enforced at the GitHub-settings level;
+  every commit on a branch now lands in `main`'s history as-is. See `CONTRIBUTING.md`.
+
 ### Removed
 - **Local `upstream` git remote (#14)**: this clone is local-only now. GitHub still shows the repo as
   forked from `neo4j-contrib/agentic-kg`; there's just no local remote to sync from anymore.
