@@ -51,6 +51,8 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
         approved_file: The approved file to propose a node construction for
         proposed_label: The proposed label for constructed nodes (used as key in the construction plan)
         unique_column_name: The name of the column that will be used to uniquely identify constructed nodes
+        proposed_properties: The columns of the approved file to store on each
+            constructed node
         proposed_property_types: Optional map of property name to "integer",
             "float" or "boolean". Omit or pass {} to store every property as text.
 
@@ -175,18 +177,19 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
     The construction entry will be a dictionary with the following keys:
     - property_types: An optional map of property name to declared type, one of
       "integer", "float" or "boolean". A property absent from this map is stored
-      as text. Never declare a type for the unique_column_name, or for any column
-      a relationship joins on -- both are compared as raw text and typing them
-      makes the join match nothing.
+      as text. Never declare a type for from_node_column or to_node_column: they
+      are compared against the stored node property as raw text, so typing them
+      makes the relationship match nothing.
 
     Args:
-        approved_file: The approved file to propose a node construction for
+        approved_file: The approved file to propose a relationship construction for
         proposed_relationship_type: The proposed label for constructed relationships
         from_node_label: The label of the source node
         from_node_column: The name of the column within the approved file that will be used to uniquely identify source nodes
         to_node_label: The label of the target node
         to_node_column: The name of the column within the approved file that will be used to uniquely identify target nodes
-        unique_column_name: The name of the column that will be used to uniquely identify target nodes
+        proposed_properties: The columns of the approved file to store on each
+            constructed relationship
         proposed_property_types: Optional map of property name to "integer",
             "float" or "boolean". Omit or pass {} to store every property as text.
 

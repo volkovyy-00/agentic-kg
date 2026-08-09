@@ -346,7 +346,8 @@ def _suggested_type(shape: str, values) -> str | None:
     return None
 
 
-def _hint_from_values(file_path: str, column: str, values: List[str]) -> dict:
+def _hint_from_values(file_path: str, column: str,
+                      values: List[Optional[str]]) -> dict:
     """Build one column_type_hint payload from values already read.
 
     Split out from column_type_hint so column_type_hints can reuse it after a

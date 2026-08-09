@@ -4,6 +4,7 @@ Prompt text is not otherwise covered by anything: these assert the two facts
 whose absence would silently disable the feature -- the evidence tool not being
 reachable, and the revision paragraph not naming property_types.
 """
+import inspect
 import re
 
 import pytest
@@ -122,3 +123,24 @@ def test_every_allowed_type_is_named_in_the_validation_rules():
         instruction = variants[name]["instruction"]
         for allowed in ALLOWED_TYPES:
             assert allowed in instruction, f"{name}: {allowed}"
+
+
+@pytest.mark.parametrize("fn", [propose_node_construction, propose_relationship_construction])
+def test_the_args_section_names_exactly_the_real_parameters(fn):
+    """These docstrings are the tool descriptions ADK sends to the model, so an
+    Args entry for a parameter that does not exist is an instruction to fill in
+    a field the tool cannot accept -- and a real parameter left undocumented is
+    one the model has no guidance for.
+
+    propose_relationship_construction documented 'unique_column_name', which it
+    has never had, while omitting 'proposed_properties', which it requires. The
+    invented one mattered most here: the branch's whole safety rule is that join
+    columns stay text, and naming a node-only field on the relationship tool
+    points the model at the wrong columns to protect.
+    """
+    args_block = fn.__doc__.split("Args:")[1].split("Returns:")[0]
+    documented = set(re.findall(r"^\s+(\w+):", args_block, re.MULTILINE))
+    actual = set(inspect.signature(fn).parameters) - {"tool_context"}
+
+    assert documented - actual == set(), f"documented but not parameters: {documented - actual}"
+    assert actual - documented == set(), f"parameters but not documented: {actual - documented}"

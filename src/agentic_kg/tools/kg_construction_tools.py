@@ -14,7 +14,7 @@ import logging
 from itertools import chain
 
 from google.adk.tools import ToolContext
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked as _checked
@@ -282,7 +282,11 @@ def load_nodes_from_csv(
     label: str,
     unique_column_name: str,
     properties: List[str],
-    property_types: Dict[str, str] = None,
+    # Optional[...] rather than Dict[...] = None, the shape ADK's
+    # FunctionDeclaration builder rejects (isinstance(None, dict) is False).
+    # Not model-visible today -- only build_graph_from_construction_rules is
+    # wired as a tool -- but wiring this one later should not be a trap.
+    property_types: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Load nodes from a source CSV in batches."""
     try:
