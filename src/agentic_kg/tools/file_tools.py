@@ -469,7 +469,19 @@ def column_type_hints(file_path: str, columns: List[str], tool_context: ToolCont
               key holding one 'column_type_hint' payload per requested column, in
               the order requested.
     """
+    # The argument is produced by a model, and a bare "price" would otherwise be
+    # iterated into ['p', 'r', 'i', 'c', 'e'] and reported as "Column 'p' is not
+    # in products.csv" -- an error about the data for what is a call-shape
+    # mistake, sending the model to inspect a file that is fine. Same boundary
+    # set_suggested_files guards, for the same reason.
+    if columns is not None and not isinstance(columns, list):
+        return tool_error(
+            f"'columns' must be a list of column names, not {type(columns).__name__}. "
+            f"Call 'column_type_hint' for a single column."
+        )
     requested = list(columns or [])
+    if not all(isinstance(column, str) for column in requested):
+        return tool_error("Every entry of 'columns' must be a column name.")
     if not requested:
         return tool_success("column_type_hints", [])
 

@@ -4,9 +4,14 @@ Prompt text is not otherwise covered by anything: these assert the two facts
 whose absence would silently disable the feature -- the evidence tool not being
 reachable, and the revision paragraph not naming property_types.
 """
+import re
+
 import pytest
 
 from agentic_kg.common.value_types import ALLOWED_TYPES
+from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
+    variants as variants_module,
+)
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.variants import (
     variants,
 )
@@ -26,6 +31,37 @@ def test_both_agents_can_call_the_type_hint_tool():
 
 def test_the_proposal_agent_can_batch_type_hints():
     assert column_type_hints in variants["schema_proposal_agent_v1"]["tools"]
+
+
+@pytest.mark.parametrize("agent", ("schema_proposal_agent_v1", "schema_critic_agent_v1"))
+def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
+    """An instruction advertising a tool the agent was not given is the failure
+    mode CLAUDE.md documents for ADK's injected transfer_to_agent: the model
+    follows the advertised path, the name is not in tools_dict, and ADK raises
+    mid-turn -- a dead turn with no response and no spinner, not a loud error.
+
+    It happened here: _VALIDATION_RULES is shared text embedded in BOTH agents
+    and offers 'column_type_hints', while only the proposal agent held it. Shared
+    prompt text is exactly where this hides, because the tool lists are not.
+
+    Only names that are real tools somewhere in the module are checked, so
+    ordinary quoted words in the prompts ('retry', 'valid') are not mistaken for
+    tool references.
+    """
+    instruction = variants[agent]["instruction"]
+    wired = {tool.__name__ for tool in variants[agent]["tools"]}
+    known_tools = {
+        name for name, value in vars(variants_module).items()
+        if callable(value) and not isinstance(value, type)
+        and getattr(value, "__module__", "").startswith("agentic_kg.tools.")
+    }
+
+    named = {match for match in re.findall(r"'([a-z_][a-z0-9_]*)'", instruction)
+             if match in known_tools}
+    missing = named - wired
+    assert not missing, (
+        f"{agent}'s instruction names {sorted(missing)}, which it cannot call. "
+        f"Either wire the tool in or stop advertising it.")
 
 
 def test_the_revision_paragraph_names_property_types():

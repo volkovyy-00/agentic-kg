@@ -319,7 +319,7 @@ variants = {
             get_approved_user_goal, get_approved_files,
             get_proposed_construction_plan,
             sample_file, search_file, column_stats, join_preview, collapse_check,
-            column_type_hint,
+            column_type_hint, column_type_hints,
         ]
     }
 }

@@ -410,6 +410,21 @@ def test_column_type_hints_reads_the_source_once_for_all_columns(bom_source, mon
     assert len(reads) == 1
 
 
+def test_column_type_hints_rejects_a_bare_string_instead_of_spelling_it(bom_source):
+    """A model sending "price" where a list belongs would otherwise have it
+    iterated into ['p','r','i','c','e'] and get "Column 'p' is not in
+    products.csv" -- an answer about the data for what is a call-shape mistake,
+    sending the model to inspect a file that is perfectly fine. The error must
+    name the real problem and the single-column tool to use instead."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hints("products.csv", "price", context)
+
+    assert result["status"] == "error"
+    assert "list" in result["error_message"]
+    assert "column_type_hint" in result["error_message"]
+    assert "'p'" not in result["error_message"]
+
+
 def test_column_type_hints_names_a_missing_column_before_reading_rows(bom_source):
     """Batched reading must not cost the caller the error message the
     per-column path gave: the failure still names the column to correct."""
