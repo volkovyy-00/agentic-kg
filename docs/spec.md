@@ -1,11 +1,10 @@
 # agentic-kg — living spec
 
-**Status:** living document. Every claim below was verified against `main` at commit `382359e`
-(2026-08-09), which already includes #14/#15/#16 below. `v0.5.0` was tagged at that same commit on
-2026-08-09, but `CHANGELOG.md`'s own `[0.5.0]` section predates that tag and only covers part of what it
-contains — see §6 for exactly what's missing. For anything that lands after this, check `CHANGELOG.md`
-and git log, and treat this document as the thing to update. This is the "what is this and why does it
-exist" document.
+**Status:** living document. Every claim below was verified against `main` at commit `e957aeb`
+(2026-08-09) — two commits past the `v0.5.0` tag (`382359e`), both of them fixes to this document and to
+`CHANGELOG.md`'s `[0.5.0]` section so it lists everything the tag actually contains (#18). For anything
+that lands after this, check `CHANGELOG.md` and git log, and treat this document as the thing to update.
+This is the "what is this and why does it exist" document.
 For the architecture map you need while editing code, read `CLAUDE.md`. For the PR/branch/CHANGELOG
 workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate either.
 
@@ -250,24 +249,21 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 
 | Version | Date | What |
 |---|---|---|
-| 0.5.0 | 2026-08-09 | Typed CSV properties, this living spec, construction/retrieval handoff confirmation, Neo4j reconnection, closing the transfer-bypass, intent-approval gate, README repositioning, dropped `upstream` remote, Ruff, real merge commits (#6–#16 — see below, `CHANGELOG.md` doesn't list all eleven) |
+| 0.5.0 | 2026-08-09 | Typed CSV properties, this living spec, construction/retrieval handoff confirmation, Neo4j reconnection, closing the transfer-bypass, intent-approval gate, README repositioning, dropped `upstream` remote, Ruff, real merge commits (#6–#16) |
 | 0.4.0 | 2026-08-03 | Contributor workflow: `CONTRIBUTING.md`, `CHANGELOG.md`, narrowed `.gitignore` (#5) |
 | 0.3.0 | 2026-08-02 | Retrieval grounding — §4 (#4) |
 | 0.2.1 | 2026-07-30 | `schema_refinement_loop` feedback-clobbering fix, per-turn invocation cap (#3) |
 | 0.2.0 | 2026-07-29 | Foundation: `fsspec` file sources, driver-side CSV loading, OpenRouter + per-job models (#2) |
 | 0.1.0 | 2026-07-26 | Test-suite fixes (#1) |
 
-**`CHANGELOG.md` doesn't fully match the `v0.5.0` tag.** The tag was cut at `main`'s tip on 2026-08-09,
-so it includes all eleven PRs merged since `v0.4.0`: typed CSV properties (#13), this document (#6), the
-README rewrite (#7), explicit construction/retrieval handoff confirmation (#8, #9), Neo4j connection
-recovery after a close (#10), closing the `transfer_to_agent` bypass in both handoff gates (#11), gating
-the intent phase on a recorded approval (#12), dropping the local `upstream` remote (#14), adding Ruff
-(#15), and enforcing real merge commits over squash (#16). But `CHANGELOG.md`'s own dated `[0.5.0] -
-2026-08-08` section — written the day before the tag was actually cut — only lists seven of those (#13,
-#6, #8, #9, #10, #11, #12); #7 was never given a CHANGELOG entry at all, and #14/#15/#16 still sit under
-`## [Unreleased]`, which as of `v0.5.0` describes nothing that isn't already released. Until
-`CHANGELOG.md` is reconciled with the tag, treat `git tag -l` and `git log` as the source of truth for
-what `v0.5.0` actually contains.
+**`CHANGELOG.md` matches the `v0.5.0` tag.** The tag was cut at `382359e` on 2026-08-09, covering all
+eleven PRs merged since `v0.4.0`: typed CSV properties (#13), this document (#6), the README rewrite
+(#7), explicit construction/retrieval handoff confirmation (#8, #9), Neo4j connection recovery after a
+close (#10), closing the `transfer_to_agent` bypass in both handoff gates (#11), gating the intent phase
+on a recorded approval (#12), dropping the local `upstream` remote (#14), adding Ruff (#15), and
+enforcing real merge commits over squash (#16). `CHANGELOG.md`'s dated `[0.5.0]` section — briefly
+incomplete and dated a day early, since it was written before the tag existed — was reconciled to list
+all eleven and match the tag's date (#18). `[Unreleased]` is empty until the next batch of work lands.
 
 **Next**, in order — designs are settled and recorded in local notes; specs are not yet written:
 
