@@ -5,7 +5,8 @@ It needs no database and no source files.
 """
 from agentic_kg.common.value_types import (
     BARE_NUMERIC, BLANK, BOOLEAN, BOOLEAN_LIKE, CONVERTED, FLOAT, INTEGER,
-    NUMERIC_AFTER_CLEANING, TEXT, UNCONVERTIBLE, classify, coerce, is_blank,
+    NUMERIC_AFTER_CLEANING, TEXT, UNCONVERTIBLE, classify, coerce,
+    has_fractional_part, is_blank,
 )
 
 
@@ -167,6 +168,24 @@ def test_coerce_refuses_an_integer_neo4j_cannot_hold():
     assert coerce("-9223372036854775809", INTEGER) == (None, UNCONVERTIBLE)
     assert coerce("12345678901234567890", INTEGER) == (None, UNCONVERTIBLE)
     assert coerce("$99,223,372,036,854,775,808.00", INTEGER) == (None, UNCONVERTIBLE)
+
+
+def test_has_fractional_part_separates_a_fraction_from_an_overflow():
+    """coerce refuses "42.7" for being fractional and "9223372036854775809" for
+    being too large for Neo4j's INTEGER. A caller inferring "fractional" from a
+    failed integer coercion conflates the two and reads an overflowing whole
+    number as evidence the column is fractional -- typing it float, which stores
+    a rounded, wrong number and reports a clean conversion."""
+    assert has_fractional_part("42.7") is True
+    assert has_fractional_part("42.0") is False
+    assert has_fractional_part("9223372036854775809") is False
+    # Not evidence of anything: neither blanks nor dirt make a column fractional.
+    assert has_fractional_part("N/A") is False
+    assert has_fractional_part("") is False
+    assert has_fractional_part(None) is False
+    # Cleaned the same way coerce cleans, so the two cannot disagree.
+    assert has_fractional_part("($42.50)") is True
+    assert has_fractional_part("-$1,000.00") is False
 
 
 def test_classify_counts_the_accounting_negatives_coerce_accepts():

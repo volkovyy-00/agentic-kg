@@ -160,6 +160,41 @@ def classify(values: Iterable[Any]) -> str:
     return TEXT
 
 
+def _clean_number(text: str) -> Optional[str]:
+    """Strip currency, thousands separators and accounting brackets.
+
+    Returns None when the value is not numeric at all. Shared by coerce and
+    has_fractional_part so the two cannot disagree about what counts as a
+    number or how it is cleaned.
+    """
+    negated_by_brackets = bool(_PARENTHESISED_NEGATIVE.match(text))
+    if not (negated_by_brackets or _NUMERIC_LIKE.match(text)):
+        return None
+    cleaned = text.translate(_STRIP_FROM_NUMBERS)
+    return f"-{cleaned}" if negated_by_brackets else cleaned
+
+
+def has_fractional_part(value: Any) -> bool:
+    """True for a numeric value carrying a non-zero fractional part.
+
+    Exists so a caller can tell INTEGER's two refusals apart. coerce refuses
+    "42.7" because it is fractional and "9223372036854775809" because Neo4j's
+    INTEGER cannot hold it, and inferring "fractional" from a failed integer
+    coercion conflates them: the overflowing value would be read as evidence
+    the column is fractional and typed float, which stores a rounded, wrong
+    number and reports a clean conversion.
+
+    False for a blank or a non-numeric value -- neither is evidence of anything.
+    """
+    if is_blank(value):
+        return False
+    cleaned = _clean_number(str(value).strip())
+    if cleaned is None:
+        return False
+    _whole, _, fraction = cleaned.partition(".")
+    return bool(fraction.strip("0"))
+
+
 def _as_storable_integer(number: int) -> Tuple[Optional[int], str]:
     """Accept an integer only if Neo4j can actually hold it. See INT64_MAX."""
     if INT64_MIN <= number <= INT64_MAX:
@@ -192,12 +227,9 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
         return None, UNCONVERTIBLE
 
     if declared_type in (INTEGER, FLOAT):
-        negated_by_brackets = bool(_PARENTHESISED_NEGATIVE.match(text))
-        if not (negated_by_brackets or _NUMERIC_LIKE.match(text)):
+        cleaned = _clean_number(text)
+        if cleaned is None:
             return None, UNCONVERTIBLE
-        cleaned = text.translate(_STRIP_FROM_NUMBERS)
-        if negated_by_brackets:
-            cleaned = f"-{cleaned}"
 
         if declared_type == INTEGER:
             # Read from the digits, never through float. float() rounds

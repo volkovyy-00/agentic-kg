@@ -16,7 +16,7 @@ from agentic_kg.common.file_source import (
 )
 from agentic_kg.common.value_types import (
     BARE_NUMERIC, BLANK, BOOLEAN, BOOLEAN_LIKE, CONVERTED, FLOAT, INTEGER,
-    NUMERIC_AFTER_CLEANING, classify, coerce, is_blank,
+    NUMERIC_AFTER_CLEANING, classify, coerce, has_fractional_part, is_blank,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,6 +311,15 @@ def _suggested_type(shape: str, values) -> str | None:
     bare_numeric shape, where there is nothing else to go on -- and only for
     values that are numbers at all, so one "N/A" in a column of 400 integers
     cannot make it look fractional.
+
+    It asks has_fractional_part rather than inferring the fraction from a failed
+    integer coercion. coerce refuses a value for two different reasons, and
+    treating them alike types a column float on the strength of a whole number
+    too large for Neo4j's INTEGER -- which then loads as a rounded, wrong number
+    and reports a clean conversion. An overflowing value leaves the suggestion
+    at integer, so the loader counts it, reports it as an example, and clears
+    it; one unstorable outlier does not cost the whole column its type, the same
+    tolerance classify() already applies.
     """
     if shape == BOOLEAN_LIKE:
         return BOOLEAN
@@ -318,10 +327,7 @@ def _suggested_type(shape: str, values) -> str | None:
         return FLOAT
     if shape == BARE_NUMERIC:
         for value in values:
-            if is_blank(value):
-                continue
-            if (coerce(value, FLOAT)[1] == CONVERTED
-                    and coerce(value, INTEGER)[1] != CONVERTED):
+            if has_fractional_part(value):
                 return FLOAT
         return INTEGER
     return None

@@ -2,6 +2,7 @@ import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
+from agentic_kg.common.value_types import classify
 from agentic_kg.tools import file_tools
 
 
@@ -366,6 +367,22 @@ def test_column_type_hints_returns_one_entry_per_column(bom_source):
     hints = result["column_type_hints"]
     assert [hint["column"] for hint in hints] == ["lead_time_days", "preferred_supplier"]
     assert [hint["suggested_type"] for hint in hints] == ["integer", "boolean"]
+
+
+def test_suggested_type_does_not_downgrade_an_overflowing_integer_to_float():
+    """coerce refuses a value for two different reasons. Reading "integer
+    failed, float succeeded" as evidence of a fraction types the column float on
+    the strength of a whole number too big for Neo4j's INTEGER -- and float
+    stores 9223372036854775809 as 9.223372036854776e+18, a wrong number reported
+    as a clean conversion. Integer keeps the outlier on the counted-and-cleared
+    path instead, where the hint's own unconvertible_count shows it."""
+    values = ["1", "2", "9223372036854775809"]
+    assert file_tools._suggested_type(classify(values), values) == "integer"
+
+
+def test_suggested_type_still_sees_a_genuinely_fractional_column():
+    """The overflow fix must not cost the fractional detection it sits next to."""
+    assert file_tools._suggested_type(classify(["1.5", "2.5"]), ["1.5", "2.5"]) == "float"
 
 
 def test_column_type_hints_reads_the_source_once_for_all_columns(bom_source, monkeypatch):
