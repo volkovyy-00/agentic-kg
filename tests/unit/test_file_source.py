@@ -3,8 +3,8 @@ import io
 import fsspec
 import pytest
 
-from agentic_kg.common.config import reset_settings
 from agentic_kg.common import file_source
+from agentic_kg.common.config import reset_settings
 
 
 @pytest.fixture
@@ -110,6 +110,7 @@ def test_uninstalled_scheme_raises_source_error(monkeypatch):
 
 # Source names outside the root
 
+
 def test_parent_traversal_is_rejected(memory_source):
     """A construction plan is LLM-produced, so a name like "../.env" would
     otherwise read the developer's OpenRouter key and Neo4j password straight
@@ -174,7 +175,9 @@ def test_a_backslash_in_a_name_survives_the_round_trip(monkeypatch, tmp_path):
         assert handle.read() == "a,b\n1,2\n"
 
 
-def test_listing_does_not_depend_on_the_root_lacking_a_separator(memory_source, monkeypatch):
+def test_listing_does_not_depend_on_the_root_lacking_a_separator(
+    memory_source, monkeypatch
+):
     """The relative names must come out the same whether or not the resolved
     root keeps a trailing separator. Slicing at len(root) + 1 was correct only
     for the stripped form, so a change to that stripping would have silently
@@ -183,5 +186,7 @@ def test_listing_does_not_depend_on_the_root_lacking_a_separator(memory_source, 
     assert baseline == ["nested/deep.md", "top.csv"]
 
     real = file_source.get_source_fs
-    monkeypatch.setattr(file_source, "get_source_fs", lambda: (real()[0], real()[1] + "/"))
+    monkeypatch.setattr(
+        file_source, "get_source_fs", lambda: (real()[0], real()[1] + "/")
+    )
     assert file_source.list_source_files() == baseline

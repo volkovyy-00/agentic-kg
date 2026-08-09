@@ -21,6 +21,7 @@ contains. Those callers backtick-quote instead -- see `graph_profile.quote()`.
 The distinction is provenance, not syntax: `checked()` guards against
 injection from an untrusted source, and the database is not one.
 """
+
 import re
 
 from agentic_kg.common.neo4j_for_adk import is_symbol
@@ -47,7 +48,11 @@ def checked(kind: str, value: str) -> str:
     Returns:
         The validated value, unchanged, for convenient chaining.
     """
-    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value) or not is_symbol(value):
+    if (
+        not isinstance(value, str)
+        or not _IDENTIFIER.fullmatch(value)
+        or not is_symbol(value)
+    ):
         raise InvalidIdentifier(
             f"Invalid {kind}: '{value}'. It must be a letter or underscore followed by "
             f"letters, digits or underscores, and cannot be a Cypher keyword."

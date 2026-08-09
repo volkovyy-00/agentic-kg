@@ -1,8 +1,9 @@
+from typing import Optional
+
 from google.adk.tools import ToolContext
-from typing import Dict, Any, Optional
 
 from agentic_kg.common.neo4j_for_adk import get_graphdb
-from agentic_kg.common.tool_result import tool_success, tool_error
+from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import ALLOWED_TYPES
 
 graphdb = get_graphdb()
@@ -28,9 +29,14 @@ def _missing_values(**fields) -> list[str]:
     return [name for name, value in fields.items() if not value]
 
 
-def propose_node_construction(approved_file: str, proposed_label: str, unique_column_name: str,
-                              proposed_properties: list[str], tool_context: ToolContext,
-                              proposed_property_types: Optional[dict] = None) -> dict:
+def propose_node_construction(
+    approved_file: str,
+    proposed_label: str,
+    unique_column_name: str,
+    proposed_properties: list[str],
+    tool_context: ToolContext,
+    proposed_property_types: Optional[dict] = None,
+) -> dict:
     """Propose a node construction for an approved file that supports the user goal.
 
     The construction will be added to the proposed construction plan dictionary under using proposed_label as the key.
@@ -77,9 +83,11 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
     # quick sanity check -- does the approved file have the unique column?
     search_results = search_file(approved_file, unique_column_name)
     if search_results["status"] == "error":
-        return search_results # return the error
+        return search_results  # return the error
     if search_results["search_results"]["metadata"]["lines_found"] == 0:
-        return tool_error(f"{approved_file} does not have the column {unique_column_name}. Check the file content and try again.")
+        return tool_error(
+            f"{approved_file} does not have the column {unique_column_name}. Check the file content and try again."
+        )
 
     # get the current construction plan, or an empty one if none exists
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
@@ -100,7 +108,10 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(NODE_CONSTRUCTION, node_construction_rule)
 
-def propose_node_constructions(node_constructions: list[dict], tool_context:ToolContext) -> dict:
+
+def propose_node_constructions(
+    node_constructions: list[dict], tool_context: ToolContext
+) -> dict:
     """Propose several node constructions at once, instead of one call per node.
 
     Each entry is proposed with the same rules and the same validation as
@@ -136,8 +147,9 @@ def propose_node_constructions(node_constructions: list[dict], tool_context:Tool
         proposed.append(result[NODE_CONSTRUCTION])
     return tool_success(NODE_CONSTRUCTION, proposed)
 
+
 # Tool: Remove Node Construction
-def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
+def remove_node_construction(node_label: str, tool_context: ToolContext) -> dict:
     """Remove a node construction from the proposed construction plan based on label.
 
     Args:
@@ -154,22 +166,33 @@ def remove_node_construction(node_label: str, tool_context:ToolContext) -> dict:
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if node_label not in construction_plan:
-        return tool_success("node_construction_removed", "node construction rule not found. removal not needed.")
+        return tool_success(
+            "node_construction_removed",
+            "node construction rule not found. removal not needed.",
+        )
 
     del construction_plan[node_label]
 
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success("node_construction_removed", node_label)
 
+
 #  Tool: Propose Relationship Construction
 
 RELATIONSHIP_CONSTRUCTION = "relationship_construction"
 
-def propose_relationship_construction(approved_file: str, proposed_relationship_type: str,
-    from_node_label: str, from_node_column: str, to_node_label: str, to_node_column: str,
+
+def propose_relationship_construction(
+    approved_file: str,
+    proposed_relationship_type: str,
+    from_node_label: str,
+    from_node_column: str,
+    to_node_label: str,
+    to_node_column: str,
     proposed_properties: list[str],
     tool_context: ToolContext,
-    proposed_property_types: Optional[dict] = None) -> dict:
+    proposed_property_types: Optional[dict] = None,
+) -> dict:
     """Propose a relationship construction for an approved file that supports the user goal.
 
     The construction will be added to the proposed construction plan dictionary under using proposed_relationship_type as the key.
@@ -216,15 +239,22 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
 
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
-    if search_results["status"] == "error": 
-      return search_results  # return the error if there is one
+    if search_results["status"] == "error":
+        return search_results  # return the error if there is one
     if search_results["search_results"]["metadata"]["lines_found"] == 0:
-        return tool_error(f"{approved_file} does not have the from node column {from_node_column}. Check the content of the file and reconsider the relationship.")
+        return tool_error(
+            f"{approved_file} does not have the from node column {from_node_column}. Check the content of the file and reconsider the relationship."
+        )
 
     # quick sanity check -- does the approved file have the to_node_column?
     search_results = search_file(approved_file, to_node_column)
-    if search_results["status"] == "error" or search_results["search_results"]["metadata"]["lines_found"] == 0:
-        return tool_error(f"{approved_file} does not have the to node column {to_node_column}. Check the content of the file and reconsider the relationship.")
+    if (
+        search_results["status"] == "error"
+        or search_results["search_results"]["metadata"]["lines_found"] == 0
+    ):
+        return tool_error(
+            f"{approved_file} does not have the to node column {to_node_column}. Check the content of the file and reconsider the relationship."
+        )
 
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     relationship_construction_rule = {
@@ -245,7 +275,10 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(RELATIONSHIP_CONSTRUCTION, relationship_construction_rule)
 
-def propose_relationship_constructions(relationship_constructions: list[dict], tool_context:ToolContext) -> dict:
+
+def propose_relationship_constructions(
+    relationship_constructions: list[dict], tool_context: ToolContext
+) -> dict:
     """Propose several relationship constructions at once, instead of one call per relationship.
 
     Each entry is proposed with the same rules and the same validation as
@@ -286,8 +319,11 @@ def propose_relationship_constructions(relationship_constructions: list[dict], t
         proposed.append(result[RELATIONSHIP_CONSTRUCTION])
     return tool_success(RELATIONSHIP_CONSTRUCTION, proposed)
 
+
 # Tool: Remove Relationship Construction
-def remove_relationship_construction(relationship_type: str, tool_context:ToolContext) -> dict:
+def remove_relationship_construction(
+    relationship_type: str, tool_context: ToolContext
+) -> dict:
     """Remove a relationship construction from the proposed construction plan based on type.
 
     Args:
@@ -304,12 +340,15 @@ def remove_relationship_construction(relationship_type: str, tool_context:ToolCo
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
 
     if relationship_type not in construction_plan:
-        return tool_success("relationship_construction_removed", "relationship construction rule not found. removal not needed.")
-    
+        return tool_success(
+            "relationship_construction_removed",
+            "relationship construction rule not found. removal not needed.",
+        )
+
     construction_plan.pop(relationship_type)
-    
+
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
-    return tool_success("relationship_construction_removed", relationship_type) 
+    return tool_success("relationship_construction_removed", relationship_type)
 
 
 def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
@@ -336,7 +375,8 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         return []
 
     nodes = {
-        key: rule for key, rule in construction_plan.items()
+        key: rule
+        for key, rule in construction_plan.items()
         if isinstance(rule, dict) and rule.get("construction_type") == "node"
     }
     problems = []
@@ -346,10 +386,15 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     # type retroactively invalid when a later relationship joins on it.
     joined_columns = {}
     for key, rule in construction_plan.items():
-        if not isinstance(rule, dict) or rule.get("construction_type") != "relationship":
+        if (
+            not isinstance(rule, dict)
+            or rule.get("construction_type") != "relationship"
+        ):
             continue
-        for label, column in ((rule.get("from_node_label"), rule.get("from_node_column")),
-                              (rule.get("to_node_label"), rule.get("to_node_column"))):
+        for label, column in (
+            (rule.get("from_node_label"), rule.get("from_node_column")),
+            (rule.get("to_node_label"), rule.get("to_node_column")),
+        ):
             joined_columns.setdefault((label, column), []).append(key)
 
     def check_endpoint(rel_key, side, label, column):
@@ -371,9 +416,14 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             )
 
     for key, rule in construction_plan.items():
-        if not isinstance(rule, dict) or rule.get("construction_type") != "relationship":
+        if (
+            not isinstance(rule, dict)
+            or rule.get("construction_type") != "relationship"
+        ):
             continue
-        check_endpoint(key, "from", rule.get("from_node_label"), rule.get("from_node_column"))
+        check_endpoint(
+            key, "from", rule.get("from_node_label"), rule.get("from_node_column")
+        )
         check_endpoint(key, "to", rule.get("to_node_label"), rule.get("to_node_column"))
 
     # Declared property types. Three rules, all refusing at approval time rather
@@ -385,7 +435,8 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         if not isinstance(property_types, dict):
             problems.append(
                 f"{key}: 'property_types' must be a map of property name to type, "
-                f"got {type(property_types).__name__}. Supply a map or omit it.")
+                f"got {type(property_types).__name__}. Supply a map or omit it."
+            )
             continue
 
         properties = rule.get("properties") or []
@@ -396,29 +447,39 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 problems.append(
                     f"{key}: property '{name}' declares unknown type '{declared}'. "
                     f"Use one of {', '.join(ALLOWED_TYPES)}, or drop the type to "
-                    f"store it as text.")
+                    f"store it as text."
+                )
 
             if name not in properties:
                 problems.append(
                     f"{key}: '{name}' has a declared type but is not in the "
                     f"properties list {sorted(properties)}, so nothing would load "
-                    f"it. Either add '{name}' to properties or drop its type.")
+                    f"it. Either add '{name}' to properties or drop its type."
+                )
 
             if unique_column is not None and name == unique_column:
                 problems.append(
                     f"{key}: '{name}' is this node's unique identifier and must "
                     f"stay text — identifiers are matched as raw CSV values, so a "
-                    f"typed identifier matches nothing. Drop the type for '{name}'.")
+                    f"typed identifier matches nothing. Drop the type for '{name}'."
+                )
 
             if rule.get("construction_type") == "relationship":
-                joining = [key] if name in (
-                    rule.get("from_node_column"), rule.get("to_node_column")) else []
-                own_node_label = (rule.get("from_node_label")
-                                   if name == rule.get("from_node_column")
-                                   else rule.get("to_node_label"))
+                joining = (
+                    [key]
+                    if name
+                    in (rule.get("from_node_column"), rule.get("to_node_column"))
+                    else []
+                )
+                own_node_label = (
+                    rule.get("from_node_label")
+                    if name == rule.get("from_node_column")
+                    else rule.get("to_node_label")
+                )
                 own_node_rule = nodes.get(own_node_label)
-                join_target = (own_node_rule.get("unique_column_name")
-                               if own_node_rule else None)
+                join_target = (
+                    own_node_rule.get("unique_column_name") if own_node_rule else None
+                )
             else:
                 label = rule.get("label", key)
                 joining = joined_columns.get((label, name), [])
@@ -426,23 +487,27 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 join_target = unique_column
             if joining:
                 if join_target is not None:
-                    second_exit = f"join {', '.join(sorted(joining))} on '{join_target}' instead"
+                    second_exit = (
+                        f"join {', '.join(sorted(joining))} on '{join_target}' instead"
+                    )
                 else:
                     second_exit = (
                         f"'{own_node_label}' has no node construction in this plan, "
-                        f"so there is no identifier to join on instead")
+                        f"so there is no identifier to join on instead"
+                    )
                 problems.append(
                     f"{key}: '{name}' carries a declared type but "
                     f"{', '.join(sorted(joining))} joins on it. Join columns are "
                     f"compared as raw CSV text, so a typed column matches zero "
                     f"rows with no error. Either drop the type for '{name}', or "
-                    f"{second_exit}.")
+                    f"{second_exit}."
+                )
 
     return problems
 
 
 # Tool: Approve the proposed construction plan
-def approve_proposed_construction_plan(tool_context:ToolContext) -> dict:
+def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Approve the proposed construction plan, if it is internally consistent.
 
     Approval is refused when a relationship construction joins on a column the
@@ -468,15 +533,19 @@ def approve_proposed_construction_plan(tool_context:ToolContext) -> dict:
         )
 
     tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
-    return tool_success(APPROVED_CONSTRUCTION_PLAN, tool_context.state[APPROVED_CONSTRUCTION_PLAN])
+    return tool_success(
+        APPROVED_CONSTRUCTION_PLAN, tool_context.state[APPROVED_CONSTRUCTION_PLAN]
+    )
+
 
 # Tool: Get Proposed construction Plan
 
-def get_proposed_construction_plan(tool_context:ToolContext) -> dict:
+
+def get_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Get the proposed construction plan."""
     return tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, [])
 
 
-def get_approved_construction_plan(tool_context:ToolContext) -> dict:
+def get_approved_construction_plan(tool_context: ToolContext) -> dict:
     """Get the approved construction plan."""
     return tool_context.state.get(APPROVED_CONSTRUCTION_PLAN, [])

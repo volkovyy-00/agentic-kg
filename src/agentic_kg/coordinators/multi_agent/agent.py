@@ -2,7 +2,7 @@ from google.adk.agents import LlmAgent
 
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.config import validate_env
-from agentic_kg.common.llm_catalog import get_llm, LlmKind
+from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.cypher_tools import get_physical_schema, neo4j_is_ready
 from agentic_kg.tools.file_tools import get_source_location
 
@@ -11,8 +11,13 @@ from agentic_kg.tools.file_tools import get_source_location
 # first, rather than after every sub-agent has already been built.
 validate_env()
 
-from .sub_agents import user_intent_agent, file_suggestion_agent, schema_proposal_agent, graph_construction_agent, graphrag_agent
-
+from .sub_agents import (
+    file_suggestion_agent,
+    graph_construction_agent,
+    graphrag_agent,
+    schema_proposal_agent,
+    user_intent_agent,
+)
 
 full_workflow_agent = LlmAgent(
     name=MULTI_AGENT_COORDINATOR,
@@ -34,17 +39,13 @@ full_workflow_agent = LlmAgent(
         5. graphrag_agent -- used to interact with the knowledge graph.only available if 'get_physical_schema' tool shows that a graph exists
         """,
     sub_agents=[
-        user_intent_agent, 
-        file_suggestion_agent, 
-        schema_proposal_agent, 
+        user_intent_agent,
+        file_suggestion_agent,
+        schema_proposal_agent,
         graph_construction_agent,
-        graphrag_agent
+        graphrag_agent,
     ],
-    tools=[
-        get_physical_schema,
-        get_source_location,
-        neo4j_is_ready
-    ]
+    tools=[get_physical_schema, get_source_location, neo4j_is_ready],
 )
 
 root_agent = full_workflow_agent

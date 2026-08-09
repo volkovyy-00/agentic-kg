@@ -9,14 +9,15 @@ round always saw an empty <feedback> block and silently re-derived the
 schema from scratch instead of acting on the critic's actual objections.
 See docs/superpowers/specs/2026-07-29-schema-refinement-loop-latency-design.md.
 """
+
 from types import SimpleNamespace
 
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
     prepare_refinement_loop_invocation,
-    reset_schema_refinement_turn_budget,
     refinement_loop,
-    schema_proposal_agent,
+    reset_schema_refinement_turn_budget,
     root_agent,
+    schema_proposal_agent,
 )
 
 

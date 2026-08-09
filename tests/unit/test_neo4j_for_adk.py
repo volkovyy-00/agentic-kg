@@ -5,6 +5,7 @@ binding, which bypasses send_query entirely -- so it can never verify the
 counter that lives inside it. These tests fake one level lower, at the
 driver/session boundary, so the real send_query body runs.
 """
+
 import logging
 
 import pytest
@@ -79,6 +80,7 @@ class FakeDriver:
 class FakeConfig:
     """Stands in for Neo4jConfig. `uri` exists because the reconnect log line
     (Task 5) reads it; `database` because send_query passes it to session()."""
+
     database = "neo4j"
     uri = "bolt://fake:7687"
 
@@ -93,23 +95,29 @@ def db(monkeypatch):
     return instance
 
 
-@pytest.mark.parametrize("query", [
-    "MERGE (n:Thing {id: 1})",
-    "CREATE (n:Thing)",
-    "MATCH (n) SET n.x = 1",
-    "MATCH (n) DETACH DELETE n",
-    "MATCH (n) REMOVE n.x",
-    "DROP CONSTRAINT some_constraint",
-    "DROP INDEX some_index",
-])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "MERGE (n:Thing {id: 1})",
+        "CREATE (n:Thing)",
+        "MATCH (n) SET n.x = 1",
+        "MATCH (n) DETACH DELETE n",
+        "MATCH (n) REMOVE n.x",
+        "DROP CONSTRAINT some_constraint",
+        "DROP INDEX some_index",
+    ],
+)
 def test_is_write_query_detects_writes(query):
     assert is_write_query(query) is True
 
 
-@pytest.mark.parametrize("query", [
-    "MATCH (n:Thing) RETURN n",
-    "MATCH (n) RETURN count(n)",
-])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "MATCH (n:Thing) RETURN n",
+        "MATCH (n) RETURN count(n)",
+    ],
+)
 def test_is_write_query_passes_plain_reads(query):
     assert is_write_query(query) is False
 
@@ -129,13 +137,14 @@ def test_read_query_leaves_the_counter_alone(db):
 def test_failed_write_does_not_increment(db):
     def boom(*a, **k):
         raise RuntimeError("no")
+
     db._driver.session = boom
     result = db.send_query("MERGE (n:Thing)")
     assert result["status"] == "error"
     assert db.write_count == 0
 
 
-from agentic_kg.common.neo4j_for_adk import MAX_RETURNED_ROWS, ROW_COUNT_CEILING
+from agentic_kg.common.neo4j_for_adk import MAX_RETURNED_ROWS
 
 
 def _rows(n):
@@ -198,6 +207,7 @@ def test_read_query_max_rows_none_retains_everything(db):
 def test_read_query_returns_structured_error_not_an_exception(db):
     def boom(**k):
         raise RuntimeError("syntax error at line 1")
+
     db._driver.session = boom
     result = db.send_read_query("MATCH bad")
     assert result["status"] == "error"
@@ -254,7 +264,8 @@ def test_send_query_reconnects_after_close(db, monkeypatch):
     rebuilt = FakeDriver()
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
 
     db.close()
     result = db.send_query("MATCH (n) RETURN n")
@@ -268,7 +279,8 @@ def test_send_read_query_reconnects_after_close(db, monkeypatch):
     rebuilt = FakeDriver()
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
 
     db.close()
     result = db.send_read_query("MATCH (n) RETURN n")
@@ -306,6 +318,7 @@ def test_a_failed_reconnect_returns_a_tool_error_rather_than_raising(db, monkeyp
     """_ensure_connected sits INSIDE the existing try, for the reason those
     methods already document for session creation: a failure must reach the
     agent as a structured error, not raise mid-turn."""
+
     def boom():
         raise RuntimeError("settings unavailable")
 
@@ -325,7 +338,8 @@ def test_get_driver_reconnects_after_close(db, monkeypatch):
     rebuilt = FakeDriver()
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: rebuilt)
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
 
     db.close()
 
@@ -339,7 +353,8 @@ def test_close_graphdb_keeps_the_singleton(monkeypatch):
     monkeypatch.setattr(neo4j_for_adk, "_graphdb_singleton", None)
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
     monkeypatch.setattr(neo4j_for_adk.atexit, "register", lambda fn: None)
 
     first = neo4j_for_adk.get_graphdb()
@@ -354,9 +369,11 @@ def test_exit_handlers_do_not_accumulate_across_close_cycles(monkeypatch):
     monkeypatch.setattr(neo4j_for_adk, "_graphdb_singleton", None)
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
     monkeypatch.setattr(
-        neo4j_for_adk.atexit, "register", lambda fn: registered.append(fn))
+        neo4j_for_adk.atexit, "register", lambda fn: registered.append(fn)
+    )
 
     neo4j_for_adk.get_graphdb()
     after_one = len(registered)
@@ -369,10 +386,13 @@ def test_exit_handlers_do_not_accumulate_across_close_cycles(monkeypatch):
     assert len(registered) == after_one
 
 
-def test_reconnect_logs_the_rebuild_then_confirms_on_first_success(db, monkeypatch, caplog):
+def test_reconnect_logs_the_rebuild_then_confirms_on_first_success(
+    db, monkeypatch, caplog
+):
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
 
     db.close()
     with caplog.at_level(logging.INFO, logger="agentic_kg.common.neo4j_for_adk"):
@@ -392,7 +412,8 @@ def test_a_heal_seen_only_through_get_driver_stays_unconfirmed(db, monkeypatch):
     the confirmation waits for a query. A known timing gap, not a defect."""
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
     monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig())
+        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: FakeConfig()
+    )
 
     db.close()
     db.get_driver()
@@ -410,8 +431,7 @@ def test_get_config_reconnects_after_close(db, monkeypatch):
     fresh = FakeConfig()
     fresh.database = "swapped"
     monkeypatch.setattr(neo4j_for_adk, "make_driver", lambda cfg: FakeDriver())
-    monkeypatch.setattr(
-        neo4j_for_adk, "load_neo4j_config_from_settings", lambda: fresh)
+    monkeypatch.setattr(neo4j_for_adk, "load_neo4j_config_from_settings", lambda: fresh)
 
     db.close()
 

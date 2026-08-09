@@ -23,6 +23,7 @@ Fixture helpers are async (process_llm_request is a coroutine) and are driven
 with asyncio.run(...) from inside otherwise-synchronous test functions, this
 repo's established pattern for calling async ADK APIs from sync tests.
 """
+
 import asyncio
 
 from google.adk.models.llm_request import LlmRequest
@@ -70,8 +71,8 @@ to your parent agent.
 
 def _declaration_names(request):
     names = []
-    for tool in (request.config.tools or []):
-        for declaration in (getattr(tool, "function_declarations", None) or []):
+    for tool in request.config.tools or []:
+        for declaration in getattr(tool, "function_declarations", None) or []:
             names.append(declaration.name)
     return names
 

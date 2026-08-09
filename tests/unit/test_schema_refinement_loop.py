@@ -10,6 +10,7 @@ inside the loop), and fell back to a worse schema. The event must therefore
 always carry the critic's verdict as text, and its escalate flag must still
 route on the first word of the feedback exactly as before.
 """
+
 import asyncio
 from types import SimpleNamespace
 
@@ -62,11 +63,14 @@ def test_event_carries_the_critic_verdict_as_text():
     assert feedback in text
 
 
-@pytest.mark.parametrize("feedback", [
-    "retry\n- Component identifier is not unique",
-    "Validation failed: bad join key",
-    "valid",
-])
+@pytest.mark.parametrize(
+    "feedback",
+    [
+        "retry\n- Component identifier is not unique",
+        "Validation failed: bad join key",
+        "valid",
+    ],
+)
 def test_the_verdict_is_returned_verbatim(feedback):
     """The coordinator is instructed to re-run the loop when the result begins
     with 'retry'. Any preamble ahead of the verdict makes that test false for

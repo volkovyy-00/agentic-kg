@@ -1,5 +1,4 @@
-
-from typing import Any, Callable, Literal, Mapping, TypedDict, Union, TypeGuard
+from typing import Any, Callable, Literal, Mapping, TypedDict, TypeGuard, Union
 
 
 class ResultSuccess(TypedDict):
@@ -14,6 +13,7 @@ class ResultError(TypedDict):
 
 ToolResult = Union[ResultSuccess, ResultError]
 
+
 def tool_success(key: str, result: Any) -> ToolResult:
     """Create a successful result containing the given value.
 
@@ -25,6 +25,7 @@ def tool_success(key: str, result: Any) -> ToolResult:
         ToolResult: success dict with the result under the given key
     """
     return {"status": "success", key: result}
+
 
 def tool_error(message: str) -> ToolResult:
     """Create an error result with the given message.
@@ -60,7 +61,9 @@ def _payload_key(result: Mapping[str, Any]) -> str:
         return "result"
     keys = [k for k in result if k != "status"]
     if len(keys) != 1:
-        raise ValueError(f"Ambiguous or missing payload key in success result: {result!r}")
+        raise ValueError(
+            f"Ambiguous or missing payload key in success result: {result!r}"
+        )
     return keys[0]
 
 
@@ -72,7 +75,11 @@ def map_result(result: ToolResult, f: Callable[[Any], Any]) -> ToolResult:
 
 
 def map_error(result: ToolResult, f: Callable[[str], Any]) -> ToolResult:
-    return {"status": "error", "error_message": f(result["error_message"])} if is_error(result) else result
+    return (
+        {"status": "error", "error_message": f(result["error_message"])}
+        if is_error(result)
+        else result
+    )
 
 
 def get_or_else(result: ToolResult, default: Any) -> Any:

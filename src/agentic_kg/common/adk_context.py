@@ -17,6 +17,7 @@ unconditionally, before the parts loop (contents.py:323), and _get_contents
 deep-copies one Content per event without merging adjacent ones (line 258), so
 it reliably sits at index 0.
 """
+
 import logging
 from typing import Any, Optional
 
@@ -62,7 +63,8 @@ def drop_foreign_context(callback_context: Any, llm_request: Any) -> Optional[No
         # always survives the filter. This is a guard, not a code path in use.
         logger.warning(
             "Every message looked like foreign context; leaving the request "
-            "unfiltered rather than sending an empty one")
+            "unfiltered rather than sending an empty one"
+        )
         return None
 
     if dropped:

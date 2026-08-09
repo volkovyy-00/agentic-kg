@@ -21,6 +21,7 @@ than retyping the string. It is deliberately not named `HANDOFF_CONFIRMED_KEY`:
 that name already means something else, with a different value, one module
 over.
 """
+
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.tool_result import ToolResult, tool_success

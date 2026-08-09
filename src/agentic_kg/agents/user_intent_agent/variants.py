@@ -1,4 +1,3 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the root agent.
@@ -6,7 +5,6 @@ These instructions guide the agent's behavior, workflow, and tool usage.
 """
 
 from agentic_kg.common.llm_catalog import LlmKind
-
 from agentic_kg.tools.user_intent_tools import toolset
 
 variants = {
@@ -48,6 +46,6 @@ variants = {
         6. If the user does not approve, consider their feedback and improve the user intent specification
         </think>     
         """,
-        "tools": toolset["tools"]
+        "tools": toolset["tools"],
     }
 }

@@ -10,6 +10,7 @@ namespace directory and never descends into it — walk_packages sees 28 of the
 code `adk web` loads. A test that cannot see the deliverable is worse than no
 test, because it reports success.
 """
+
 import importlib
 from pathlib import Path
 

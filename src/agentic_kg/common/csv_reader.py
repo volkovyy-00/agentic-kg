@@ -4,6 +4,7 @@ Kept separate from anything that talks to Neo4j so that batching can be tested
 without a database. Values stay strings, exactly as LOAD CSV produced them —
 typed fields are deliberately out of scope.
 """
+
 import logging
 from typing import Iterator, List, Tuple
 
@@ -25,7 +26,9 @@ def make_csv_reader(handle, relative_path: str):
     try:
         dialect = clevercsv.Sniffer().sniff(sample)
     except clevercsv.Error:
-        logger.warning("Could not sniff CSV dialect for %s; using default", relative_path)
+        logger.warning(
+            "Could not sniff CSV dialect for %s; using default", relative_path
+        )
     # sniff() returns a degenerate SimpleDialect('', '', '') for empty or
     # trivial samples rather than raising, so the except clause above does not
     # fire for those. Check the delimiter explicitly.

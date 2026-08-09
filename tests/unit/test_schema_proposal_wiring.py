@@ -4,6 +4,7 @@ Prompt text is not otherwise covered by anything: these assert the two facts
 whose absence would silently disable the feature -- the evidence tool not being
 reachable, and the revision paragraph not naming property_types.
 """
+
 import inspect
 import re
 
@@ -34,7 +35,9 @@ def test_the_proposal_agent_can_batch_type_hints():
     assert column_type_hints in variants["schema_proposal_agent_v1"]["tools"]
 
 
-@pytest.mark.parametrize("agent", ("schema_proposal_agent_v1", "schema_critic_agent_v1"))
+@pytest.mark.parametrize(
+    "agent", ("schema_proposal_agent_v1", "schema_critic_agent_v1")
+)
 def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
     """An instruction advertising a tool the agent was not given is the failure
     mode CLAUDE.md documents for ADK's injected transfer_to_agent: the model
@@ -52,17 +55,23 @@ def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
     instruction = variants[agent]["instruction"]
     wired = {tool.__name__ for tool in variants[agent]["tools"]}
     known_tools = {
-        name for name, value in vars(variants_module).items()
-        if callable(value) and not isinstance(value, type)
+        name
+        for name, value in vars(variants_module).items()
+        if callable(value)
+        and not isinstance(value, type)
         and getattr(value, "__module__", "").startswith("agentic_kg.tools.")
     }
 
-    named = {match for match in re.findall(r"'([a-z_][a-z0-9_]*)'", instruction)
-             if match in known_tools}
+    named = {
+        match
+        for match in re.findall(r"'([a-z_][a-z0-9_]*)'", instruction)
+        if match in known_tools
+    }
     missing = named - wired
     assert not missing, (
         f"{agent}'s instruction names {sorted(missing)}, which it cannot call. "
-        f"Either wire the tool in or stop advertising it.")
+        f"Either wire the tool in or stop advertising it."
+    )
 
 
 def test_the_revision_paragraph_names_property_types():
@@ -82,7 +91,9 @@ def test_both_instructions_carry_the_property_type_rules():
         assert "column_type_hint" in variants[name]["instruction"], name
 
 
-@pytest.mark.parametrize("fn", [propose_node_construction, propose_relationship_construction])
+@pytest.mark.parametrize(
+    "fn", [propose_node_construction, propose_relationship_construction]
+)
 def test_proposed_property_types_stays_optional_in_the_declaration(fn):
     """Pins TRAP 6: ADK 1.10.0 validates that a parameter's default is an
     instance of its annotation while building the FunctionDeclaration, and
@@ -103,7 +114,9 @@ def test_proposed_property_types_stays_optional_in_the_declaration(fn):
     assert "proposed_property_types" not in required
 
 
-@pytest.mark.parametrize("fn", [propose_node_construction, propose_relationship_construction])
+@pytest.mark.parametrize(
+    "fn", [propose_node_construction, propose_relationship_construction]
+)
 def test_every_allowed_type_is_named_in_the_tool_description(fn):
     """The closed set lives in value_types.ALLOWED_TYPES, but the model only
     ever learns it from prose -- these docstrings are the tool descriptions ADK
@@ -125,7 +138,9 @@ def test_every_allowed_type_is_named_in_the_validation_rules():
             assert allowed in instruction, f"{name}: {allowed}"
 
 
-@pytest.mark.parametrize("fn", [propose_node_construction, propose_relationship_construction])
+@pytest.mark.parametrize(
+    "fn", [propose_node_construction, propose_relationship_construction]
+)
 def test_the_args_section_names_exactly_the_real_parameters(fn):
     """These docstrings are the tool descriptions ADK sends to the model, so an
     Args entry for a parameter that does not exist is an instruction to fill in
@@ -142,5 +157,9 @@ def test_the_args_section_names_exactly_the_real_parameters(fn):
     documented = set(re.findall(r"^\s+(\w+):", args_block, re.MULTILINE))
     actual = set(inspect.signature(fn).parameters) - {"tool_context"}
 
-    assert documented - actual == set(), f"documented but not parameters: {documented - actual}"
-    assert actual - documented == set(), f"parameters but not documented: {actual - documented}"
+    assert documented - actual == set(), (
+        f"documented but not parameters: {documented - actual}"
+    )
+    assert actual - documented == set(), (
+        f"parameters but not documented: {actual - documented}"
+    )

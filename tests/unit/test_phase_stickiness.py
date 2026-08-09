@@ -19,12 +19,13 @@ in which _find_agent_to_run's interesting branch runs at all: point the Runner
 at the gated agent and it becomes root_agent, so the first `event.author ==
 root_agent.name` check short-circuits.
 """
+
 import asyncio
 
-from google.genai import types
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
+from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
@@ -43,6 +44,7 @@ class ScriptedLlm(BaseLlm):
     Copied from test_schema_refinement_loop_turn_cap.py:36 rather than
     imported; tests/unit/fakes.py deliberately does not centralize these.
     """
+
     responses: list = Field(default_factory=list)
     call_count: int = 0
 
@@ -53,41 +55,67 @@ class ScriptedLlm(BaseLlm):
 
 
 def _text(text):
-    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=text)])
+    )
 
 
 def _call(name, args=None):
-    return LlmResponse(content=types.Content(role="model", parts=[
-        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
-    ]))
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(name=name, args=args or {})
+                ),
+            ],
+        )
+    )
 
 
 def test_a_second_question_stays_with_the_construction_agent(monkeypatch):
     """Turn 1 the coordinator delegates; turn 2 must go straight back to the
     construction agent without the coordinator's model being consulted."""
-    monkeypatch.setattr(full_workflow_agent, "model", ScriptedLlm(
-        model="scripted",
-        responses=[_call("transfer_to_agent", {"agent_name": "graph_construction_agent_v1"})],
-    ))
-    monkeypatch.setattr(graph_construction_agent, "model", ScriptedLlm(
-        model="scripted",
-        responses=[
-            _text("the graph is built -- ask me anything, or move on when ready"),
-            _text("here is the answer to your second question"),
-        ],
-    ))
+    monkeypatch.setattr(
+        full_workflow_agent,
+        "model",
+        ScriptedLlm(
+            model="scripted",
+            responses=[
+                _call(
+                    "transfer_to_agent", {"agent_name": "graph_construction_agent_v1"}
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        ScriptedLlm(
+            model="scripted",
+            responses=[
+                _text("the graph is built -- ask me anything, or move on when ready"),
+                _text("here is the answer to your second question"),
+            ],
+        ),
+    )
 
     async def run():
         runner = InMemoryRunner(agent=full_workflow_agent, app_name="stickiness_test")
         session = await runner.session_service.create_session(
-            app_name="stickiness_test", user_id="u1",
+            app_name="stickiness_test",
+            user_id="u1",
         )
 
         async def turn(text):
             return [
-                event async for event in runner.run_async(
-                    user_id="u1", session_id=session.id,
-                    new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+                event
+                async for event in runner.run_async(
+                    user_id="u1",
+                    session_id=session.id,
+                    new_message=types.Content(
+                        role="user", parts=[types.Part(text=text)]
+                    ),
                 )
             ]
 
@@ -127,29 +155,46 @@ def test_a_second_answer_stays_with_the_user_intent_agent(monkeypatch):
     would send every mid-interview reply back to the coordinator to be
     re-arbitrated: another chance to leave the phase before an approval is
     recorded, which is the defect this gate exists to close."""
-    monkeypatch.setattr(full_workflow_agent, "model", ScriptedLlm(
-        model="scripted",
-        responses=[_call("transfer_to_agent", {"agent_name": "user_intent_agent_v2"})],
-    ))
-    monkeypatch.setattr(user_intent_agent, "model", ScriptedLlm(
-        model="scripted",
-        responses=[
-            _text("what kind of graph did you have in mind?"),
-            _text("thanks -- and what do you want to use it for?"),
-        ],
-    ))
+    monkeypatch.setattr(
+        full_workflow_agent,
+        "model",
+        ScriptedLlm(
+            model="scripted",
+            responses=[
+                _call("transfer_to_agent", {"agent_name": "user_intent_agent_v2"})
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        ScriptedLlm(
+            model="scripted",
+            responses=[
+                _text("what kind of graph did you have in mind?"),
+                _text("thanks -- and what do you want to use it for?"),
+            ],
+        ),
+    )
 
     async def run():
-        runner = InMemoryRunner(agent=full_workflow_agent, app_name="intent_stickiness_test")
+        runner = InMemoryRunner(
+            agent=full_workflow_agent, app_name="intent_stickiness_test"
+        )
         session = await runner.session_service.create_session(
-            app_name="intent_stickiness_test", user_id="u1",
+            app_name="intent_stickiness_test",
+            user_id="u1",
         )
 
         async def turn(text):
             return [
-                event async for event in runner.run_async(
-                    user_id="u1", session_id=session.id,
-                    new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+                event
+                async for event in runner.run_async(
+                    user_id="u1",
+                    session_id=session.id,
+                    new_message=types.Content(
+                        role="user", parts=[types.Part(text=text)]
+                    ),
                 )
             ]
 

@@ -10,6 +10,7 @@ overfitting (assuming one pattern per relationship type, assuming entities
 below EXHAUSTIVE_SEARCH_LIMIT, assuming single-label nodes); that is what
 tests/integration/test_graph_profile_shapes.py is for.
 """
+
 from pathlib import Path
 
 import pytest

@@ -11,6 +11,7 @@ The key is spelled here, once. The agent's agent.py (which clears it every
 turn) and its variants.py (which reads it) both import this constant rather
 than retyping the string.
 """
+
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.tool_result import ToolResult, tool_success

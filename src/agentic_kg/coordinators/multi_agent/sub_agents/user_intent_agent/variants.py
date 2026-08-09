@@ -1,4 +1,3 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the root agent.
@@ -9,14 +8,17 @@ from typing import Any, Dict
 
 from google.adk.tools import ToolContext
 
-from agentic_kg.tools.user_goal_tools import (
-    set_user_goal, get_user_goal,
-    set_perceived_user_goal, approve_perceived_user_goal,
-    APPROVED_USER_GOAL, PERCEIVED_USER_GOAL,
-)
-from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.tool_result import tool_error
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.tools.user_goal_tools import (
+    APPROVED_USER_GOAL,
+    PERCEIVED_USER_GOAL,
+    approve_perceived_user_goal,
+    get_user_goal,
+    set_perceived_user_goal,
+    set_user_goal,
+)
 
 # v1's exit, ungated and unchanged in behaviour. v1 predates the
 # perceived/approved split entirely -- it uses set_user_goal, which writes
@@ -106,7 +108,7 @@ variants = {
         4. If the user agrees, use the 'set_user_goal' tool to set the user goal.
         5. If the user is ready to continue, use the 'finished' tool        
         """,
-        "tools": [get_user_goal, set_user_goal, _transfer_to_coordinator]
+        "tools": [get_user_goal, set_user_goal, _transfer_to_coordinator],
     },
     "user_intent_agent_v2": {
         "instruction": """
@@ -138,6 +140,6 @@ variants = {
            It will refuse until an approval has been recorded. If the user revises their goal
            after approving it, call 'approve_perceived_user_goal' again before 'finished'.
         """,
-        "tools": [set_perceived_user_goal, approve_perceived_user_goal, finished]
-    }
+        "tools": [set_perceived_user_goal, approve_perceived_user_goal, finished],
+    },
 }

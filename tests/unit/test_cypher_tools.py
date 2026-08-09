@@ -4,12 +4,11 @@ Mirrors the injection-payload style in test_kg_construction_tools.py: the
 database is faked so these tests assert what Cypher gets built (or, for
 rejected input, that nothing is sent) without a Neo4j instance.
 """
+
 import pytest
+from fakes import RecordingGraphDb
 
 from agentic_kg.tools import cypher_tools
-
-
-from fakes import RecordingGraphDb
 
 # Shared with the rest of the unit suite; see tests/unit/fakes.py.
 FakeGraphDb = RecordingGraphDb
@@ -33,7 +32,9 @@ def test_create_uniqueness_constraint_builds_expected_query(fake_db):
     assert "REQUIRE n.id IS UNIQUE" in query
 
 
-def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any_query(fake_db):
+def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any_query(
+    fake_db,
+):
     """create_uniqueness_constraint used to guard interpolation with
     is_symbol() alone, which lets newline/paren payloads through -- it must
     use the same identifier regex kg_construction_tools.py uses."""
@@ -42,7 +43,9 @@ def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any
     assert fake_db.queries == []
 
 
-def test_create_uniqueness_constraint_rejects_property_injection_payload_before_any_query(fake_db):
+def test_create_uniqueness_constraint_rejects_property_injection_payload_before_any_query(
+    fake_db,
+):
     result = cypher_tools.create_uniqueness_constraint("Person", INJECTION_PAYLOAD)
     assert result["status"] == "error"
     assert fake_db.queries == []
@@ -85,8 +88,12 @@ def test_get_physical_schema_without_profile_is_unchanged(monkeypatch):
 
     def fake_structured_schema(driver, **kwargs):
         captured.update(kwargs)
-        return {"node_props": {"A": [{"property": "x", "type": "STRING"}]},
-                "rel_props": {}, "relationships": [], "metadata": {}}
+        return {
+            "node_props": {"A": [{"property": "x", "type": "STRING"}]},
+            "rel_props": {},
+            "relationships": [],
+            "metadata": {},
+        }
 
     monkeypatch.setattr(cypher_tools, "get_structured_schema", fake_structured_schema)
     monkeypatch.setattr(cypher_tools, "graphdb", FakeReadDb())
@@ -110,6 +117,7 @@ def test_get_physical_schema_with_profile_enriches_and_profiles(monkeypatch):
     monkeypatch.setattr(cypher_tools, "get_structured_schema", fake_structured_schema)
     monkeypatch.setattr(cypher_tools, "graphdb", FakeReadDb())
     from agentic_kg.common import graph_profile
+
     graph_profile.reset_cache()
     monkeypatch.setattr(graph_profile, "graphdb", FakeReadDb())
 
@@ -123,7 +131,8 @@ def test_get_physical_schema_with_profile_enriches_and_profiles(monkeypatch):
 
 
 def test_profiled_payload_states_each_property_once_and_leads_with_the_profile(
-        monkeypatch):
+    monkeypatch,
+):
     """Would catch: returning the library's schema with `profile` bolted on.
 
     That shape carried the raw `values`/`distinct_count` for every property the
@@ -134,15 +143,28 @@ def test_profiled_payload_states_each_property_once_and_leads_with_the_profile(
     to deny. `metadata` (constraints, indexes) describes write-time guarantees
     a retrieval agent cannot ask about.
     """
+
     def fake_structured_schema(driver, **kwargs):
-        return {"node_props": {"A": [{"property": "x", "type": "STRING",
-                                      "values": ["1", "2"], "distinct_count": 9}]},
-                "rel_props": {}, "relationships": [{"start": "A", "type": "R", "end": "A"}],
-                "metadata": {"constraint": [], "index": []}}
+        return {
+            "node_props": {
+                "A": [
+                    {
+                        "property": "x",
+                        "type": "STRING",
+                        "values": ["1", "2"],
+                        "distinct_count": 9,
+                    }
+                ]
+            },
+            "rel_props": {},
+            "relationships": [{"start": "A", "type": "R", "end": "A"}],
+            "metadata": {"constraint": [], "index": []},
+        }
 
     monkeypatch.setattr(cypher_tools, "get_structured_schema", fake_structured_schema)
     monkeypatch.setattr(cypher_tools, "graphdb", FakeReadDb())
     from agentic_kg.common import graph_profile
+
     graph_profile.reset_cache()
     monkeypatch.setattr(graph_profile, "graphdb", FakeReadDb())
 
@@ -161,15 +183,21 @@ def test_graphrag_wrapper_is_a_named_function_not_a_partial():
     assert fn.__doc__ and "partial" not in fn.__doc__.lower()
 
 
-@pytest.mark.parametrize("tool_name", [
-    "get_physical_schema", "get_graph_schema_with_profile", "read_neo4j_cypher",
-])
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "get_physical_schema",
+        "get_graph_schema_with_profile",
+        "read_neo4j_cypher",
+    ],
+)
 def test_no_tool_exposes_the_profile_flag_to_a_model(tool_name):
     """ADK cannot express a default in a tool declaration, so any parameter
     with one is advertised as REQUIRED. A model-visible include_data_profile
     would make the profile optional -- and could trigger a full scan per label
     on the latency-tuned construction agent."""
     import inspect
+
     from google.adk.tools.function_tool import FunctionTool
 
     fn = getattr(cypher_tools, tool_name)
@@ -191,11 +219,12 @@ class FakeDdlDb(FakeGraphDb):
     def send_query(self, query, parameters=None):
         self.queries.append((query, parameters or {}))
         if "SHOW CONSTRAINTS" in query:
-            return {"status": "success",
-                    "records": [{"name": n} for n in self.constraints]}
+            return {
+                "status": "success",
+                "records": [{"name": n} for n in self.constraints],
+            }
         if "SHOW INDEXES" in query:
-            return {"status": "success",
-                    "records": [{"name": n} for n in self.indexes]}
+            return {"status": "success", "records": [{"name": n} for n in self.indexes]}
         return {"status": "success", "records": []}
 
 

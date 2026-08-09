@@ -35,6 +35,8 @@ messages do. Avoid narrating file-by-file changes; that's what `git diff --stat`
 ```bash
 uv run pytest -q                 # unit tests — fast, no external deps, run before every PR
 uv run pytest -q -m integration  # integration tests — need Docker (Testcontainers); skip cleanly without it
+uv run ruff check .               # lint — run before every PR
+uv run ruff format --check .      # formatting check — run before every PR; drop --check to fix locally
 ```
 
 A PR that changes retrieval, construction, or Neo4j access code should include or update unit tests; skip

@@ -1,25 +1,29 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the cypher agent.
 These instructions guide the agent's behavior, workflow, and tool usage.
 """
 
-
-from agentic_kg.tools.user_goal_tools import (
-    get_user_goal,
-    get_approved_user_goal
- )
-from agentic_kg.tools.file_tools import (
-    get_approved_files, sample_file, search_file, column_stats, join_preview,
-    collapse_check, column_type_hint, column_type_hints,
- )
 from agentic_kg.tools.construction_plan_tools import (
-    propose_node_construction, propose_relationship_construction,
-    propose_node_constructions, propose_relationship_constructions,
-    remove_node_construction, remove_relationship_construction,
     get_proposed_construction_plan,
+    propose_node_construction,
+    propose_node_constructions,
+    propose_relationship_construction,
+    propose_relationship_constructions,
+    remove_node_construction,
+    remove_relationship_construction,
 )
+from agentic_kg.tools.file_tools import (
+    collapse_check,
+    column_stats,
+    column_type_hint,
+    column_type_hints,
+    get_approved_files,
+    join_preview,
+    sample_file,
+    search_file,
+)
+from agentic_kg.tools.user_goal_tools import get_approved_user_goal
 
 # Validation rules shared by the proposal agent and the critic agent. Both need the
 # *same* rules -- one to apply them, one to enforce them -- so they are written once
@@ -134,8 +138,7 @@ _VALIDATION_RULES = """
 """
 
 variants = {
-    "schema_proposal_agent_v1":
-    {
+    "schema_proposal_agent_v1": {
         "instruction": """    
             You are an expert at knowledge graph modeling with property graphs. Propose an appropriate
             construction plan which will transform approved files into nodes or relationships.
@@ -215,7 +218,9 @@ variants = {
             - Use SCREAMING_SNAKE_CASE for every relationship type, matching Cypher convention (e.g.
               `SUPPLIES`, `PART_OF`, `HAS_COMPONENT`) — not PascalCase or camelCase.
 
-            """ + _VALIDATION_RULES + """
+            """
+        + _VALIDATION_RULES
+        + """
             Prepare for the task:
             - get the user goal using the 'get_approved_user_goal' tool
             - get the list of approved files using the 'get_approved_files' tool
@@ -253,16 +258,25 @@ variants = {
             13. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
         """,
         "tools": [
-            get_approved_user_goal, get_approved_files, get_proposed_construction_plan,
-            sample_file, search_file, column_stats, join_preview, collapse_check,
-            column_type_hint, column_type_hints,
-            propose_node_construction, propose_relationship_construction,
-            propose_node_constructions, propose_relationship_constructions,
-            remove_node_construction, remove_relationship_construction,
-        ]
+            get_approved_user_goal,
+            get_approved_files,
+            get_proposed_construction_plan,
+            sample_file,
+            search_file,
+            column_stats,
+            join_preview,
+            collapse_check,
+            column_type_hint,
+            column_type_hints,
+            propose_node_construction,
+            propose_relationship_construction,
+            propose_node_constructions,
+            propose_relationship_constructions,
+            remove_node_construction,
+            remove_relationship_construction,
+        ],
     },
-    "schema_critic_agent_v1":
-    {
+    "schema_critic_agent_v1": {
         "instruction": """
             You are an expert at knowledge graph modeling with property graphs. 
             Criticize the proposed schema for relevance to the user goal and approved files.
@@ -270,7 +284,9 @@ variants = {
             Apply the validation rules below to every construction in the plan. Reject with 'retry'
             whenever a construction breaks one of them, and say in the feedback which rule it breaks
             and what the fix is.
-            """ + _VALIDATION_RULES + """
+            """
+        + _VALIDATION_RULES
+        + """
             Additional things to criticize:
             - Could any nodes be relationships instead? Double-check that unique identifiers are unique
               and not references to other nodes.
@@ -316,10 +332,16 @@ variants = {
             refinement loop stops.
         """,
         "tools": [
-            get_approved_user_goal, get_approved_files,
+            get_approved_user_goal,
+            get_approved_files,
             get_proposed_construction_plan,
-            sample_file, search_file, column_stats, join_preview, collapse_check,
-            column_type_hint, column_type_hints,
-        ]
-    }
+            sample_file,
+            search_file,
+            column_stats,
+            join_preview,
+            collapse_check,
+            column_type_hint,
+            column_type_hints,
+        ],
+    },
 }

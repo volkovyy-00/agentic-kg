@@ -224,7 +224,9 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
   file, is tracked normally and is where a durable, shared project doc belongs.
 - **Tests.** `uv run pytest` defaults to `-m 'not integration'`, so it never touches Docker; integration
   tests are opt-in with `-m integration` and skip cleanly when no Docker daemon is reachable.
-- No linter or formatter, and no CI, are configured.
+- **Ruff lints and formats.** `ruff check .` / `ruff format --check .` (config: `pyproject.toml`'s
+  `[tool.ruff]`) — see `CONTRIBUTING.md`. CI is still not configured, so these are self-run before a PR,
+  not automatically enforced.
 
 ---
 

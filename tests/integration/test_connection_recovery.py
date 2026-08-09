@@ -7,6 +7,7 @@ instead of the code path production takes. In particular
 common/graph_profile.py has its own binding that no other integration test
 exercises -- reintroducing the defect there would otherwise be invisible.
 """
+
 import logging
 import warnings
 
@@ -25,6 +26,7 @@ RECONNECT_LOGGER = "agentic_kg.common.neo4j_for_adk"
 
 try:
     import docker
+
     docker.from_env().ping()
 except Exception as exc:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {exc}", allow_module_level=True)
@@ -44,7 +46,8 @@ def _use_after_close_warnings(caught):
     be updated apart -- silently weakening whichever one was missed.
     """
     return [
-        w for w in caught
+        w
+        for w in caught
         if issubclass(w.category, DeprecationWarning)
         and "after it has been closed" in str(w.message).lower()
     ]
@@ -52,10 +55,7 @@ def _use_after_close_warnings(caught):
 
 def _rebuild_log_lines(caplog):
     """The rebuild lines _ensure_connected emitted -- one per heal."""
-    return [
-        r.getMessage() for r in caplog.records
-        if "rebuilding" in r.getMessage()
-    ]
+    return [r.getMessage() for r in caplog.records if "rebuilding" in r.getMessage()]
 
 
 SUPPLIER_RULE = {
@@ -87,7 +87,8 @@ SUPPLIED_BY_RULE = {
 
 
 def test_every_graph_tool_works_after_a_close_and_recover_cycle(
-        neo4j_graph_with_apoc, caplog):
+    neo4j_graph_with_apoc, caplog
+):
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
     import agentic_kg.tools.kg_construction_tools as kg
@@ -107,8 +108,10 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
     # The break: exactly what neo4j_is_ready does on a transient failure.
     neo4j_for_adk.close_graphdb()
 
-    with warnings.catch_warnings(record=True) as caught, \
-            caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
+    with (
+        warnings.catch_warnings(record=True) as caught,
+        caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER),
+    ):
         warnings.simplefilter("always")
 
         # 1. Schema read -- the get_driver() path.
@@ -133,7 +136,8 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
         assert kg.import_relationships(SUPPLIED_BY_RULE)["status"] == "success"
 
         rels = neo4j_graph_with_apoc.send_query(
-            "MATCH (:Part)-[r:SUPPLIED_BY]->(:Supplier) RETURN count(r) AS c")
+            "MATCH (:Part)-[r:SUPPLIED_BY]->(:Supplier) RETURN count(r) AS c"
+        )
         assert rels["records"][0]["c"] > 0
 
     # neo4j 5.x's Driver tolerates use after close() -- _check_state in
@@ -171,8 +175,10 @@ def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph, caplog):
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
 
-    with warnings.catch_warnings(record=True) as caught, \
-            caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
+    with (
+        warnings.catch_warnings(record=True) as caught,
+        caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER),
+    ):
         warnings.simplefilter("always")
 
         for _ in range(3):

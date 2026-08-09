@@ -12,19 +12,21 @@ Unlike the two shipped gates, this one checks no boolean flag. It compares two
 durable state keys, because this phase ends on an approval the user actively
 gives rather than on a turn-scoped "yes, move on".
 """
+
 import asyncio
 
 import pytest
-from google.genai import types
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
+from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import FOREIGN_CONTEXT_SENTINEL, drop_foreign_context
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.tool_result import is_error
+
 # Imported for its import-time side effect as well as its use below: building
 # the coordinator is what gives user_intent_agent a parent, and ADK only
 # injects transfer_to_agent into a parented agent. Without this import every
@@ -40,11 +42,19 @@ from agentic_kg.coordinators.multi_agent.sub_agents.user_intent_agent.variants i
 )
 from agentic_kg.tools.user_goal_tools import (
     APPROVED_USER_GOAL,
+)
+from agentic_kg.tools.user_goal_tools import (
     PERCEIVED_USER_GOAL as PERCEIVED,
 )
 
-GOAL = {"kind_of_graph": "bill of materials", "graph_description": "parts and suppliers"}
-OTHER_GOAL = {"kind_of_graph": "supply chain", "graph_description": "a different graph entirely"}
+GOAL = {
+    "kind_of_graph": "bill of materials",
+    "graph_description": "parts and suppliers",
+}
+OTHER_GOAL = {
+    "kind_of_graph": "supply chain",
+    "graph_description": "a different graph entirely",
+}
 
 
 class FakeActions:
@@ -191,6 +201,7 @@ class CapturingLlm(BaseLlm):
     tests/unit/fakes.py deliberately does not centralize fakes of this kind.
     Do not extract it.
     """
+
     responses: list = Field(default_factory=list)
     requests: list = Field(default_factory=list)
     call_count: int = 0
@@ -203,13 +214,22 @@ class CapturingLlm(BaseLlm):
 
 
 def _text(text):
-    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=text)])
+    )
 
 
 def _call(name, args=None):
-    return LlmResponse(content=types.Content(role="model", parts=[
-        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
-    ]))
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(name=name, args=args or {})
+                ),
+            ],
+        )
+    )
 
 
 def _multi_call(*name_arg_pairs):
@@ -232,16 +252,21 @@ def _multi_call(*name_arg_pairs):
     a reordering makes 'finished' refuse, which fails the assertion below. It
     cannot turn this test falsely green.
     """
-    return LlmResponse(content=types.Content(role="model", parts=[
-        types.Part(function_call=types.FunctionCall(name=name, args=args or {}))
-        for name, args in name_arg_pairs
-    ]))
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(function_call=types.FunctionCall(name=name, args=args or {}))
+                for name, args in name_arg_pairs
+            ],
+        )
+    )
 
 
 def _declaration_names(request):
     names = []
-    for tool in (request.config.tools or []):
-        for declaration in (getattr(tool, "function_declarations", None) or []):
+    for tool in request.config.tools or []:
+        for declaration in getattr(tool, "function_declarations", None) or []:
             names.append(declaration.name)
     return names
 
@@ -255,11 +280,14 @@ async def _run_one_turn(agent, app_name, message="hello"):
     """
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
-        app_name=app_name, user_id="u1",
+        app_name=app_name,
+        user_id="u1",
     )
     return [
-        event async for event in runner.run_async(
-            user_id="u1", session_id=session.id,
+        event
+        async for event in runner.run_async(
+            user_id="u1",
+            session_id=session.id,
             new_message=types.Content(role="user", parts=[types.Part(text=message)]),
         )
     ]
@@ -310,9 +338,14 @@ def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
     ADK injects a transfer_to_agent tool into every sub-agent with a parent or
     peers, and it does not consult this gate. Asserting on what reached the
     model is the only way to know it is gone."""
-    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("tell me about your data")],
-    ))
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("tell me about your data")],
+        ),
+    )
     asyncio.run(_run_one_turn(user_intent_agent, "intent_door_test"))
 
     requests = user_intent_agent.model.requests
@@ -335,27 +368,43 @@ def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkey
     removes the declaration for. Catches drop_foreign_context being dropped, or
     being wired somewhere it never runs.
     """
-    monkeypatch.setattr(full_workflow_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[_call("transfer_to_agent", {"agent_name": "user_intent_agent_v2"})],
-    ))
-    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[
-            _text("what kind of graph did you have in mind?"),
-            _text("thanks -- and what will you use it for?"),
-        ],
-    ))
+    monkeypatch.setattr(
+        full_workflow_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("transfer_to_agent", {"agent_name": "user_intent_agent_v2"})
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _text("what kind of graph did you have in mind?"),
+                _text("thanks -- and what will you use it for?"),
+            ],
+        ),
+    )
 
     async def run():
-        runner = InMemoryRunner(agent=full_workflow_agent, app_name="intent_context_test")
+        runner = InMemoryRunner(
+            agent=full_workflow_agent, app_name="intent_context_test"
+        )
         session = await runner.session_service.create_session(
-            app_name="intent_context_test", user_id="u1",
+            app_name="intent_context_test",
+            user_id="u1",
         )
         for message in ("I want a graph", "a bill of materials"):
             async for _ in runner.run_async(
-                user_id="u1", session_id=session.id,
-                new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+                user_id="u1",
+                session_id=session.id,
+                new_message=types.Content(
+                    role="user", parts=[types.Part(text=message)]
+                ),
             ):
                 pass
 
@@ -366,8 +415,8 @@ def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkey
         f"the interview never reached a second turn; got {len(requests)} request(s)"
     )
     for request in requests:
-        for content in (request.contents or []):
-            for part in (getattr(content, "parts", None) or []):
+        for content in request.contents or []:
+            for part in getattr(content, "parts", None) or []:
                 text = getattr(part, "text", None) or ""
                 assert FOREIGN_CONTEXT_SENTINEL not in text, (
                     "the coordinator's transfer_to_agent call is still in this "
@@ -379,9 +428,14 @@ def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     """Catches an over-broad strip that empties config.tools. The agent is
     useless without its own tools, and every other assertion here is about
     absence, so nothing else would notice."""
-    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("tell me about your data")],
-    ))
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("tell me about your data")],
+        ),
+    )
     asyncio.run(_run_one_turn(user_intent_agent, "intent_tools_survive_test"))
 
     names = _declaration_names(user_intent_agent.model.requests[0])
@@ -395,10 +449,16 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
     turn -- which is precisely what the reported session did. The strip pops it
     from tools_dict, so ADK raises (functions.py:565-568) rather than silently
     transferring mid-question."""
-    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[_call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})],
-    ))
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+            ],
+        ),
+    )
     with pytest.raises(ValueError, match="transfer_to_agent"):
         asyncio.run(_run_one_turn(user_intent_agent, "intent_hard_error_test"))
 
@@ -423,35 +483,52 @@ def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch
     FakeToolContext uses elsewhere in this file) has no delta/committed
     layering and cannot see that coming; this test can, and would go red.
     """
-    monkeypatch.setattr(user_intent_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[_multi_call(
-            ("set_perceived_user_goal", {
-                "kind_of_graph": "bill of materials",
-                "graph_description": "parts and suppliers",
-            }),
-            ("approve_perceived_user_goal", {}),
-            ("finished", {}),
-        )],
-    ))
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _multi_call(
+                    (
+                        "set_perceived_user_goal",
+                        {
+                            "kind_of_graph": "bill of materials",
+                            "graph_description": "parts and suppliers",
+                        },
+                    ),
+                    ("approve_perceived_user_goal", {}),
+                    ("finished", {}),
+                )
+            ],
+        ),
+    )
     # 'finished' escalates control to the parent, which the Runner then calls
     # for real within the same turn -- mock it too, or this test makes a live
     # network call. Same reasoning as
     # test_the_coordinators_transfer_call_never_reaches_this_agents_context.
-    monkeypatch.setattr(full_workflow_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("got it, moving on")],
-    ))
+    monkeypatch.setattr(
+        full_workflow_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("got it, moving on")],
+        ),
+    )
 
     app_name = "intent_real_state_gate_test"
     runner = InMemoryRunner(agent=user_intent_agent, app_name=app_name)
 
     async def run():
         session = await runner.session_service.create_session(
-            app_name=app_name, user_id="u1",
+            app_name=app_name,
+            user_id="u1",
         )
         events = [
-            event async for event in runner.run_async(
-                user_id="u1", session_id=session.id,
+            event
+            async for event in runner.run_async(
+                user_id="u1",
+                session_id=session.id,
                 new_message=types.Content(
                     role="user",
                     parts=[types.Part(text="a bill of materials graph")],
@@ -459,7 +536,9 @@ def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch
             )
         ]
         committed = await runner.session_service.get_session(
-            app_name=app_name, user_id="u1", session_id=session.id,
+            app_name=app_name,
+            user_id="u1",
+            session_id=session.id,
         )
         return events, committed
 

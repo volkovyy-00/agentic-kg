@@ -1,14 +1,14 @@
 import logging
-
 from itertools import islice
+from typing import Any, Dict, List, Optional
 
 from google.adk.tools import ToolContext
-from typing import Dict, Any, List, Optional
 
 from agentic_kg.common.csv_reader import (
-    make_csv_reader, read_csv_batches, read_csv_header,
+    make_csv_reader,
+    read_csv_batches,
+    read_csv_header,
 )
-from agentic_kg.common.tool_result import tool_success, tool_error
 from agentic_kg.common.file_source import (
     SourceError,
     get_source_root,
@@ -16,9 +16,20 @@ from agentic_kg.common.file_source import (
     open_source,
     source_exists,
 )
+from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import (
-    BARE_NUMERIC, BLANK, BOOLEAN, BOOLEAN_LIKE, CONVERTED, FLOAT, INTEGER,
-    NUMERIC_AFTER_CLEANING, classify, coerce, has_fractional_part, is_blank,
+    BARE_NUMERIC,
+    BLANK,
+    BOOLEAN,
+    BOOLEAN_LIKE,
+    CONVERTED,
+    FLOAT,
+    INTEGER,
+    NUMERIC_AFTER_CLEANING,
+    classify,
+    coerce,
+    has_fractional_part,
+    is_blank,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,6 +37,7 @@ logger = logging.getLogger(__name__)
 ALL_AVAILABLE_FILES = "all_available_files"
 SUGGESTED_FILES = "suggested_file_list"
 APPROVED_FILES = "approved_file_list"
+
 
 def list_import_files(tool_context: ToolContext) -> dict:
     """Lists files available for knowledge graph construction.
@@ -45,7 +57,9 @@ def list_import_files(tool_context: ToolContext) -> dict:
     return tool_success(ALL_AVAILABLE_FILES, file_names)
 
 
-def set_suggested_files(suggest_files:List[str], tool_context:ToolContext) -> Dict[str, Any]:
+def set_suggested_files(
+    suggest_files: List[str], tool_context: ToolContext
+) -> Dict[str, Any]:
     """Set the files to be used for data import.
 
     Args:
@@ -88,7 +102,8 @@ def set_suggested_files(suggest_files:List[str], tool_context:ToolContext) -> Di
     tool_context.state[SUGGESTED_FILES] = suggest_files
     return tool_success(SUGGESTED_FILES, suggest_files)
 
-def get_suggested_files(tool_context:ToolContext) -> Dict[str, Any]:
+
+def get_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
     """Get the suggested files to be used for import.
 
     Returns:
@@ -99,8 +114,11 @@ def get_suggested_files(tool_context:ToolContext) -> Dict[str, Any]:
 
     """
     if SUGGESTED_FILES not in tool_context.state:
-        return tool_error("Suggested files have not been set. Take no action other than to inform user.")
+        return tool_error(
+            "Suggested files have not been set. Take no action other than to inform user."
+        )
     return tool_success(SUGGESTED_FILES, tool_context.state[SUGGESTED_FILES])
+
 
 def get_source_location(tool_context: ToolContext) -> Dict[str, Any]:
     """Reports where the system is reading source files from."""
@@ -113,19 +131,22 @@ def get_source_location(tool_context: ToolContext) -> Dict[str, Any]:
 def approve_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
     """Approves the suggested files for further processing."""
     if SUGGESTED_FILES not in tool_context.state:
-        return tool_error("Current files have not been set. Take no action other than to inform user.")
+        return tool_error(
+            "Current files have not been set. Take no action other than to inform user."
+        )
 
     tool_context.state[APPROVED_FILES] = tool_context.state[SUGGESTED_FILES]
     return tool_success(APPROVED_FILES, tool_context.state[APPROVED_FILES])
 
 
-def get_approved_files(tool_context:ToolContext) -> Dict[str, Any]:
-    f"""Get the files that have been approved for importing into a knowledge graph."""
-    
+def get_approved_files(tool_context: ToolContext) -> Dict[str, Any]:
+    """Get the files that have been approved for importing into a knowledge graph."""
+
     if APPROVED_FILES not in tool_context.state:
         return tool_error("Approved files have not been set.")
 
     return tool_success(APPROVED_FILES, tool_context.state[APPROVED_FILES])
+
 
 def sample_file(file_path: str, tool_context: ToolContext) -> dict:
     """Samples a file by reading up to 100 lines as text.
@@ -159,7 +180,9 @@ def sample_file(file_path: str, tool_context: ToolContext) -> dict:
     return tool_success("sample", result)
 
 
-def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_sensitive: bool = False) -> dict:
+def search_csv_file(
+    file_path: str, query: str, tool_context: ToolContext, case_sensitive: bool = False
+) -> dict:
     """
     Searches a CSV file for rows containing the given query string in any of its fields.
 
@@ -197,14 +220,18 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
             with open_source(file_path, "r") as csvfile:
                 reader = make_csv_reader(csvfile, file_path)
 
-                header_row = next(reader, []) # Store header, or empty list if file is empty
+                header_row = next(
+                    reader, []
+                )  # Store header, or empty list if file is empty
 
                 for row in reader:
                     for field in row:
-                        field_to_check = str(field) if case_sensitive else str(field).lower()
+                        field_to_check = (
+                            str(field) if case_sensitive else str(field).lower()
+                        )
                         if search_query in field_to_check:
                             matching_rows.append(row)
-                            break # Move to next row once a match is found
+                            break  # Move to next row once a match is found
     except Exception as e:
         return tool_error(f"Error reading or searching CSV file {file_path}: {e}")
 
@@ -215,11 +242,12 @@ def search_csv_file(file_path: str, query: str, tool_context: ToolContext, case_
             "query": query,
             "case_sensitive": case_sensitive,
             "header": header_row,
-            "rows_found": len(matching_rows)
+            "rows_found": len(matching_rows),
         },
-        "matching_rows": matching_rows
+        "matching_rows": matching_rows,
     }
     return tool_success("search_results", result_data)
+
 
 def _missing_column_error(file_path: str, column: str, header: List[str]) -> dict:
     """One wording for a misspelled column, wherever it is noticed."""
@@ -297,18 +325,25 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
     if error is not None:
         return error
 
-    empty_count = sum(1 for value in values if value is None or str(value).strip() == "")
-    non_empty = [value for value in values if value is not None and str(value).strip() != ""]
+    empty_count = sum(
+        1 for value in values if value is None or str(value).strip() == ""
+    )
+    non_empty = [
+        value for value in values if value is not None and str(value).strip() != ""
+    ]
     distinct_count = len(set(non_empty))
 
-    return tool_success("column_stats", {
-        "path": file_path,
-        "column": column,
-        "row_count": len(values),
-        "distinct_count": distinct_count,
-        "empty_count": empty_count,
-        "is_unique": empty_count == 0 and distinct_count == len(values),
-    })
+    return tool_success(
+        "column_stats",
+        {
+            "path": file_path,
+            "column": column,
+            "row_count": len(values),
+            "distinct_count": distinct_count,
+            "empty_count": empty_count,
+            "is_unique": empty_count == 0 and distinct_count == len(values),
+        },
+    )
 
 
 def _suggested_type(shape: str, values) -> str | None:
@@ -346,8 +381,7 @@ def _suggested_type(shape: str, values) -> str | None:
     return None
 
 
-def _hint_from_values(file_path: str, column: str,
-                      values: List[Optional[str]]) -> dict:
+def _hint_from_values(file_path: str, column: str, values: List[Optional[str]]) -> dict:
     """Build one column_type_hint payload from values already read.
 
     Split out from column_type_hint so column_type_hints can reuse it after a
@@ -422,7 +456,9 @@ def _collect_columns_values(file_path: str, columns: List[str]):
     except SourceError as exc:
         return None, tool_error(str(exc))
 
-    values_by_column: Dict[str, List[Optional[str]]] = {column: [] for column in columns}
+    values_by_column: Dict[str, List[Optional[str]]] = {
+        column: [] for column in columns
+    }
     saw_header = False
     try:
         for batch_header, rows in read_csv_batches(file_path):
@@ -430,7 +466,9 @@ def _collect_columns_values(file_path: str, columns: List[str]):
                 saw_header = True
                 for column in columns:
                     if column not in batch_header:
-                        return None, _missing_column_error(file_path, column, batch_header)
+                        return None, _missing_column_error(
+                            file_path, column, batch_header
+                        )
             for row in rows:
                 for column in columns:
                     values_by_column[column].append(row.get(column))
@@ -482,10 +520,14 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
     if error is not None:
         return error
 
-    return tool_success("column_type_hint", _hint_from_values(file_path, column, values))
+    return tool_success(
+        "column_type_hint", _hint_from_values(file_path, column, values)
+    )
 
 
-def column_type_hints(file_path: str, columns: List[str], tool_context: ToolContext) -> dict:
+def column_type_hints(
+    file_path: str, columns: List[str], tool_context: ToolContext
+) -> dict:
     """Reports 'column_type_hint' for several columns of one file in a single call.
 
     Each column is analyzed with the same rules as 'column_type_hint'. Analysis
@@ -522,10 +564,13 @@ def column_type_hints(file_path: str, columns: List[str], tool_context: ToolCont
     if error is not None:
         return error
 
-    return tool_success("column_type_hints", [
-        _hint_from_values(file_path, column, values_by_column[column])
-        for column in requested
-    ])
+    return tool_success(
+        "column_type_hints",
+        [
+            _hint_from_values(file_path, column, values_by_column[column])
+            for column in requested
+        ],
+    )
 
 
 def _collect_column_pairs(file_path: str, column_a: str, column_b: str):
@@ -565,8 +610,12 @@ def _collect_column_pairs(file_path: str, column_a: str, column_b: str):
     return pairs, None
 
 
-def collapse_check(file_path: str, node_key_column: str, candidate_column: str,
-                   tool_context: ToolContext) -> dict:
+def collapse_check(
+    file_path: str,
+    node_key_column: str,
+    candidate_column: str,
+    tool_context: ToolContext,
+) -> dict:
     """Checks whether a column survives collapsing rows onto a node key.
 
     This is the only tool that answers the post-MERGE question. Node loading
@@ -617,20 +666,24 @@ def collapse_check(file_path: str, node_key_column: str, candidate_column: str,
         for key, values in conflicts[:5]
     ]
 
-    return tool_success("collapse_check", {
-        "path": file_path,
-        "node_key_column": node_key_column,
-        "candidate_column": candidate_column,
-        "row_count": len(pairs),
-        "group_count": len(groups),
-        "groups_with_conflicts": len(conflicts),
-        "survives_collapse": len(conflicts) == 0,
-        "example_conflicts": example_conflicts,
-    })
+    return tool_success(
+        "collapse_check",
+        {
+            "path": file_path,
+            "node_key_column": node_key_column,
+            "candidate_column": candidate_column,
+            "row_count": len(pairs),
+            "group_count": len(groups),
+            "groups_with_conflicts": len(conflicts),
+            "survives_collapse": len(conflicts) == 0,
+            "example_conflicts": example_conflicts,
+        },
+    )
 
 
-def join_preview(file_a: str, column_a: str, file_b: str, column_b: str,
-                 tool_context: ToolContext) -> dict:
+def join_preview(
+    file_a: str, column_a: str, file_b: str, column_b: str, tool_context: ToolContext
+) -> dict:
     """Estimates how well a join between two CSV columns would match.
 
     Compares the distinct values of file_a's column against those of file_b's
@@ -664,21 +717,25 @@ def join_preview(file_a: str, column_a: str, file_b: str, column_b: str,
     def fraction(matched: int, total: int) -> float:
         return round(matched / total, 4) if total else 0.0
 
-    return tool_success("join_preview", {
-        "file_a": file_a,
-        "column_a": column_a,
-        "file_b": file_b,
-        "column_b": column_b,
-        "file_a_total": len(distinct_a),
-        "file_a_matched": len(overlap),
-        "file_a_match_fraction": fraction(len(overlap), len(distinct_a)),
-        "file_b_total": len(distinct_b),
-        "file_b_matched": len(overlap),
-        "file_b_match_fraction": fraction(len(overlap), len(distinct_b)),
-    })
+    return tool_success(
+        "join_preview",
+        {
+            "file_a": file_a,
+            "column_a": column_a,
+            "file_b": file_b,
+            "column_b": column_b,
+            "file_a_total": len(distinct_a),
+            "file_a_matched": len(overlap),
+            "file_a_match_fraction": fraction(len(overlap), len(distinct_a)),
+            "file_b_total": len(distinct_b),
+            "file_b_matched": len(overlap),
+            "file_b_match_fraction": fraction(len(overlap), len(distinct_b)),
+        },
+    )
 
 
 SEARCH_RESULTS = "search_results"
+
 
 def search_file(file_path: str, query: str) -> dict:
     """Searches any text file for lines containing the query string, case-insensitively.
@@ -698,10 +755,13 @@ def search_file(file_path: str, query: str) -> dict:
         return tool_error(str(exc))
 
     if not query:
-        return tool_success(SEARCH_RESULTS, {
-            "metadata": {"path": file_path, "query": query, "lines_found": 0},
-            "matching_lines": [],
-        })
+        return tool_success(
+            SEARCH_RESULTS,
+            {
+                "metadata": {"path": file_path, "query": query, "lines_found": 0},
+                "matching_lines": [],
+            },
+        )
 
     matching_lines = []
     search_query = query.lower()
@@ -709,18 +769,23 @@ def search_file(file_path: str, query: str) -> dict:
         with open_source(file_path, "r") as handle:
             for line_number, line in enumerate(handle, 1):
                 if search_query in line.lower():
-                    matching_lines.append({
-                        "line_number": line_number,
-                        "content": line.strip(),
-                    })
+                    matching_lines.append(
+                        {
+                            "line_number": line_number,
+                            "content": line.strip(),
+                        }
+                    )
     except Exception as exc:  # noqa: BLE001
         return tool_error(f"Error reading or searching file {file_path}: {exc}")
 
-    return tool_success(SEARCH_RESULTS, {
-        "metadata": {
-            "path": file_path,
-            "query": query,
-            "lines_found": len(matching_lines),
+    return tool_success(
+        SEARCH_RESULTS,
+        {
+            "metadata": {
+                "path": file_path,
+                "query": query,
+                "lines_found": len(matching_lines),
+            },
+            "matching_lines": matching_lines,
         },
-        "matching_lines": matching_lines,
-    })
+    )

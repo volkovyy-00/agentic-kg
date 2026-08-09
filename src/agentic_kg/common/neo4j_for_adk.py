@@ -1,20 +1,19 @@
-import os
-from typing import Any, Dict, Optional
-import re
 import atexit
 import logging
+import re
+from typing import Any, Dict, Optional
 
 from neo4j import (
+    READ_ACCESS,
     Driver,
     GraphDatabase,
     Query,
-    READ_ACCESS,
     Result,
 )
 
 from .config import get_settings
 from .pydantic_neo4j import Neo4jConfig
-from .tool_result import tool_success, tool_error
+from .tool_result import tool_error, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +56,7 @@ _SUMMARY_NOTE = (
     "need them."
 )
 
+
 def load_neo4j_config_from_settings() -> Neo4jConfig:
     settings = get_settings()
     neo4j_config = Neo4jConfig(dsn=settings.neo4j_dsn)
@@ -64,6 +64,7 @@ def load_neo4j_config_from_settings() -> Neo4jConfig:
     logger.info("Neo4j expected at: " + f"{neo4j_config.uri}")
 
     return neo4j_config
+
 
 def make_driver(neo4j_config: Neo4jConfig) -> Driver:
     """
@@ -73,10 +74,10 @@ def make_driver(neo4j_config: Neo4jConfig) -> Driver:
 
     # Initialize the driver
     driver_instance = GraphDatabase.driver(
-        driver_params["uri"],
-        auth=driver_params["auth"]
+        driver_params["uri"], auth=driver_params["auth"]
     )
     return driver_instance
+
 
 # NOTE: a `sanitize()` helper used to live here -- a character-class strip for
 # "when a query param is not possible". It had no callers, and stripping unsafe
@@ -97,18 +98,64 @@ def is_symbol(symbol: str) -> bool:
         True if the string is a valid symbol, False otherwise
     """
     # Check for spaces
-    if ' ' in symbol:
+    if " " in symbol:
         return False
 
     # Common Cypher keywords that should not be used as identifiers
     cypher_keywords = [
-        'MATCH', 'RETURN', 'WHERE', 'CREATE', 'DELETE', 'REMOVE', 'SET',
-        'ORDER', 'BY', 'SKIP', 'LIMIT', 'MERGE', 'ON', 'OPTIONAL', 'DETACH',
-        'WITH', 'DISTINCT', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'AS',
-        'UNION', 'ALL', 'LOAD', 'CSV', 'FROM', 'START', 'YIELD', 'CALL',
-        'CONSTRAINT', 'ASSERT', 'INDEX', 'UNIQUE', 'DROP', 'EXISTS', 'USING',
-        'PERIODIC', 'COMMIT', 'FOREACH', 'TRUE', 'FALSE', 'NULL', 'NOT', 'AND', 'OR', 'XOR',
-        'IS', 'IN', 'STARTS', 'ENDS', 'CONTAINS'
+        "MATCH",
+        "RETURN",
+        "WHERE",
+        "CREATE",
+        "DELETE",
+        "REMOVE",
+        "SET",
+        "ORDER",
+        "BY",
+        "SKIP",
+        "LIMIT",
+        "MERGE",
+        "ON",
+        "OPTIONAL",
+        "DETACH",
+        "WITH",
+        "DISTINCT",
+        "CASE",
+        "WHEN",
+        "THEN",
+        "ELSE",
+        "END",
+        "AS",
+        "UNION",
+        "ALL",
+        "LOAD",
+        "CSV",
+        "FROM",
+        "START",
+        "YIELD",
+        "CALL",
+        "CONSTRAINT",
+        "ASSERT",
+        "INDEX",
+        "UNIQUE",
+        "DROP",
+        "EXISTS",
+        "USING",
+        "PERIODIC",
+        "COMMIT",
+        "FOREACH",
+        "TRUE",
+        "FALSE",
+        "NULL",
+        "NOT",
+        "AND",
+        "OR",
+        "XOR",
+        "IS",
+        "IN",
+        "STARTS",
+        "ENDS",
+        "CONTAINS",
     ]
 
     # Check if the symbol is a Cypher keyword (case-insensitive)
@@ -133,19 +180,24 @@ def is_write_query(query: str) -> bool:
     in graph_profile.
     """
     return (
-        re.search(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD|DROP)\b", query, re.IGNORECASE)
+        re.search(
+            r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD|DROP)\b", query, re.IGNORECASE
+        )
         is not None
     )
+
 
 def result_to_adk(result: Result) -> Dict[str, Any]:
     eager_result = result.to_eager_result()
     records = [to_python(record.data()) for record in eager_result.records]
     return tool_success("records", records)
 
+
 def to_python(value):
-    from neo4j.graph import Node, Relationship, Path
-    from neo4j import Record
     import neo4j.time
+    from neo4j import Record
+    from neo4j.graph import Node, Path, Relationship
+
     if isinstance(value, Record):
         return {k: to_python(v) for k, v in value.items()}
     elif isinstance(value, dict):
@@ -156,7 +208,7 @@ def to_python(value):
         return {
             "id": value.id,
             "labels": list(value.labels),
-            "properties": to_python(dict(value))
+            "properties": to_python(dict(value)),
         }
     elif isinstance(value, Relationship):
         return {
@@ -164,12 +216,12 @@ def to_python(value):
             "type": value.type,
             "start_node": value.start_node.id,
             "end_node": value.end_node.id,
-            "properties": to_python(dict(value))
+            "properties": to_python(dict(value)),
         }
     elif isinstance(value, Path):
         return {
             "nodes": [to_python(node) for node in value.nodes],
-            "relationships": [to_python(rel) for rel in value.relationships]
+            "relationships": [to_python(rel) for rel in value.relationships],
         }
     elif isinstance(value, neo4j.time.DateTime):
         return value.iso_format()
@@ -219,6 +271,7 @@ class Neo4jForADK:
     """
     A wrapper for querying Neo4j which returns ADK-friendly responses.
     """
+
     # Optional because both are None until __init__ runs -- and the fixtures
     # noted below never run it, so None is a state real instances are read in.
     _driver: Optional[Driver] = None
@@ -325,7 +378,8 @@ class Neo4jForADK:
         # GraphDatabase.driver() does not touch the network, so no recovery
         # claim can honestly be made until a query succeeds.
         logger.info(
-            "Neo4j driver was closed; rebuilding for %s", self._neo4j_config.uri)
+            "Neo4j driver was closed; rebuilding for %s", self._neo4j_config.uri
+        )
 
     def _confirm_reconnect(self):
         """Report a recovery once, after evidence for it exists."""
@@ -425,7 +479,9 @@ class Neo4jForADK:
             if omitted:
                 logger.debug(
                     "Summarised %d oversized list value(s) totalling %d elements",
-                    len(omitted), sum(omitted))
+                    len(omitted),
+                    sum(omitted),
+                )
             self._confirm_reconnect()
             return tool_success("query_result", payload)
         except Exception as e:
@@ -434,8 +490,10 @@ class Neo4jForADK:
             if session is not None:
                 session.close()
 
+
 # Lazy singleton for the Neo4j client
 _graphdb_singleton: Optional[Neo4jForADK] = None
+
 
 def get_graphdb() -> Neo4jForADK:
     """Return a process-wide singleton instance of Neo4jForADK.
@@ -449,6 +507,7 @@ def get_graphdb() -> Neo4jForADK:
         atexit.register(_graphdb_singleton.close)
     return _graphdb_singleton
 
+
 def close_graphdb():
     """Close the shared client's connection without discarding the client.
 
@@ -459,4 +518,3 @@ def close_graphdb():
     """
     if _graphdb_singleton is not None:
         _graphdb_singleton.close()
-    

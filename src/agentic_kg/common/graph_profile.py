@@ -21,6 +21,7 @@ cannot arise here today -- the only index creation is
 create_uniqueness_constraint, on ID properties -- but a reader diffing this file
 against schema.py will find that branch and wonder why it is unhandled.
 """
+
 import logging
 import re
 from typing import Any, Dict, Optional
@@ -70,7 +71,8 @@ _NUMERIC_TYPES = {"INTEGER", "FLOAT"}
 # a key to a number.
 _BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
 _NUMERIC_LIKE = re.compile(
-    r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
+    r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$"
+)
 
 
 def _numeric_like_state(values) -> str:
@@ -88,7 +90,9 @@ def _numeric_like_state(values) -> str:
     return "no"
 
 
-def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict[str, Any]:
+def annotate_property(
+    prop: Dict[str, Any], entity_count: Optional[int]
+) -> Dict[str, Any]:
     """Annotate one property dict from the enriched schema.
 
     Works identically for node and relationship properties -- the library
@@ -133,9 +137,9 @@ def annotate_property(prop: Dict[str, Any], entity_count: Optional[int]) -> Dict
     # prompt rule 6, which tells the agent to cast.
     prop_type = prop.get("type")
     if prop_type in _NUMERIC_TYPES:
-        out["numeric_like"] = "no"           # already numeric; nothing to infer
+        out["numeric_like"] = "no"  # already numeric; nothing to infer
     elif out["completeness"] == "unknown":
-        out["numeric_like"] = "unknown"      # sampled values are not evidence
+        out["numeric_like"] = "unknown"  # sampled values are not evidence
     else:
         out["numeric_like"] = _numeric_like_state(values)
 
@@ -208,13 +212,19 @@ def _entity_counts(labels, rel_types) -> Dict[tuple, Optional[int]]:
     counts: Dict[tuple, Optional[int]] = {(False, name): None for name in labels}
     counts.update({(True, name): None for name in rel_types})
 
-    for row in _records(graphdb.send_read_query(
-        "MATCH (n) UNWIND labels(n) AS label "
-        "RETURN label AS name, count(*) AS n", max_rows=None)):
+    for row in _records(
+        graphdb.send_read_query(
+            "MATCH (n) UNWIND labels(n) AS label RETURN label AS name, count(*) AS n",
+            max_rows=None,
+        )
+    ):
         counts[(False, row["name"])] = row["n"]
 
-    for row in _records(graphdb.send_read_query(
-        "MATCH ()-[r]->() RETURN type(r) AS name, count(r) AS n", max_rows=None)):
+    for row in _records(
+        graphdb.send_read_query(
+            "MATCH ()-[r]->() RETURN type(r) AS name, count(r) AS n", max_rows=None
+        )
+    ):
         counts[(True, row["name"])] = row["n"]
 
     return counts
@@ -229,13 +239,15 @@ def _display_keys(counts: Dict[tuple, Optional[int]]) -> Dict[tuple, str]:
     than silently dropping one entity's profile.
     """
     colliding = {
-        name for (_, name) in counts
+        name
+        for (_, name) in counts
         if (False, name) in counts and (True, name) in counts
     }
     return {
         (is_rel, name): (
             f"{name} ({'relationship' if is_rel else 'node'})"
-            if name in colliding else name
+            if name in colliding
+            else name
         )
         for (is_rel, name) in counts
     }
@@ -256,18 +268,24 @@ def _pattern_degree(start: str, rel_type: str, end: str) -> Dict[str, Any]:
     # cardinality query is needed. Every figure below is scoped to this one
     # (start, type, end) pattern; pooling patterns of the same type is the bug
     # this whole keying decision exists to avoid.
-    start_rows = _records_or_raise(graphdb.send_read_query(
-        f"MATCH (a:{quote(start)})-[r:{quote(rel_type)}]->(:{quote(end)}) "
-        "WITH a, count(r) AS d "
-        "RETURN count(a) AS distinct_nodes, sum(d) AS edges, "
-        "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
-        max_rows=None))
-    end_rows = _records_or_raise(graphdb.send_read_query(
-        f"MATCH (:{quote(start)})-[r:{quote(rel_type)}]->(b:{quote(end)}) "
-        "WITH b, count(r) AS d "
-        "RETURN count(b) AS distinct_nodes, "
-        "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
-        max_rows=None))
+    start_rows = _records_or_raise(
+        graphdb.send_read_query(
+            f"MATCH (a:{quote(start)})-[r:{quote(rel_type)}]->(:{quote(end)}) "
+            "WITH a, count(r) AS d "
+            "RETURN count(a) AS distinct_nodes, sum(d) AS edges, "
+            "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
+            max_rows=None,
+        )
+    )
+    end_rows = _records_or_raise(
+        graphdb.send_read_query(
+            f"MATCH (:{quote(start)})-[r:{quote(rel_type)}]->(b:{quote(end)}) "
+            "WITH b, count(r) AS d "
+            "RETURN count(b) AS distinct_nodes, "
+            "       min(d) AS lo, max(d) AS hi, avg(d) AS avg",
+            max_rows=None,
+        )
+    )
 
     if not start_rows or start_rows[0].get("edges") in (None, 0):
         return {"edges": 0, "start_degree": "unknown", "end_degree": "unknown"}
@@ -331,7 +349,8 @@ def _profile_entity(entity, props, entity_count, is_relationship):
         distinct_count = prop.get("distinct_count")
         if distinct_count is not None and distinct_count <= VALUE_COUNT_MAX_DISTINCT:
             out["value_counts"], out["value_counts_complete"] = _value_counts(
-                entity, prop["property"], is_relationship)
+                entity, prop["property"], is_relationship
+            )
         else:
             out["value_counts"] = "unknown"
             # Same tri-state vocabulary as the other annotations: no counts
@@ -395,16 +414,21 @@ def _partitions(annotated: Any, patterns_of_type: int) -> Any:
                 "numbers"
                 if prop.get("type") in _NUMERIC_TYPES
                 or prop.get("numeric_like") in ("yes", "numeric_after_cleaning")
-                else "categories")
+                else "categories"
+            )
         elif prop.get("completeness") == "unknown":
             distribution = "unknown"
             values_are = "unknown"
         else:
-            continue          # counted, and too many distinct values to be a kind
-        out.append({"property": prop["property"],
-                    "distribution": distribution,
-                    "values_are": values_are,
-                    "distribution_covers": covers})
+            continue  # counted, and too many distinct values to be a kind
+        out.append(
+            {
+                "property": prop["property"],
+                "distribution": distribution,
+                "values_are": values_are,
+                "distribution_covers": covers,
+            }
+        )
     return out
 
 
@@ -447,7 +471,8 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
             continue
         try:
             properties[key] = _profile_entity(
-                name, props, counts.get((is_rel, name)), is_rel)
+                name, props, counts.get((is_rel, name)), is_rel
+            )
         except Exception:
             # Includes ProfileQueryError. Deliberately broad: a profile is a
             # convenience, and no failure inside it may take down the schema
@@ -460,8 +485,9 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
     # the 2P degree queries unbounded, so "cold-start cost is bounded" would
     # hold for Q alone -- which is not what the spec claims. Largest patterns
     # first, by the edge count of their relationship type.
-    ranked = [r for r in relationships
-              if r.get("start") and r.get("type") and r.get("end")]
+    ranked = [
+        r for r in relationships if r.get("start") and r.get("type") and r.get("end")
+    ]
     ranked.sort(key=lambda r: counts.get((True, r["type"])) or 0, reverse=True)
 
     # How many patterns each relationship type spans, which is what decides
@@ -475,17 +501,22 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
     patterns = []
     for index, rel in enumerate(ranked):
         start, rel_type, end = rel["start"], rel["type"], rel["end"]
-        entry = {"pattern": f"{start}-[{rel_type}]->{end}",
-                 "start": start, "type": rel_type, "end": end,
-                 # Derived from the properties computed above, so it is stated
-                 # even for a pattern the degree budget skipped -- knowing the
-                 # edges are of several kinds matters most where we could not
-                 # afford to say how they spread. A type absent from rel_props
-                 # has no properties at all, which is an empty partition list,
-                 # not an unknown one.
-                 "partitioned_by": _partitions(
-                     properties.get(display.get((True, rel_type)), []),
-                     patterns_of_type[rel_type])}
+        entry = {
+            "pattern": f"{start}-[{rel_type}]->{end}",
+            "start": start,
+            "type": rel_type,
+            "end": end,
+            # Derived from the properties computed above, so it is stated
+            # even for a pattern the degree budget skipped -- knowing the
+            # edges are of several kinds matters most where we could not
+            # afford to say how they spread. A type absent from rel_props
+            # has no properties at all, which is an empty partition list,
+            # not an unknown one.
+            "partitioned_by": _partitions(
+                properties.get(display.get((True, rel_type)), []),
+                patterns_of_type[rel_type],
+            ),
+        }
         if index >= MAX_PROFILED_PATTERNS:
             entry["start_degree"] = "not_profiled"
             entry["end_degree"] = "not_profiled"
@@ -494,7 +525,9 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
         try:
             entry.update(_pattern_degree(start, rel_type, end))
         except Exception:
-            logger.exception("Degree profiling failed for %s; continuing", entry["pattern"])
+            logger.exception(
+                "Degree profiling failed for %s; continuing", entry["pattern"]
+            )
             entry["start_degree"] = "profile_error"
             entry["end_degree"] = "profile_error"
         patterns.append(entry)

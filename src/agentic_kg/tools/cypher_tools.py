@@ -1,22 +1,21 @@
-from typing import Any, Optional, Dict
+from typing import Any, Dict, Optional
 
 from google.adk.tools import ToolContext
-
 from neo4j_graphrag.schema import get_structured_schema
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
 from agentic_kg.common.graph_profile import get_cached_profile, quote
 from agentic_kg.common.neo4j_for_adk import (
-    get_graphdb,
-    close_graphdb,
     QUERY_TIMEOUT_SECONDS,
+    close_graphdb,
+    get_graphdb,
 )
-from agentic_kg.common.tool_result import tool_success, tool_error, is_error
+from agentic_kg.common.tool_result import is_error, tool_error, tool_success
 
 graphdb = get_graphdb()
 
-def neo4j_is_ready(
-):
+
+def neo4j_is_ready():
     """Tool to check that the Neo4j database is ready.
     Replies with either a positive message about the database being ready or an error message.
     """
@@ -48,7 +47,9 @@ def _physical_schema(include_data_profile: bool) -> Dict[str, Any]:
         database_name = graphdb.get_config().database
 
         if not include_data_profile:
-            return tool_success("schema", get_structured_schema(driver, database=database_name))
+            return tool_success(
+                "schema", get_structured_schema(driver, database=database_name)
+            )
 
         def load_enriched_schema():
             return get_structured_schema(
@@ -112,8 +113,7 @@ def get_graph_schema_with_profile() -> Dict[str, Any]:
 
 
 def read_neo4j_cypher(
-    query: str,
-    params: Optional[Dict[str, Any]] = None
+    query: str, params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Submits a read-only Cypher query to a Neo4j database.
 
@@ -139,9 +139,9 @@ def read_neo4j_cypher(
     """
     return graphdb.send_read_query(query, params)
 
+
 def write_neo4j_cypher(
-    query: str,
-    params: Optional[Dict[str, Any]] = None
+    query: str, params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Submits a Cypher query to write to a Neo4j database.
     Make sure you have permission to write before calling this.
@@ -157,6 +157,7 @@ def write_neo4j_cypher(
     results = graphdb.send_query(query, params)
     return results
 
+
 def reset_neo4j_data() -> Dict[str, Any]:
     """Resets the neo4j graph database by removing all data,
     indexes and constraints.
@@ -167,7 +168,9 @@ def reset_neo4j_data() -> Dict[str, Any]:
         Success or an error.
     """
     # First, remove all nodes and relationships in batches
-    data_removed = graphdb.send_query("""MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS""")
+    data_removed = graphdb.send_query(
+        """MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS"""
+    )
     if is_error(data_removed):
         return data_removed
 
@@ -184,9 +187,7 @@ def reset_neo4j_data() -> Dict[str, Any]:
     # so a failed listing used to fall through into a TypeError on ["records"].
 
     # remove all constraints
-    list_constraints = graphdb.send_query(
-        """SHOW CONSTRAINTS YIELD name"""
-    )
+    list_constraints = graphdb.send_query("""SHOW CONSTRAINTS YIELD name""")
     if is_error(list_constraints):
         return list_constraints
     constraint_names = [row["name"] for row in list_constraints["records"]]
@@ -198,16 +199,12 @@ def reset_neo4j_data() -> Dict[str, Any]:
             return dropped_constraint
 
     # remove all indexes
-    list_indexes = graphdb.send_query(
-        """SHOW INDEXES YIELD name"""
-    )
+    list_indexes = graphdb.send_query("""SHOW INDEXES YIELD name""")
     if is_error(list_indexes):
         return list_indexes
     index_names = [row["name"] for row in list_indexes["records"]]
     for index_name in index_names:
-        dropped_index = graphdb.send_query(
-            f"""DROP INDEX {quote(index_name)}"""
-        )
+        dropped_index = graphdb.send_query(f"""DROP INDEX {quote(index_name)}""")
         if is_error(dropped_index):
             return dropped_index
 
@@ -247,7 +244,13 @@ def create_uniqueness_constraint(
     results = graphdb.send_query(query)
     return results
 
-def merge_node_into_graph(label_name:str, id_property_name:str, properties: Dict[str, Any], tool_context:ToolContext) -> Dict[str, Any]:
+
+def merge_node_into_graph(
+    label_name: str,
+    id_property_name: str,
+    properties: Dict[str, Any],
+    tool_context: ToolContext,
+) -> Dict[str, Any]:
     """Merges a node into the graph. The label_name/id_property_name pair will
     be used for the MERGE pattern to ensure uniqueness.
     The properties dictionary will be used in a SET to set all properties of the node.
@@ -267,12 +270,14 @@ def merge_node_into_graph(label_name:str, id_property_name:str, properties: Dict
     properties = {
         "label_name": label_name,
         "id_property_name": id_property_name,
-        "props": properties
+        "props": properties,
     }
     return write_neo4j_cypher(query, properties)
 
 
-def merge_singleton_node_into_graph(label_name:str, properties: Dict[str, Any], tool_context:ToolContext) -> Dict[str, Any]:
+def merge_singleton_node_into_graph(
+    label_name: str, properties: Dict[str, Any], tool_context: ToolContext
+) -> Dict[str, Any]:
     """Merges a singleton node into the graph. The label_name will be used for the MERGE pattern,
     ensuring a singleton by having no either qualifying properties.
     The properties dictionary will be used in a SET to set all properties of the node.
@@ -289,8 +294,5 @@ def merge_singleton_node_into_graph(label_name:str, properties: Dict[str, Any], 
               If 'error', includes an 'error_message' key.
     """
     query = "MERGE (t:$($label_name)) SET t += $props"
-    properties = {
-        "label_name": label_name,
-        "props": properties
-    }
+    properties = {"label_name": label_name, "props": properties}
     return write_neo4j_cypher(query, properties)

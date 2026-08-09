@@ -6,12 +6,14 @@ under 10k, single-label nodes and bare-identifier names. Every one of those is
 a property of that dataset, not of graphs in general, and each one hides a
 different bug. These tests are the only evidence this work generalises.
 """
+
 import pytest
 
 pytestmark = pytest.mark.integration
 
 try:
     import docker  # type: ignore
+
     docker.from_env().ping()
 except Exception as e:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {e}", allow_module_level=True)
@@ -20,6 +22,7 @@ except Exception as e:  # pragma: no cover
 @pytest.fixture(scope="module")
 def graphdb_against_container():
     from testcontainers.neo4j import Neo4jContainer
+
     from agentic_kg.common import graph_profile
     from agentic_kg.common.neo4j_for_adk import Neo4jForADK
 
@@ -38,6 +41,7 @@ def graphdb_against_container():
         auth = (container.username, container.password)
 
         from neo4j import GraphDatabase
+
         driver = GraphDatabase.driver(url, auth=auth)
 
         db = Neo4jForADK.__new__(Neo4jForADK)
@@ -94,8 +98,10 @@ def graphdb_against_container():
 
 def _schema_for(db):
     from neo4j_graphrag.schema import get_structured_schema
-    return get_structured_schema(db.get_driver(), is_enhanced=True,
-                                 database="neo4j", sanitize=True)
+
+    return get_structured_schema(
+        db.get_driver(), is_enhanced=True, database="neo4j", sanitize=True
+    )
 
 
 def test_profile_completes_on_all_shapes(graphdb_against_container):
@@ -120,7 +126,9 @@ def _pattern(profile, key):
     for entry in profile["patterns"]:
         if entry["pattern"] == key:
             return entry
-    raise AssertionError(f"pattern {key} missing from {[p['pattern'] for p in profile['patterns']]}")
+    raise AssertionError(
+        f"pattern {key} missing from {[p['pattern'] for p in profile['patterns']]}"
+    )
 
 
 def test_degree_numbers_match_hand_computed_ground_truth(graphdb_against_container):
@@ -136,8 +144,8 @@ def test_degree_numbers_match_hand_computed_ground_truth(graphdb_against_contain
     beta = _pattern(profile, "Alpha-[LINKS]->Beta")
     # 5 LINKS edges exist in total; a pooled implementation reports 5 here.
     assert beta["edges"] == 3
-    assert beta["distinct_start"] == 2          # a1, m1
-    assert beta["distinct_end"] == 2            # b1, b2
+    assert beta["distinct_start"] == 2  # a1, m1
+    assert beta["distinct_end"] == 2  # b1, b2
     assert beta["start_degree"] == {"min": 1, "max": 2, "mean": 1.5}
     assert beta["end_degree"] == {"min": 1, "max": 2, "mean": 1.5}
 
@@ -149,12 +157,12 @@ def test_degree_numbers_match_hand_computed_ground_truth(graphdb_against_contain
 
     legal = _pattern(profile, "Alpha-[LINKS]->Legal Entity")
     assert legal["edges"] == 1
-    assert legal["distinct_start"] == 1         # m1 only
+    assert legal["distinct_start"] == 1  # m1 only
 
     follows = _pattern(profile, "Alpha-[FOLLOWS]->Alpha")
     assert follows["edges"] == 2
-    assert follows["distinct_start"] == 2       # a1, a2
-    assert follows["distinct_end"] == 2         # a2, m1
+    assert follows["distinct_start"] == 2  # a1, a2
+    assert follows["distinct_end"] == 2  # a2, m1
 
 
 def test_fixed_grain_signal_is_trustworthy_per_pattern(graphdb_against_container):
@@ -174,7 +182,7 @@ def test_entity_counts_match_ground_truth(graphdb_against_container):
     db, graph_profile = graphdb_against_container
     profile = graph_profile.build_profile(_schema_for(db))
     counts = profile["entity_counts"]
-    assert counts["Alpha"] == 3                 # a1, a2, m1 (m1 is multi-label)
+    assert counts["Alpha"] == 3  # a1, a2, m1 (m1 is multi-label)
     assert counts["Beta"] == 2
     assert counts["Legal Entity"] == 1
     assert counts["LINKS"] == 5
@@ -237,19 +245,28 @@ def test_profile_query_count_is_exact(graphdb_against_container):
     issued, schema, _ = _count_profile_queries(db, graph_profile)
 
     p = min(len(schema.get("relationships", [])), graph_profile.MAX_PROFILED_PATTERNS)
-    all_props = (list(schema.get("node_props", {}).values())
-                 + list(schema.get("rel_props", {}).values()))
-    q = sum(1 for props in all_props for prop in props
-            if 0 < (prop.get("distinct_count") or 0) <= graph_profile.VALUE_COUNT_MAX_DISTINCT)
+    all_props = list(schema.get("node_props", {}).values()) + list(
+        schema.get("rel_props", {}).values()
+    )
+    q = sum(
+        1
+        for props in all_props
+        for prop in props
+        if 0
+        < (prop.get("distinct_count") or 0)
+        <= graph_profile.VALUE_COUNT_MAX_DISTINCT
+    )
     # 2 per profiled pattern + 1 per qualifying property + 2 entity counts.
     # The library's own N+M enriched scans happen in _schema_for, above.
     assert len(issued) == 2 * p + q + 2, (
         f"{len(issued)} queries issued; expected exactly {2 * p + q + 2} "
-        f"for P={p} Q={q}")
+        f"for P={p} Q={q}"
+    )
 
 
-def test_pattern_cap_engages_and_marks_rather_than_drops(graphdb_against_container,
-                                                         monkeypatch):
+def test_pattern_cap_engages_and_marks_rather_than_drops(
+    graphdb_against_container, monkeypatch
+):
     """Would catch: a cap that is declared but never applied, and a cap that
     bounds cost by silently dropping patterns from the output.
 
@@ -307,8 +324,10 @@ def test_one_failing_entity_degrades_only_that_entry(graphdb_against_container):
 def test_result_larger_than_the_cap_reports_a_true_row_count(graphdb_against_container):
     db, _ = graphdb_against_container
     from agentic_kg.common.neo4j_for_adk import MAX_RETURNED_ROWS
+
     payload = db.send_read_query(
-        f"UNWIND range(1, {MAX_RETURNED_ROWS + 20}) AS i RETURN i")["query_result"]
+        f"UNWIND range(1, {MAX_RETURNED_ROWS + 20}) AS i RETURN i"
+    )["query_result"]
     assert payload["row_count"] == MAX_RETURNED_ROWS + 20
     assert len(payload["records"]) == MAX_RETURNED_ROWS
     assert payload["truncated"] is True
@@ -321,13 +340,17 @@ def test_malformed_query_returns_a_structured_error(graphdb_against_container):
     assert result["error_message"]
 
 
-@pytest.mark.parametrize("write_query", [
-    "CREATE (n:ShouldNotExist)",
-    "MATCH (n:Alpha) SET n.tampered = true",
-    "CALL apoc.refactor.mergeNodes([]) YIELD node RETURN node",
-])
+@pytest.mark.parametrize(
+    "write_query",
+    [
+        "CREATE (n:ShouldNotExist)",
+        "MATCH (n:Alpha) SET n.tampered = true",
+        "CALL apoc.refactor.mergeNodes([]) YIELD node RETURN node",
+    ],
+)
 def test_writes_are_rejected_by_the_server_on_the_read_path(
-        graphdb_against_container, write_query):
+    graphdb_against_container, write_query
+):
     """The last case is the one is_write_query's regex does not catch."""
     db, _ = graphdb_against_container
     result = db.send_read_query(write_query)

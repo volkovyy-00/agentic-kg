@@ -18,18 +18,19 @@ transfer from full_workflow_agent. That transfer path is not exercised
 here -- it was separately confirmed to preserve the same once-per-turn
 firing by reading ADK's runners.py `_find_agent_to_run`, not by this test.
 """
+
 import asyncio
 
-from pydantic import Field
-from google.genai import types
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
+from google.genai import types
+from pydantic import Field
 
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
     root_agent,
-    schema_proposal_agent,
     schema_critic_agent,
+    schema_proposal_agent,
 )
 
 
@@ -47,15 +48,25 @@ class ScriptedLlm(BaseLlm):
 
 
 def _text_response(text: str) -> LlmResponse:
-    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=text)])
+    )
 
 
 def _tool_call_response(request_text: str) -> LlmResponse:
-    return LlmResponse(content=types.Content(role="model", parts=[
-        types.Part(function_call=types.FunctionCall(
-            name="schema_refinement_loop", args={"request": request_text},
-        )),
-    ]))
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="schema_refinement_loop",
+                        args={"request": request_text},
+                    )
+                ),
+            ],
+        )
+    )
 
 
 def test_each_user_turn_gets_its_own_one_call_budget(monkeypatch):
@@ -63,33 +74,54 @@ def test_each_user_turn_gets_its_own_one_call_budget(monkeypatch):
         # schema_proposal_agent_v1 and schema_critic_agent_v1 only need to
         # end their turn immediately (plain text, no tool calls) so the one
         # allowed schema_refinement_loop invocation per turn completes fast.
-        monkeypatch.setattr(schema_proposal_agent, "model", ScriptedLlm(
-            model="scripted", responses=[_text_response("a minimal schema proposal")],
-        ))
-        monkeypatch.setattr(schema_critic_agent, "model", ScriptedLlm(
-            model="scripted", responses=[_text_response("valid")],
-        ))
+        monkeypatch.setattr(
+            schema_proposal_agent,
+            "model",
+            ScriptedLlm(
+                model="scripted",
+                responses=[_text_response("a minimal schema proposal")],
+            ),
+        )
+        monkeypatch.setattr(
+            schema_critic_agent,
+            "model",
+            ScriptedLlm(
+                model="scripted",
+                responses=[_text_response("valid")],
+            ),
+        )
         # Coordinator: turn 1 tries to call schema_refinement_loop TWICE in a
         # row (reproducing the exact live-observed misbehavior this fix
         # guards against), then finalizes. Turn 2 tries once, then finalizes.
-        monkeypatch.setattr(root_agent, "model", ScriptedLlm(model="scripted", responses=[
-            _tool_call_response("propose an initial schema"),
-            _tool_call_response("the user asked for another change"),
-            _text_response("turn 1 final response"),
-            _tool_call_response("the user asked for yet another change"),
-            _text_response("turn 2 final response"),
-        ]))
+        monkeypatch.setattr(
+            root_agent,
+            "model",
+            ScriptedLlm(
+                model="scripted",
+                responses=[
+                    _tool_call_response("propose an initial schema"),
+                    _tool_call_response("the user asked for another change"),
+                    _text_response("turn 1 final response"),
+                    _tool_call_response("the user asked for yet another change"),
+                    _text_response("turn 2 final response"),
+                ],
+            ),
+        )
 
         runner = InMemoryRunner(agent=root_agent, app_name="turn_cap_test")
         session = await runner.session_service.create_session(
-            app_name="turn_cap_test", user_id="u1",
+            app_name="turn_cap_test",
+            user_id="u1",
         )
 
         turn_1_events = [
-            event async for event in runner.run_async(
-                user_id="u1", session_id=session.id,
+            event
+            async for event in runner.run_async(
+                user_id="u1",
+                session_id=session.id,
                 new_message=types.Content(
-                    role="user", parts=[types.Part(text="please propose a schema")],
+                    role="user",
+                    parts=[types.Part(text="please propose a schema")],
                 ),
             )
         ]
@@ -104,10 +136,13 @@ def test_each_user_turn_gets_its_own_one_call_budget(monkeypatch):
         )
 
         turn_2_events = [
-            event async for event in runner.run_async(
-                user_id="u1", session_id=session.id,
+            event
+            async for event in runner.run_async(
+                user_id="u1",
+                session_id=session.id,
                 new_message=types.Content(
-                    role="user", parts=[types.Part(text="please change it again")],
+                    role="user",
+                    parts=[types.Part(text="please change it again")],
                 ),
             )
         ]
@@ -117,7 +152,9 @@ def test_each_user_turn_gets_its_own_one_call_budget(monkeypatch):
         )
         return turn_1_events, turn_2_events, calls_after_turn_1, calls_after_turn_2
 
-    turn_1_events, turn_2_events, calls_after_turn_1, calls_after_turn_2 = asyncio.run(run())
+    turn_1_events, turn_2_events, calls_after_turn_1, calls_after_turn_2 = asyncio.run(
+        run()
+    )
 
     def _function_response_texts(events):
         texts = []

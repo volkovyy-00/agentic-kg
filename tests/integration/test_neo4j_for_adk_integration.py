@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -6,13 +7,16 @@ pytestmark = pytest.mark.integration
 # Skip module if Docker isn't available
 try:
     import docker  # type: ignore
+
     _client = docker.from_env()
     _client.ping()
 except Exception as e:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {e}", allow_module_level=True)
 
 
-def _compose_dsn(bolt_url: str, auth: tuple[str, str | None], database: str = "neo4j") -> str:
+def _compose_dsn(
+    bolt_url: str, auth: tuple[str, str | None], database: str = "neo4j"
+) -> str:
     """Build a DSN from bolt URL and auth tuple suitable for Neo4jConfig."""
     # bolt_url expected like bolt://host:port
     username, password = auth
@@ -31,7 +35,7 @@ def test_neo4j_for_adk_roundtrip_with_testcontainers():
 
     from agentic_kg.common.neo4j_for_adk import Neo4jForADK
     from agentic_kg.common.pydantic_neo4j import Neo4jConfig
-    
+
     # Start ephemeral Neo4j
     with Neo4jContainer(image="neo4j:5") as neo4j:
         # Connection info

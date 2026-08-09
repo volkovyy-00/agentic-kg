@@ -15,6 +15,7 @@ ticket's dependency reasoning -- that a genuinely typed property takes the
 profile's type branch and never reaches its regex path -- holds only while that
 file stays untouched.
 """
+
 import re
 from math import isfinite
 from typing import Any, Iterable, Optional, Tuple
@@ -52,13 +53,13 @@ _DIGITS = r"(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?"
 # way nothing in the graph shows. Two alternatives rather than two optional
 # signs, so "+-42" still fails to match.
 _NUMERIC_LIKE = re.compile(
-    rf"^\s*(?:[-+]?\s*{_CURRENCY}?|{_CURRENCY}\s*[-+]?)\s*{_DIGITS}\s*$")
+    rf"^\s*(?:[-+]?\s*{_CURRENCY}?|{_CURRENCY}\s*[-+]?)\s*{_DIGITS}\s*$"
+)
 
 # Accounting notation for a negative: (42.00), ($42.00). Handled separately
 # because the minus sign is implied by the brackets rather than written, so it
 # survives neither the pattern above nor _STRIP_FROM_NUMBERS.
-_PARENTHESISED_NEGATIVE = re.compile(
-    rf"^\s*\(\s*{_CURRENCY}?\s*{_DIGITS}\s*\)\s*$")
+_PARENTHESISED_NEGATIVE = re.compile(rf"^\s*\(\s*{_CURRENCY}?\s*{_DIGITS}\s*\)\s*$")
 
 # Applied only after a numeric pattern has matched, so this cannot turn "1,2,3"
 # into 123 -- that string never reaches here.
@@ -83,8 +84,8 @@ MAJORITY_SHARE = 0.5
 # rows already committed and nothing naming the column responsible. Refusing it
 # here instead routes it down the path this module already has for a value that
 # cannot be stored: counted, cleared, and named by the loader's gate.
-INT64_MIN = -(2 ** 63)
-INT64_MAX = 2 ** 63 - 1
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
 
 
 def is_blank(value: Any) -> bool:
@@ -109,13 +110,17 @@ def _is_really_a_count(non_blank) -> bool:
     boolean_like; a yes/no column with a stray "5" stays boolean_like too.
     """
     numeric_vocabulary = {"0", "1"}
-    fitting = [value.strip().lower() for value in non_blank
-               if value.strip().lower() in _BOOLEAN_VALUES]
+    fitting = [
+        value.strip().lower()
+        for value in non_blank
+        if value.strip().lower() in _BOOLEAN_VALUES
+    ]
     if not all(value in numeric_vocabulary for value in fitting):
         return False
-    return any(_BARE_NUMERIC.match(value)
-               and value.strip().lower() not in _BOOLEAN_VALUES
-               for value in non_blank)
+    return any(
+        _BARE_NUMERIC.match(value) and value.strip().lower() not in _BOOLEAN_VALUES
+        for value in non_blank
+    )
 
 
 def classify(values: Iterable[Any]) -> str:
@@ -152,8 +157,7 @@ def classify(values: Iterable[Any]) -> str:
         # loader would have converted -- the exact evidence/behaviour drift
         # sharing this module is meant to prevent. A column written entirely in
         # accounting parentheses would otherwise get no type suggestion at all.
-        return bool(_NUMERIC_LIKE.match(value)
-                    or _PARENTHESISED_NEGATIVE.match(value))
+        return bool(_NUMERIC_LIKE.match(value) or _PARENTHESISED_NEGATIVE.match(value))
 
     if majority(numeric_after_cleaning):
         return NUMERIC_AFTER_CLEANING

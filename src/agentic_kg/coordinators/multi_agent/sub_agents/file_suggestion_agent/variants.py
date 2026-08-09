@@ -1,26 +1,26 @@
-
 """Module for storing and retrieving agent instructions.
 
 This module defines functions that return instruction prompts for the cypher agent.
 These instructions guide the agent's behavior, workflow, and tool usage.
 """
 
-from agentic_kg.tools.user_goal_tools import get_approved_user_goal
-
-from agentic_kg.tools.file_tools import (
-    list_import_files, sample_file, search_file,
-    set_suggested_files, approve_suggested_files, get_suggested_files
-)
-
-from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.tools.adk_tools import make_finished
+from agentic_kg.tools.file_tools import (
+    approve_suggested_files,
+    get_suggested_files,
+    list_import_files,
+    sample_file,
+    search_file,
+    set_suggested_files,
+)
+from agentic_kg.tools.user_goal_tools import get_approved_user_goal
 
 finished = make_finished(MULTI_AGENT_COORDINATOR)
 
-variants = {    
-    "file_suggestion_agent_v1":
-        {
-            "instruction": """
+variants = {
+    "file_suggestion_agent_v1": {
+        "instruction": """
                 You are a constructive critic AI reviewing a list of files. 
                 Your primary goal is to suggest files with content that is relevant to a user goal.
 
@@ -45,12 +45,15 @@ variants = {
                 6. If approved, use the 'approve_suggested_files' tool to record the approval
                 7. When the file approval has been recorded, use the 'finished' tool
                 """,
-            "tools": [
-                get_approved_user_goal, 
-                list_import_files, sample_file, search_file,
-                set_suggested_files, approve_suggested_files, 
-                get_suggested_files,
-                finished
-            ]
-        },
+        "tools": [
+            get_approved_user_goal,
+            list_import_files,
+            sample_file,
+            search_file,
+            set_suggested_files,
+            approve_suggested_files,
+            get_suggested_files,
+            finished,
+        ],
+    },
 }

@@ -6,15 +6,15 @@ decide for itself when that window was over. These tests cover the mechanism
 only -- whether the model actually asks before confirming is not
 unit-testable and is verified by hand (see the plan's Task 5).
 """
-import inspect
 
 import asyncio
+import inspect
 
 import pytest
-from google.genai import types
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
+from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
@@ -166,6 +166,7 @@ def test_confirm_tool_is_wired_into_the_construction_variant():
     from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
         variants,
     )
+
     tools = variants["graph_construction_agent_v1"]["tools"]
     assert confirm_construction_handoff in tools
     assert finished in tools
@@ -203,6 +204,7 @@ class CapturingLlm(BaseLlm):
     and that file copied it from test_schema_refinement_loop_turn_cap.py:36
     for the same reason. Do not extract it.
     """
+
     responses: list = Field(default_factory=list)
     requests: list = Field(default_factory=list)
     call_count: int = 0
@@ -215,19 +217,28 @@ class CapturingLlm(BaseLlm):
 
 
 def _text(text):
-    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=text)])
+    )
 
 
 def _call(name, args=None):
-    return LlmResponse(content=types.Content(role="model", parts=[
-        types.Part(function_call=types.FunctionCall(name=name, args=args or {})),
-    ]))
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(name=name, args=args or {})
+                ),
+            ],
+        )
+    )
 
 
 def _declaration_names(request):
     names = []
-    for tool in (request.config.tools or []):
-        for declaration in (getattr(tool, "function_declarations", None) or []):
+    for tool in request.config.tools or []:
+        for declaration in getattr(tool, "function_declarations", None) or []:
             names.append(declaration.name)
     return names
 
@@ -241,11 +252,14 @@ async def _run_one_turn(agent, app_name, message="hello"):
     """
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
-        app_name=app_name, user_id="u1",
+        app_name=app_name,
+        user_id="u1",
     )
     return [
-        event async for event in runner.run_async(
-            user_id="u1", session_id=session.id,
+        event
+        async for event in runner.run_async(
+            user_id="u1",
+            session_id=session.id,
             new_message=types.Content(role="user", parts=[types.Part(text=message)]),
         )
     ]
@@ -255,7 +269,10 @@ def test_the_strip_callback_is_wired_onto_the_construction_agent():
     """The cheap statement of intent. Not sufficient on its own -- it says
     nothing about whether the strip actually worked -- which is why the
     behavioural tests below exist."""
-    assert strip_transfer_to_agent in graph_construction_agent.canonical_before_model_callbacks
+    assert (
+        strip_transfer_to_agent
+        in graph_construction_agent.canonical_before_model_callbacks
+    )
 
 
 def test_the_agent_does_not_disallow_transfers():
@@ -273,9 +290,14 @@ def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
     sub-agent with a parent or peers, and it does not consult this agent's
     handoff gate. Asserting on what reached the model is the only way to know
     it is gone."""
-    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("nothing to do")],
-    ))
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("nothing to do")],
+        ),
+    )
     asyncio.run(_run_one_turn(graph_construction_agent, "construction_door_test"))
 
     requests = graph_construction_agent.model.requests
@@ -291,10 +313,17 @@ def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     """Catches an over-broad strip that empties config.tools. The agent is
     useless without its own tools, and every other assertion here is about
     absence, so nothing else would notice."""
-    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("nothing to do")],
-    ))
-    asyncio.run(_run_one_turn(graph_construction_agent, "construction_tools_survive_test"))
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("nothing to do")],
+        ),
+    )
+    asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_tools_survive_test")
+    )
 
     names = _declaration_names(graph_construction_agent.model.requests[0])
     assert "finished" in names
@@ -306,12 +335,20 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
     """Pins what happens if a model emits the call from memory of an earlier
     turn. The strip pops it from tools_dict, so ADK raises
     (functions.py:565-568) rather than silently transferring."""
-    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[_call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})],
-    ))
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+            ],
+        ),
+    )
     with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(_run_one_turn(graph_construction_agent, "construction_hard_error_test"))
+        asyncio.run(
+            _run_one_turn(graph_construction_agent, "construction_hard_error_test")
+        )
 
 
 def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
@@ -324,22 +361,34 @@ def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
     (base_llm_flow.py:536-542), so graphrag_agent's real model would otherwise
     be invoked for real.
     """
-    monkeypatch.setattr(graph_construction_agent, "model", CapturingLlm(
-        model="scripted",
-        responses=[
-            _call("confirm_construction_handoff"),
-            _call("finished"),
-            _text("handing you to the retrieval agent"),
-        ],
-    ))
-    monkeypatch.setattr(graphrag_agent, "model", CapturingLlm(
-        model="scripted", responses=[_text("retrieval agent speaking")],
-    ))
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("confirm_construction_handoff"),
+                _call("finished"),
+                _text("handing you to the retrieval agent"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_text("retrieval agent speaking")],
+        ),
+    )
 
-    events = asyncio.run(_run_one_turn(
-        graph_construction_agent, "construction_handoff_test",
-        message="I'm done here, move me on",
-    ))
+    events = asyncio.run(
+        _run_one_turn(
+            graph_construction_agent,
+            "construction_handoff_test",
+            message="I'm done here, move me on",
+        )
+    )
 
     authors = [event.author for event in events]
     assert GRAPHRAG_AGENT_NAME in authors, (
