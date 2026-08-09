@@ -14,7 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `float` or `boolean`, and the CSV loaders write real Neo4j types instead of strings — so
   filtering, range comparison, sorting and aggregation over quantities, lead times, prices and
   costs return correct answers without the query casting or cleaning the value first. Currency
-  formatting and thousands separators are stripped on the way in. A new `column_type_hint` tool
+  formatting and thousands separators are stripped on the way in, including negatives written
+  either way round (`-$42.00`, `$-42.00`) and in accounting parentheses (`($42.00)`). A new `column_type_hint` tool
   gives the schema agents the evidence to propose and challenge a type. Values that cannot be read
   as their declared type are reported and cleared rather than silently kept as text, and a column
   failing on most of a batch stops that rule outright. Identifiers and join columns stay text by
