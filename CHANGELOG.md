@@ -7,19 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
-- **Ruff for linting and formatting (#15)**: `ruff check` / `ruff format --check` now cover `src/` and
-  `tests/`; config lives in `pyproject.toml`'s `[tool.ruff]`. Dev-only — no user-facing behavior change.
-
-### Changed
-- **PRs now merge with a real merge commit, not squash (#16)**: enforced at the GitHub-settings level;
-  every commit on a branch now lands in `main`'s history as-is. See `CONTRIBUTING.md`.
-
-### Removed
-- **Local `upstream` git remote (#14)**: this clone is local-only now. GitHub still shows the repo as
-  forked from `neo4j-contrib/agentic-kg`; there's just no local remote to sync from anymore.
-
-## [0.5.0] - 2026-08-08
+## [0.5.0] - 2026-08-09
 
 ### Added
 - **Typed graph properties (#13)**: a construction plan can now declare a property as `integer`,
@@ -43,6 +31,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   finished, inviting the next question after each answer instead of ending the phase on its own
   judgment after a single one. Leaving is recorded by a tool call and enforced by a session-state
   gate, the same mechanism the construction handoff uses.
+- **Ruff for linting and formatting (#15)**: `ruff check` / `ruff format --check` now cover `src/` and
+  `tests/`; config lives in `pyproject.toml`'s `[tool.ruff]`. Dev-only — no user-facing behavior change.
+
+### Changed
+- **README rewritten as an independent project doc (#7)**: drops the deeplearning.ai course framing
+  (course link, "not a production tool" disclaimer, "Special Thanks" section) for a single-line fork
+  acknowledgment, and fixes content that had gone stale since the fork — the missing `graphrag_agent`
+  pipeline stage, an outdated test count, a broken Google ADK link, and a roadmap checklist now
+  superseded by `docs/spec.md` and this file. The same stale "companion project" framing is fixed in
+  `pyproject.toml`, `LICENSE.txt`, and `.github/copilot-instructions.md`.
+- **PRs now merge with a real merge commit, not squash (#16)**: enforced at the GitHub-settings level;
+  every commit on a branch now lands in `main`'s history as-is. See `CONTRIBUTING.md`.
+
+### Removed
+- **Local `upstream` git remote (#14)**: this clone is local-only now. GitHub still shows the repo as
+  forked from `neo4j-contrib/agentic-kg`; there's just no local remote to sync from anymore.
 
 ### Fixed
 - **The user's goal approval is now recorded (#12)**: `user_intent_agent_v2` could ask its clarifying
