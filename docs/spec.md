@@ -20,11 +20,12 @@ picks input files, proposes a graph schema, builds the graph, and then answers q
 pausing for explicit human approval between each of those stages.
 
 It began as a fork of the companion project to the deeplearning.ai short course *Agentic Knowledge Graph
-Construction* (`upstream` remote is `neo4j-contrib/agentic-kg`), but it is now developed as a real
+Construction* (GitHub still lists it as forked from `neo4j-contrib/agentic-kg`, though this clone keeps no
+local `upstream` remote), but it is now developed as a real
 program rather than a teaching artifact. What makes that true, concretely, rather than as a claim:
 
 - Five tagged releases (`v0.1.0` … `v0.4.0`) and five merged PRs beyond the fork point; `main` is six
-  commits ahead of `upstream/main` and zero behind.
+  commits ahead of `neo4j-contrib/agentic-kg`'s `main` and zero behind.
 - A substantially expanded test suite: 280 passing unit tests (4 skipped without Docker) across 4
   integration modules, against upstream's 2 unit and 2 integration files.
 - Capabilities built here that the course does not have: retrieval grounding (§4), client-side CSV
@@ -213,8 +214,10 @@ the end-to-end test asserts on what reached the model, never on what the model s
 See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHANGELOG conventions, and
 `CLAUDE.md` for the architecture map. Only the things most likely to bite you are repeated here:
 
-- **Two remotes.** `origin` is the working fork; `upstream` is `neo4j-contrib/agentic-kg` and has a live
-  push URL. Work goes to `origin`. `gh` resolves to the wrong repo without an explicit `--repo`.
+- **One remote.** `origin` (`volkovyy-00/agentic-kg`) is the only configured remote. A local `upstream`
+  pointing at `neo4j-contrib/agentic-kg` existed early on and was removed once the project stopped
+  tracking the parent's history — GitHub's own "forked from" display is independent of local git config
+  and is unaffected. `gh` should resolve to `origin` without an explicit `--repo`.
 - **Design notes are local-only.** `.gitignore:26` and `:29` exclude `docs/superpowers/` and
   `docs/backlog/`. Documents there are absent from a fresh clone — do not cite those paths as if a
   reader can open them. Only those two subdirectories are excluded; the rest of `docs/`, including this

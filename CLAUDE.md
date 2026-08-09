@@ -97,8 +97,9 @@ uv run pytest -q -m integration
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - No linter/formatter is configured in this project.
-- `gh` resolves to the wrong repo without `--repo volkovyy-00/agentic-kg` — there are two remotes (`origin` vs
-  `upstream neo4j-contrib/agentic-kg`).
+- Only one remote is configured (`origin`). GitHub still shows this repo as forked from
+  `neo4j-contrib/agentic-kg`, but there's no local `upstream` remote to resolve against, so `gh` no longer
+  needs an explicit `--repo` flag.
 - Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
   nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
   has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with

@@ -17,9 +17,10 @@ that mirrors the deeplearning.ai course structure it was forked from.
 ## Branches and PRs
 
 - Branch names are descriptive, not ticket-prefixed: `graphrag-grounding`, `foundation-file-sources-and-models`.
-- Open a PR against `main`. This repo has two remotes (`origin` = your fork, `upstream` =
-  `neo4j-contrib/agentic-kg`) — `gh` commands need `--repo <owner>/agentic-kg` or they'll resolve against
-  the wrong one.
+- Open a PR against `main`. This repo has a single remote (`origin` = `volkovyy-00/agentic-kg`). GitHub
+  still shows it as forked from `neo4j-contrib/agentic-kg`, but there's no local `upstream` remote to
+  sync from or resolve against — `gh` commands should now target `origin` without an explicit `--repo`
+  flag (verify with `gh repo view` after removing the remote).
 - PRs are squash-merged. Write the PR title as the single line that should stand as the commit's summary.
 - No CI is currently configured — run the test suite yourself before opening a PR (see below).
 

@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed
+- **Local `upstream` git remote (#14)**: this clone is local-only now. GitHub still shows the repo as
+  forked from `neo4j-contrib/agentic-kg`; there's just no local remote to sync from anymore.
+
 ## [0.5.0] - 2026-08-08
 
 ### Added
