@@ -147,7 +147,25 @@ def test_coerce_keeps_an_integer_too_large_for_a_float_exact():
     check cannot see damage done before it ran. Neo4j's INTEGER is a full 64-bit
     signed, so the wrong number would be stored without a murmur."""
     assert coerce("9007199254740993", INTEGER) == (9007199254740993, CONVERTED)
-    assert coerce("12345678901234567890", INTEGER) == (12345678901234567890, CONVERTED)
+    assert coerce("9223372036854775807", INTEGER) == (9223372036854775807, CONVERTED)
+    assert coerce("-9223372036854775808", INTEGER) == (-9223372036854775808, CONVERTED)
+
+
+def test_coerce_refuses_an_integer_neo4j_cannot_hold():
+    """Python's int is unbounded; Neo4j's INTEGER is signed 64-bit and the
+    driver raises OverflowError packing anything wider. Converting it here would
+    move the failure into the middle of a batch write, with rows already
+    committed and nothing naming the column -- the opaque failure this whole
+    change exists to replace. Refused here, it is counted and cleared like any
+    other value that cannot be stored.
+
+    The float fallback below the exact parse needs the same bound: a
+    whole-valued float past the range ("1e19") reaches int() by a different
+    route and would otherwise slip through."""
+    assert coerce("9223372036854775808", INTEGER) == (None, UNCONVERTIBLE)
+    assert coerce("-9223372036854775809", INTEGER) == (None, UNCONVERTIBLE)
+    assert coerce("12345678901234567890", INTEGER) == (None, UNCONVERTIBLE)
+    assert coerce("$99,223,372,036,854,775,808.00", INTEGER) == (None, UNCONVERTIBLE)
 
 
 def test_classify_does_not_call_a_mostly_zero_one_count_a_flag():

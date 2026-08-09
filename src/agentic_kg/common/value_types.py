@@ -76,6 +76,15 @@ _BOOLEAN_VALUES = _TRUE_VALUES | _FALSE_VALUES
 # was told was fine.
 MAJORITY_SHARE = 0.5
 
+# Neo4j's INTEGER is a signed 64-bit value, and the driver packs it as one.
+# Python's int is unbounded, so a wider value converts happily here and then
+# raises OverflowError inside the driver, mid-batch -- an opaque failure with
+# rows already committed and nothing naming the column responsible. Refusing it
+# here instead routes it down the path this module already has for a value that
+# cannot be stored: counted, cleared, and named by the loader's gate.
+INT64_MIN = -(2 ** 63)
+INT64_MAX = 2 ** 63 - 1
+
 
 def is_blank(value: Any) -> bool:
     """True for a value that carries nothing: None, empty, or only whitespace."""
@@ -141,6 +150,13 @@ def classify(values: Iterable[Any]) -> str:
     return TEXT
 
 
+def _as_storable_integer(number: int) -> Tuple[Optional[int], str]:
+    """Accept an integer only if Neo4j can actually hold it. See INT64_MAX."""
+    if INT64_MIN <= number <= INT64_MAX:
+        return number, CONVERTED
+    return None, UNCONVERTIBLE
+
+
 def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
     """Convert one source value to the type the construction plan declared.
 
@@ -181,7 +197,7 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
             # cannot see damage that happened before it ran. Neo4j's INTEGER is
             # a full 64-bit signed, so the wrong number would be stored happily.
             try:
-                return int(cleaned), CONVERTED
+                return _as_storable_integer(int(cleaned))
             except ValueError:
                 pass
 
@@ -193,7 +209,7 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
             return number, CONVERTED
         if number != int(number):
             return None, UNCONVERTIBLE
-        return int(number), CONVERTED
+        return _as_storable_integer(int(number))
 
     # An unknown declared type reaches here only if the plan carried one that
     # check_construction_plan_consistency should have refused. Fail closed.
