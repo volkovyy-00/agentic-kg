@@ -1,10 +1,11 @@
 # agentic-kg — living spec
 
-**Status:** living document. Every claim below was verified against `main` at commit `8d714cb`
-(2026-08-09). The latest **tagged** release is still `v0.4.0` (2026-08-03); `CHANGELOG.md` also has a
-dated `[0.5.0] - 2026-08-08` section, but no `v0.5.0` git tag exists as of this writing — see §6 for what
-that means for what you can rely on. For anything that lands after this, check `CHANGELOG.md` and git log,
-and treat this document as the thing to update. This is the "what is this and why does it exist" document.
+**Status:** living document. Every claim below was verified against `main` at commit `382359e`
+(2026-08-09), which already includes #14/#15/#16 below. The latest **tagged** release is still `v0.4.0`
+(2026-08-03); `CHANGELOG.md` also has a dated `[0.5.0] - 2026-08-08` section, but no `v0.5.0` git tag
+exists as of this writing — see §6 for what that means for what you can rely on. For anything that lands
+after this, check `CHANGELOG.md` and git log, and treat this document as the thing to update. This is the
+"what is this and why does it exist" document.
 For the architecture map you need while editing code, read `CLAUDE.md`. For the PR/branch/CHANGELOG
 workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate either.
 
@@ -26,8 +27,10 @@ Construction* (GitHub still lists it as forked from `neo4j-contrib/agentic-kg`, 
 local `upstream` remote), but it is now developed as a real
 program rather than a teaching artifact. What makes that true, concretely, rather than as a claim:
 
-- Five tagged releases (`v0.1.0` … `v0.4.0`) and thirteen merged PRs beyond the fork point (#1–#13, none
-  currently open); `main` is 47 commits ahead of `neo4j-contrib/agentic-kg`'s `main` and zero behind.
+- Five tagged releases (`v0.1.0` … `v0.4.0`) and sixteen merged PRs beyond the fork point (#1–#16); #17
+  (this document) is the only one currently open. `main` is 56 commits ahead of
+  `neo4j-contrib/agentic-kg`'s `main` and zero behind — checked via GitHub's compare API, since this
+  clone keeps no local `upstream` remote to diff against directly (see §5).
 - A substantially expanded test suite: 1,011 passing unit tests (5 skipped without Docker) — over half
   of that count is one heavily parametrised invariant-test file for typed-property coercion
   (`test_value_types_invariants.py`) — across 5 integration modules, against upstream's 2 unit and 2
@@ -58,7 +61,7 @@ A/B comparison — the one pair documented as a deliberate retention; `user_inte
 | Can read source files | Yes — the whole `SOURCE_URI` seam | **No** — has no file tools at all |
 | Approval gates | Yes, between every stage | None |
 | Session state | Eleven keys across five stages | `{}` — uses none |
-| Commits since the fork | 21 — PRs #2, #3, #4, #8, #9, #11, #12, #13 | 1 — mechanical repairs in #2 |
+| Commits since the fork | 22 — PRs #2, #3, #4, #8, #9, #11, #12, #13, #15 | 1 — mechanical repairs in #2 |
 | Test coverage | Yes | Zero tests reference it |
 
 **Use `multi_agent`.** It is the system this project is about.
