@@ -491,3 +491,19 @@ def test_column_type_hint_errors_on_a_missing_column(bom_source):
 
     assert result["status"] == "error"
     assert "prcie" in result["error_message"]
+
+
+def test_the_hint_docstring_documents_every_key_it_returns(bom_source):
+    """This docstring is the tool description ADK sends to the model, so a key
+    the payload carries but the description never names is a number the model
+    has to guess the meaning of.
+
+    Cannot catch a description that is merely wrong -- 'blank_count' was
+    documented as always cleared when that is true only for a typed property --
+    but it does catch the half a test can check: a count added to the payload
+    and never explained."""
+    hint = file_tools.column_type_hint(
+        "products.csv", "price", FakeToolContext())["column_type_hint"]
+
+    for key in hint:
+        assert f"'{key}'" in file_tools.column_type_hint.__doc__, key

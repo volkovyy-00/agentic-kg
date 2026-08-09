@@ -364,11 +364,12 @@ def _hint_from_values(file_path: str, column: str,
 
     for value in values:
         # A row too short to reach this column is not the same as a row with an
-        # empty cell, because the loader treats them oppositely: an absent key is
-        # skipped and leaves an earlier row's value alone, a blank one clears it.
-        # Reported together, blank_count would overstate what the build will
-        # erase -- and this tool's counts exist precisely to say what the build
-        # will do.
+        # empty cell. An absent key is skipped whatever the property's type,
+        # leaving an earlier row's value alone; an empty cell is a value the row
+        # actually carried, and the loader either clears the property (typed) or
+        # stores "" (text). Reported together, blank_count would overstate what
+        # the build will erase -- and this tool's counts exist precisely to say
+        # what the build will do.
         if value is None:
             missing_count += 1
             continue
@@ -470,10 +471,12 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
               key with 'path', 'column', 'shape' (one of 'bare_numeric',
               'numeric_after_cleaning', 'boolean_like', 'text'), 'suggested_type'
               ('integer', 'float', 'boolean', or null when the column is text),
-              'convertible_count', 'blank_count' (empty cells, which the build
-              clears), 'missing_count' (rows too short to reach this column,
-              which the build leaves untouched), 'unconvertible_count' and up to
-              three 'example_unconvertible' values.
+              'convertible_count', 'blank_count' (empty cells: cleared if you
+              declare a type for the property, stored as an empty string if you
+              leave it text), 'missing_count' (rows too short to reach this
+              column, which the build leaves untouched either way),
+              'unconvertible_count' and up to three 'example_unconvertible'
+              values.
     """
     values, error = _collect_column_values(file_path, column)
     if error is not None:
