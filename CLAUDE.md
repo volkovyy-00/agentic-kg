@@ -280,7 +280,9 @@ A construction rule may carry `property_types` (`{property_name: "integer"|"floa
 Cypher gains two `FOREACH` passes for them — one writing converted values, one clearing values that
 were blank or unreadable via a sentinel, since Cypher cannot distinguish a failed parse from a
 ragged row's absent key. A typed column failing on more than half a batch's non-blank values stops
-that rule with an error rather than half-typing the property. Identifiers and any column a
+that rule with an error rather than half-typing the property — but only once at least
+`TYPE_FAILURE_MIN_SAMPLE` (2) values are present, since one bad value out of one row cannot tell a
+wrong type declaration from a single data-entry typo. Identifiers and any column a
 relationship joins on may not be typed; `check_construction_plan_consistency` refuses such a plan at
 approval time.
 

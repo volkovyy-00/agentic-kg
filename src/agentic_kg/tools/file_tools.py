@@ -327,6 +327,92 @@ def _suggested_type(shape: str, values) -> str | None:
     return None
 
 
+def _hint_from_values(file_path: str, column: str, values: List[str]) -> dict:
+    """Build one column_type_hint payload from values already read.
+
+    Split out from column_type_hint so column_type_hints can reuse it after a
+    single file pass, rather than re-reading the source once per column.
+    """
+    shape = classify(values)
+    suggested = _suggested_type(shape, values)
+
+    convertible_count = 0
+    blank_count = 0
+    unconvertible_count = 0
+    examples: List[str] = []
+
+    for value in values:
+        if suggested is None:
+            if is_blank(value):
+                blank_count += 1
+            continue
+        _converted, outcome = coerce(value, suggested)
+        if outcome == CONVERTED:
+            convertible_count += 1
+        elif outcome == BLANK:
+            blank_count += 1
+        else:
+            unconvertible_count += 1
+            if len(examples) < 3:
+                examples.append(value)
+
+    return {
+        "path": file_path,
+        "column": column,
+        "shape": shape,
+        "suggested_type": suggested,
+        "convertible_count": convertible_count,
+        "blank_count": blank_count,
+        "unconvertible_count": unconvertible_count,
+        "example_unconvertible": examples,
+    }
+
+
+def _collect_columns_values(file_path: str, columns: List[str]):
+    """Read every value of several columns in ONE pass over a source CSV.
+
+    Returns:
+        (values_by_column, error) where values_by_column maps each requested
+        column to one entry per data row, and error is a tool_error dict when
+        the file or any requested column cannot be read.
+
+    Source files are read through fsspec and may be remote, so reading once per
+    requested column turns a hint request for N properties into N downloads and
+    N parses of the same file. Columns are validated against the header before
+    any row is collected, so an unreadable column still fails on the first
+    batch rather than after a full scan. Ragged rows contribute "" for the same
+    reason _collect_column_values documents.
+    """
+    try:
+        if not source_exists(file_path):
+            return None, tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return None, tool_error(str(exc))
+
+    values_by_column: Dict[str, List[str]] = {column: [] for column in columns}
+    saw_header = False
+    try:
+        for batch_header, rows in read_csv_batches(file_path):
+            if not saw_header:
+                saw_header = True
+                for column in columns:
+                    if column not in batch_header:
+                        return None, tool_error(
+                            f"Column '{column}' is not in {file_path}. "
+                            f"Available columns: {batch_header}"
+                        )
+            for row in rows:
+                for column in columns:
+                    values_by_column[column].append(row.get(column, ""))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    if not saw_header:
+        return None, tool_error(f"CSV file has no header row: {file_path}")
+
+    return values_by_column, None
+
+
 def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> dict:
     """Reports what type one CSV column's values can actually be stored as.
 
@@ -357,39 +443,7 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
     if error is not None:
         return error
 
-    shape = classify(values)
-    suggested = _suggested_type(shape, values)
-
-    convertible_count = 0
-    blank_count = 0
-    unconvertible_count = 0
-    examples: List[str] = []
-
-    for value in values:
-        if suggested is None:
-            if is_blank(value):
-                blank_count += 1
-            continue
-        _converted, outcome = coerce(value, suggested)
-        if outcome == CONVERTED:
-            convertible_count += 1
-        elif outcome == BLANK:
-            blank_count += 1
-        else:
-            unconvertible_count += 1
-            if len(examples) < 3:
-                examples.append(value)
-
-    return tool_success("column_type_hint", {
-        "path": file_path,
-        "column": column,
-        "shape": shape,
-        "suggested_type": suggested,
-        "convertible_count": convertible_count,
-        "blank_count": blank_count,
-        "unconvertible_count": unconvertible_count,
-        "example_unconvertible": examples,
-    })
+    return tool_success("column_type_hint", _hint_from_values(file_path, column, values))
 
 
 def column_type_hints(file_path: str, columns: List[str], tool_context: ToolContext) -> dict:
@@ -409,13 +463,18 @@ def column_type_hints(file_path: str, columns: List[str], tool_context: ToolCont
               key holding one 'column_type_hint' payload per requested column, in
               the order requested.
     """
-    hints = []
-    for column in columns or []:
-        result = column_type_hint(file_path, column, tool_context)
-        if result["status"] == "error":
-            return result
-        hints.append(result["column_type_hint"])
-    return tool_success("column_type_hints", hints)
+    requested = list(columns or [])
+    if not requested:
+        return tool_success("column_type_hints", [])
+
+    values_by_column, error = _collect_columns_values(file_path, requested)
+    if error is not None:
+        return error
+
+    return tool_success("column_type_hints", [
+        _hint_from_values(file_path, column, values_by_column[column])
+        for column in requested
+    ])
 
 
 def _collect_column_pairs(file_path: str, column_a: str, column_b: str):

@@ -163,9 +163,42 @@ def test_coerce_refuses_an_integer_neo4j_cannot_hold():
     whole-valued float past the range ("1e19") reaches int() by a different
     route and would otherwise slip through."""
     assert coerce("9223372036854775808", INTEGER) == (None, UNCONVERTIBLE)
+    assert coerce("9223372036854775808.0", INTEGER) == (None, UNCONVERTIBLE)
     assert coerce("-9223372036854775809", INTEGER) == (None, UNCONVERTIBLE)
     assert coerce("12345678901234567890", INTEGER) == (None, UNCONVERTIBLE)
     assert coerce("$99,223,372,036,854,775,808.00", INTEGER) == (None, UNCONVERTIBLE)
+
+
+def test_classify_counts_the_accounting_negatives_coerce_accepts():
+    """classify and coerce must agree on what a column supports -- that is the
+    whole reason both live in this module. coerce converts "($10)", so a column
+    written entirely in accounting parentheses (a credits or adjustments column)
+    must not come back as text: it would get no type suggestion and stay stored
+    as strings, the defect this change exists to remove."""
+    assert classify(["($10)", "($20)", "($30)"]) == NUMERIC_AFTER_CLEANING
+    for value in ["($10)", "($20)", "($30)"]:
+        assert coerce(value, FLOAT)[1] == CONVERTED
+
+
+def test_coerce_keeps_a_float_formatted_integer_exact():
+    """The trailing ".0" is the form a spreadsheet or a pandas round-trip emits
+    for a whole number, so it is the likely shape of a large id in a real CSV.
+    Reading it through float() rounded it to the nearest representable double
+    and still reported CONVERTED -- the same silent corruption as the bare-digit
+    form, surviving one string suffix away from it."""
+    assert coerce("9007199254740993.0", INTEGER) == (9007199254740993, CONVERTED)
+    assert coerce("9007199254740993.000", INTEGER) == (9007199254740993, CONVERTED)
+    # The fractional refusal still holds; only trailing zeros are whole.
+    assert coerce("42.7", INTEGER) == (None, UNCONVERTIBLE)
+    assert coerce("42.0", INTEGER) == (42, CONVERTED)
+
+
+def test_coerce_refuses_a_float_too_large_for_a_double():
+    """A literal with more digits than a double can hold becomes inf, and the
+    driver packs inf happily as a Neo4j FLOAT -- the graph would store Infinity
+    and the load would report success."""
+    too_many_digits = "1" + "0" * 400
+    assert coerce(too_many_digits, FLOAT) == (None, UNCONVERTIBLE)
 
 
 def test_classify_does_not_call_a_mostly_zero_one_count_a_flag():

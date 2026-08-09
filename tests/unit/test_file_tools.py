@@ -368,6 +368,42 @@ def test_column_type_hints_returns_one_entry_per_column(bom_source):
     assert [hint["suggested_type"] for hint in hints] == ["integer", "boolean"]
 
 
+def test_column_type_hints_reads_the_source_once_for_all_columns(bom_source, monkeypatch):
+    """Source files are read through fsspec and may be remote, so one read per
+    requested column turns a hint request for N properties into N downloads and
+    N parses of the same file. The schema prompt directs the agent to inspect
+    every property, so N is not small."""
+    reads = []
+    real_read_csv_batches = file_tools.read_csv_batches
+
+    def counting_read(path, *args, **kwargs):
+        reads.append(path)
+        return real_read_csv_batches(path, *args, **kwargs)
+
+    monkeypatch.setattr(file_tools, "read_csv_batches", counting_read)
+
+    context = FakeToolContext()
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv",
+        ["lead_time_days", "preferred_supplier", "unit_cost"],
+        context)
+
+    assert result["status"] == "success"
+    assert len(result["column_type_hints"]) == 3
+    assert len(reads) == 1
+
+
+def test_column_type_hints_names_a_missing_column_before_reading_rows(bom_source):
+    """Batched reading must not cost the caller the error message the
+    per-column path gave: the failure still names the column to correct."""
+    context = FakeToolContext()
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv", ["lead_time_days", "leed_time"], context)
+
+    assert result["status"] == "error"
+    assert "leed_time" in result["error_message"]
+
+
 def test_column_type_hint_errors_on_a_missing_column(bom_source):
     """A misspelled column must not come back as 'text, no suggestion' -- that
     reads as an answer about the data rather than a typo."""

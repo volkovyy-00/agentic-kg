@@ -16,6 +16,7 @@ profile's type branch and never reaches its regex path -- holds only while that
 file stays untouched.
 """
 import re
+from math import isfinite
 from typing import Any, Iterable, Optional, Tuple
 
 # The closed set of types a construction plan may declare. Lowercase to match
@@ -145,7 +146,16 @@ def classify(values: Iterable[Any]) -> str:
         return BOOLEAN_LIKE
     if majority(_BARE_NUMERIC.match):
         return BARE_NUMERIC
-    if majority(_NUMERIC_LIKE.match):
+
+    def numeric_after_cleaning(value) -> bool:
+        # Both forms coerce() accepts, or this reports text for a column the
+        # loader would have converted -- the exact evidence/behaviour drift
+        # sharing this module is meant to prevent. A column written entirely in
+        # accounting parentheses would otherwise get no type suggestion at all.
+        return bool(_NUMERIC_LIKE.match(value)
+                    or _PARENTHESISED_NEGATIVE.match(value))
+
+    if majority(numeric_after_cleaning):
         return NUMERIC_AFTER_CLEANING
     return TEXT
 
@@ -190,26 +200,31 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
             cleaned = f"-{cleaned}"
 
         if declared_type == INTEGER:
-            # int() first, and only fall back to float for the fractional case.
-            # Parsing through float would round anything past 2**53 to the
-            # nearest representable value -- "9007199254740993" comes back as
-            # ...992 -- and report CONVERTED, because the fractional check below
-            # cannot see damage that happened before it ran. Neo4j's INTEGER is
-            # a full 64-bit signed, so the wrong number would be stored happily.
+            # Read from the digits, never through float. float() rounds
+            # anything past 2**53 to the nearest representable value, and a
+            # fractional check applied afterwards cannot see damage done before
+            # it ran: "9007199254740993" and "9007199254740993.0" both come back
+            # as ...992 and report CONVERTED. Neo4j's INTEGER is a full 64-bit
+            # signed, so the wrong number is stored without a murmur. Splitting
+            # the string keeps every digit the source actually wrote.
+            whole, _, fraction = cleaned.partition(".")
+            if fraction.strip("0"):
+                return None, UNCONVERTIBLE
             try:
-                return _as_storable_integer(int(cleaned))
-            except ValueError:
-                pass
+                return _as_storable_integer(int(whole))
+            except ValueError:  # pragma: no cover - guarded by the patterns above
+                return None, UNCONVERTIBLE
 
         try:
             number = float(cleaned)
         except ValueError:  # pragma: no cover - guarded by the patterns above
             return None, UNCONVERTIBLE
-        if declared_type == FLOAT:
-            return number, CONVERTED
-        if number != int(number):
+        if not isfinite(number):
+            # A literal with more digits than a double can hold becomes inf,
+            # which the driver packs happily as a Neo4j FLOAT -- the graph would
+            # store Infinity and the load would report success.
             return None, UNCONVERTIBLE
-        return _as_storable_integer(int(number))
+        return number, CONVERTED
 
     # An unknown declared type reaches here only if the plan carried one that
     # check_construction_plan_consistency should have refused. Fail closed.
