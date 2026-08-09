@@ -1,11 +1,11 @@
 # agentic-kg — living spec
 
 **Status:** living document. Every claim below was verified against `main` at commit `382359e`
-(2026-08-09), which already includes #14/#15/#16 below. The latest **tagged** release is still `v0.4.0`
-(2026-08-03); `CHANGELOG.md` also has a dated `[0.5.0] - 2026-08-08` section, but no `v0.5.0` git tag
-exists as of this writing — see §6 for what that means for what you can rely on. For anything that lands
-after this, check `CHANGELOG.md` and git log, and treat this document as the thing to update. This is the
-"what is this and why does it exist" document.
+(2026-08-09), which already includes #14/#15/#16 below. `v0.5.0` was tagged at that same commit on
+2026-08-09, but `CHANGELOG.md`'s own `[0.5.0]` section predates that tag and only covers part of what it
+contains — see §6 for exactly what's missing. For anything that lands after this, check `CHANGELOG.md`
+and git log, and treat this document as the thing to update. This is the "what is this and why does it
+exist" document.
 For the architecture map you need while editing code, read `CLAUDE.md`. For the PR/branch/CHANGELOG
 workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate either.
 
@@ -27,7 +27,7 @@ Construction* (GitHub still lists it as forked from `neo4j-contrib/agentic-kg`, 
 local `upstream` remote), but it is now developed as a real
 program rather than a teaching artifact. What makes that true, concretely, rather than as a claim:
 
-- Five tagged releases (`v0.1.0` … `v0.4.0`) and sixteen merged PRs beyond the fork point (#1–#16); #17
+- Six tagged releases (`v0.1.0` … `v0.5.0`) and sixteen merged PRs beyond the fork point (#1–#16); #17
   (this document) is the only one currently open. `main` is 56 commits ahead of
   `neo4j-contrib/agentic-kg`'s `main` and zero behind — checked via GitHub's compare API, since this
   clone keeps no local `upstream` remote to diff against directly (see §5).
@@ -250,20 +250,24 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 
 | Version | Date | What |
 |---|---|---|
+| 0.5.0 | 2026-08-09 | Typed CSV properties, this living spec, construction/retrieval handoff confirmation, Neo4j reconnection, closing the transfer-bypass, intent-approval gate, README repositioning, dropped `upstream` remote, Ruff, real merge commits (#6–#16 — see below, `CHANGELOG.md` doesn't list all eleven) |
 | 0.4.0 | 2026-08-03 | Contributor workflow: `CONTRIBUTING.md`, `CHANGELOG.md`, narrowed `.gitignore` (#5) |
 | 0.3.0 | 2026-08-02 | Retrieval grounding — §4 (#4) |
 | 0.2.1 | 2026-07-30 | `schema_refinement_loop` feedback-clobbering fix, per-turn invocation cap (#3) |
 | 0.2.0 | 2026-07-29 | Foundation: `fsspec` file sources, driver-side CSV loading, OpenRouter + per-job models (#2) |
 | 0.1.0 | 2026-07-26 | Test-suite fixes (#1) |
 
-**Merged since 0.4.0, not yet tagged.** `CHANGELOG.md` has a dated `[0.5.0] - 2026-08-08` section —
-typed CSV properties (#13), this document (#6), explicit construction/retrieval handoff confirmation
-(#8, #9), Neo4j connection recovery after a close (#10), closing the `transfer_to_agent` bypass in both
-handoff gates (#11), and gating the intent phase on a recorded approval (#12) — but **no `v0.5.0` git tag
-exists**. Above that, `## [Unreleased]` now holds three more merged PRs: dropping the local `upstream`
-remote (#14), adding Ruff (#15), and enforcing real merge commits over squash (#16). Until a tag is cut,
-`git tag -l` and `git log` are the source of truth for what actually shipped, not either CHANGELOG
-header.
+**`CHANGELOG.md` doesn't fully match the `v0.5.0` tag.** The tag was cut at `main`'s tip on 2026-08-09,
+so it includes all eleven PRs merged since `v0.4.0`: typed CSV properties (#13), this document (#6), the
+README rewrite (#7), explicit construction/retrieval handoff confirmation (#8, #9), Neo4j connection
+recovery after a close (#10), closing the `transfer_to_agent` bypass in both handoff gates (#11), gating
+the intent phase on a recorded approval (#12), dropping the local `upstream` remote (#14), adding Ruff
+(#15), and enforcing real merge commits over squash (#16). But `CHANGELOG.md`'s own dated `[0.5.0] -
+2026-08-08` section — written the day before the tag was actually cut — only lists seven of those (#13,
+#6, #8, #9, #10, #11, #12); #7 was never given a CHANGELOG entry at all, and #14/#15/#16 still sit under
+`## [Unreleased]`, which as of `v0.5.0` describes nothing that isn't already released. Until
+`CHANGELOG.md` is reconciled with the tag, treat `git tag -l` and `git log` as the source of truth for
+what `v0.5.0` actually contains.
 
 **Next**, in order — designs are settled and recorded in local notes; specs are not yet written:
 
@@ -286,7 +290,7 @@ bundled furniture example must keep working throughout.
   — and now duplicates logic: `graph_profile.py`'s own numeric-pattern regexes have diverged from
   `value_types.py`'s (the construction path handles negative currency written either way round and
   accounting-parenthesis negatives; the profile's copy does not), a gap #13 knowingly left unclosed.
-- **`pyproject.toml:3` still reads `version = "0.1.0"`**, four releases behind, as does its mirror in
+- **`pyproject.toml:3` still reads `version = "0.1.0"`**, five releases behind, as does its mirror in
   `uv.lock:21`. These are the only machine-readable versions in the repo.
 - Model configuration drifts from documentation: the models named in `CLAUDE.md` and `CHANGELOG.md` 0.4.0
   exist only in an untracked `.env`. A fresh clone runs on the `gpt-4o`/`gpt-4o-mini` defaults in
