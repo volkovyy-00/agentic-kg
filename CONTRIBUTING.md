@@ -21,7 +21,9 @@ that mirrors the deeplearning.ai course structure it was forked from.
   still shows it as forked from `neo4j-contrib/agentic-kg`, but there's no local `upstream` remote to
   sync from or resolve against — `gh` commands should now target `origin` without an explicit `--repo`
   flag (verify with `gh repo view` after removing the remote).
-- PRs are squash-merged. Write the PR title as the single line that should stand as the commit's summary.
+- PRs are merged with a real merge commit (`gh pr merge --merge`), not squashed or rebased — every
+  commit on the branch lands in `main`'s history as-is, so write meaningful individual commit messages,
+  not just a summary-worthy PR title.
 - No CI is currently configured — run the test suite yourself before opening a PR (see below).
 
 ## Commits and PR descriptions
@@ -52,9 +54,10 @@ implementing a decision with long-term impact (new sub-agent architecture, a cha
 conventions, a new external dependency, a retrieval/construction behavior change with user-visible
 consequences), treat it as your own local working notes, not a shared project record: a fresh clone will not
 have it, and nobody else's spec will be in yours either. If a decision needs to be discoverable by future
-contributors, the durable place for its rationale is the PR description — that's what survives the squash
-merge into `main`'s history. Skip writing a spec at all for tactical bug fixes, refactors, or anything whose
-rationale fits directly in the PR description.
+contributors, put its rationale in the PR description and in the individual commit messages — both now
+persist in `main`'s history, since PRs are merged with a real merge commit rather than squashed. Skip
+writing a spec at all for tactical bug fixes, refactors, or anything whose rationale fits directly in the
+PR description.
 
 The same applies to defect write-ups: if you hit something real but out of scope for the PR you're in, a
 handoff note under `docs/backlog/` is fine as your own scratch reference or as a draft to paste into an
