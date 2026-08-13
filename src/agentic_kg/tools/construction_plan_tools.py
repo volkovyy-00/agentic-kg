@@ -580,14 +580,25 @@ def get_proposed_construction_plan_with_approval_check(
         {
             "proposed_construction_plan": construction_plan,
             "message": (
+                # Does NOT claim the critic's remaining objections are advisory
+                # or that no schema change will clear them: this tool cannot see
+                # which branch the coordinator is in, and on a first 'retry' the
+                # instruction mandates another schema_refinement_loop pass on an
+                # objection this consistency check has no way to observe (it
+                # only knows joins, endpoint labels, and typed join columns). An
+                # unconditional claim here would be true on 'stopped:' and the
+                # second 'retry' but false on the first, contradicting the
+                # instruction on exactly the branch where refinement is still
+                # required.
                 "This plan can be approved right now: "
                 "'approve_proposed_construction_plan' will accept it as it stands. "
-                "Any objections the critic still has are advisory -- they describe "
-                "the source data, not a fault in the plan, and no schema change will "
-                "clear them. Show the user this plan together with those objections "
-                "and ask them to approve it as it stands or ask for a change. The "
-                "decision is theirs, not yours: do not tell them the plan is not "
-                "ready for approval."
+                "That is all this tool knows: it checks joins, endpoint labels and "
+                "typed columns, not whether the plan is the right one. When your "
+                "instruction has you presenting this plan, show it to the user "
+                "together with any outstanding critic objections and ask them to "
+                "approve it as it stands or ask for a change. The decision is "
+                "theirs, not yours: do not tell them the plan is not ready for "
+                "approval."
             ),
         },
     )

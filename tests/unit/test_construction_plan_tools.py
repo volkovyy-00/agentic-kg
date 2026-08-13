@@ -504,6 +504,24 @@ def test_approval_check_message_names_the_tool_and_forbids_the_unready_claim(ctx
     assert "not ready for approval" in message
 
 
+def test_approval_check_success_message_does_not_call_objections_advisory(ctx):
+    """Would catch the reintroduction of an unconditional "the critic's
+    objections are advisory / no schema change will clear them" claim. That
+    claim is false on the first 'retry' branch, where the coordinator's
+    instruction mandates another schema_refinement_loop pass on an objection
+    this consistency check cannot see (it only knows joins, endpoint labels,
+    and typed join columns) -- the tool has no way to tell which branch it is
+    in, so it must not make a claim that is only true on two of the three."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+
+    message = get_proposed_construction_plan_with_approval_check(ctx)["result"][
+        "message"
+    ]
+
+    assert "advisory" not in message
+    assert "no schema change will" not in message
+
+
 # Required values must be present
 
 
