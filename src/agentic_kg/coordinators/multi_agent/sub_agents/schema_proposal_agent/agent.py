@@ -12,7 +12,7 @@ from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_plan_tools import (
     approve_proposed_construction_plan,
-    get_proposed_construction_plan,
+    get_proposed_construction_plan_with_approval_check,
 )
 
 finished = make_finished(MULTI_AGENT_COORDINATOR)
@@ -53,8 +53,9 @@ def prepare_refinement_loop_invocation(
                     text=(
                         "stopped: schema_refinement_loop already ran once this turn "
                         f"(last verdict: {last_feedback}). Do not call it again this "
-                        "turn -- call get_proposed_construction_plan and present that "
-                        "plan together with the verdict above, and let the user decide."
+                        "turn -- call get_proposed_construction_plan_with_approval_check "
+                        "and present that plan together with the verdict above, and let "
+                        "the user decide."
                     )
                 )
             ],
@@ -132,8 +133,8 @@ class CheckStatusAndEscalate(BaseAgent):
             if text
             else (
                 "retry: the critic produced no verdict. Call "
-                "'get_proposed_construction_plan' and judge the plan yourself rather "
-                "than running the loop again on no feedback."
+                "'get_proposed_construction_plan_with_approval_check' and judge the "
+                "plan yourself rather than running the loop again on no feedback."
             )
         )
         yield Event(
@@ -166,44 +167,45 @@ root_agent = LlmAgent(
     When the schema approval has been recorded, use the 'finished' tool.
 
     You cannot change the construction plan yourself. Only the 'schema_refinement_loop' tool can, and the
-    only way to learn what the plan currently says is the 'get_proposed_construction_plan' tool. What you
-    remember from an earlier turn is not evidence: the refinement loop can change entries you did not ask
-    about, so a plan you described one turn ago may no longer be what is stored.
+    only way to learn what the plan currently says is the
+    'get_proposed_construction_plan_with_approval_check' tool. What you remember from an earlier turn is
+    not evidence: the refinement loop can change entries you did not ask about, so a plan you described one
+    turn ago may no longer be what is stored.
 
     Rules for presenting a plan — these prevent the user approving a schema that will never be built:
     - Never describe a plan, a change to a plan, or a "revised"/"updated" schema from memory or from your
       own reasoning about what should have happened.
     - Immediately before every message in which you show the user a schema, call
-      'get_proposed_construction_plan'. Present that call's actual returned data, in that same turn, and
-      reproduce each construction's fields exactly as returned — source_file, label or relationship_type,
-      unique_column_name, from/to node labels and columns, and properties. If your description and the
-      tool result differ on any field, the tool result is correct and yours is wrong.
+      'get_proposed_construction_plan_with_approval_check'. Present that call's actual returned data, in
+      that same turn, and reproduce each construction's fields exactly as returned — source_file, label or
+      relationship_type, unique_column_name, from/to node labels and columns, and properties. If your
+      description and the tool result differ on any field, the tool result is correct and yours is wrong.
     - After calling 'schema_refinement_loop', do not assume the requested change was made, and do not
       report it as made. The loop returns only the critic's final verdict ('valid' or 'retry' plus
       feedback), never the plan itself and never raw tool output such as column statistics — a verdict
-      is not evidence of what the plan says. Call 'get_proposed_construction_plan' and compare
-      the result against what the user asked for. If the change is missing, or if something the user
-      previously approved has changed back or otherwise drifted, say so plainly and run the loop again
-      with feedback naming both the requested change and the regression — do not present the plan as if
-      it were correct.
+      is not evidence of what the plan says. Call 'get_proposed_construction_plan_with_approval_check'
+      and compare the result against what the user asked for. If the change is missing, or if something
+      the user previously approved has changed back or otherwise drifted, say so plainly and run the
+      loop again with feedback naming both the requested change and the regression — do not present the
+      plan as if it were correct.
     - If the verdict the loop returns begins with 'retry', the critic found problems that are still in
       the plan: call 'schema_refinement_loop' again, passing that retry feedback, instead of presenting a
       plan with known problems for approval (the loop only runs once per turn -- if you have already run
       it this turn, present the plan instead). Do this at most once for a given problem. If the loop
       returns 'retry' a second time, stop calling it: some objections cannot be fixed by changing the
-      schema, because they are properties of the data. Call 'get_proposed_construction_plan', show the
-      user that plan together with the critic's remaining objections, and let them decide whether to
-      approve it as it stands.
+      schema, because they are properties of the data. Call
+      'get_proposed_construction_plan_with_approval_check', show the user that plan together with the
+      critic's remaining objections, and let them decide whether to approve it as it stands.
     - If the verdict the loop returns begins with 'stopped:', 'schema_refinement_loop' has already run once
       this turn and refused to run again -- do not call it again this turn no matter what. Call
-      'get_proposed_construction_plan' and present that plan together with the verdict's last-known
-      feedback (quoted in the 'stopped:' message), and let the user decide whether to approve it or ask
-      for another change, which will run in a fresh turn with a new budget.
+      'get_proposed_construction_plan_with_approval_check' and present that plan together with the
+      verdict's last-known feedback (quoted in the 'stopped:' message), and let the user decide whether to
+      approve it or ask for another change, which will run in a fresh turn with a new budget.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.
-    - Use the 'get_proposed_construction_plan' tool to read the current construction rules for
-      transforming approved files into the schema
+    - Use the 'get_proposed_construction_plan_with_approval_check' tool to read the current construction
+      rules for transforming approved files into the schema
     - Present the proposed construction plan to the user for approval, following the rules above
     - If they disapprove, pass their feedback to the 'schema_refinement_loop' tool and go back to step 1
     - If the user approves, use the 'approve_proposed_construction_plan' tool to record the approval.
@@ -216,7 +218,7 @@ root_agent = LlmAgent(
     """,
     tools=[
         agent_tool.AgentTool(refinement_loop),
-        get_proposed_construction_plan,
+        get_proposed_construction_plan_with_approval_check,
         approve_proposed_construction_plan,
         finished,
     ],
