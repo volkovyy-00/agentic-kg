@@ -538,6 +538,58 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     )
 
 
+def get_proposed_construction_plan_with_approval_check(tool_context: ToolContext) -> dict:
+    """Get the proposed construction plan, and whether it can be approved right now.
+
+    Use this whenever you are about to show the user a construction plan. It runs
+    the same consistency check 'approve_proposed_construction_plan' runs, without
+    approving anything, so its answer is exactly what approval will do.
+
+    An error result means approval would be refused, and the message lists the
+    problems that would cause it. A success result means nothing is blocking
+    approval, and carries both the plan and what to do next.
+    """
+    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
+    if not construction_plan:
+        return tool_error(
+            "There is no proposed construction plan to approve. "
+            "Produce one first, then present it to the user."
+        )
+
+    problems = check_construction_plan_consistency(construction_plan)
+    if problems:
+        return tool_error(
+            # States the fact and stops. It deliberately does NOT say "run
+            # schema_refinement_loop with these as feedback": that is right
+            # mid-turn but contradicts the instruction outright on the second
+            # 'retry' and on 'stopped:', where the standing rule is to stop
+            # calling the loop. Only the instruction knows which branch it is
+            # in, and it already says what to do in each.
+            "This plan cannot be approved as it stands. "
+            "'approve_proposed_construction_plan' will refuse it for:\n- "
+            + "\n- ".join(problems)
+            + "\nDo not present this plan for approval until this tool reports "
+            "success."
+        )
+
+    return tool_success(
+        "result",
+        {
+            "proposed_construction_plan": construction_plan,
+            "message": (
+                "This plan can be approved right now: "
+                "'approve_proposed_construction_plan' will accept it as it stands. "
+                "Any objections the critic still has are advisory -- they describe "
+                "the source data, not a fault in the plan, and no schema change will "
+                "clear them. Show the user this plan together with those objections "
+                "and ask them to approve it as it stands or ask for a change. The "
+                "decision is theirs, not yours: do not tell them the plan is not "
+                "ready for approval."
+            ),
+        },
+    )
+
+
 # Tool: Get Proposed construction Plan
 
 

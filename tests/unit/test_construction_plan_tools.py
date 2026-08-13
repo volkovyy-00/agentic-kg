@@ -22,6 +22,7 @@ from agentic_kg.tools.construction_plan_tools import (
     approve_proposed_construction_plan,
     check_construction_plan_consistency,
     get_proposed_construction_plan,
+    get_proposed_construction_plan_with_approval_check,
     propose_node_construction,
     propose_node_constructions,
     propose_relationship_construction,
@@ -422,6 +423,83 @@ def test_approve_refuses_when_there_is_no_proposed_plan(ctx):
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "error"
     assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+# --- approval check (dry run) -----------------------------------------------
+
+
+def test_approval_check_refuses_when_there_is_no_proposed_plan(ctx):
+    """Would catch an implementation that returns success on an empty plan --
+    the coordinator would then present nothing at all as approvable."""
+    result = get_proposed_construction_plan_with_approval_check(ctx)
+
+    assert result["status"] == "error"
+    assert "no proposed construction plan" in result["error_message"].lower()
+
+
+def test_approval_check_reports_the_same_problems_approval_would(ctx):
+    """Would catch a check that drifted away from the one approval actually
+    runs -- the coordinator would tell the user a plan is fine and then watch
+    approve_proposed_construction_plan refuse it."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _drifted_plan()
+
+    result = get_proposed_construction_plan_with_approval_check(ctx)
+
+    assert result["status"] == "error"
+    for problem in check_construction_plan_consistency(_drifted_plan()):
+        assert problem in result["error_message"]
+
+
+def test_approval_check_returns_the_plan_and_a_directive_when_nothing_blocks(ctx):
+    """Would catch a success payload that omits the plan (leaving the
+    coordinator to describe it from memory, which its instruction forbids) or
+    omits the message (leaving the verdict as an absence again)."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+
+    result = get_proposed_construction_plan_with_approval_check(ctx)
+
+    assert result["status"] == "success"
+    payload = result["result"]
+    assert payload["proposed_construction_plan"] == _consistent_plan()
+    assert payload["message"]
+
+
+def test_approval_check_never_records_an_approval(ctx):
+    """Would catch the tool carrying approve_proposed_construction_plan's state
+    write across when its body was copied -- every plan the coordinator merely
+    looked at would become approved, silently."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+
+    get_proposed_construction_plan_with_approval_check(ctx)
+
+    assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+def test_approval_check_blocked_message_prescribes_no_recovery_action(ctx):
+    """Would catch the natural-looking addition of "run schema_refinement_loop
+    with these as feedback" to the blocked message. That reads as helpful and is
+    correct mid-turn -- but on the second 'retry' and on 'stopped:' the
+    coordinator's instruction says to stop calling the loop, so the tool result
+    would contradict the instruction in the same turn, at exactly the two
+    branches this fix exists to clean up. The tool knows only whether approval
+    would succeed; only the instruction knows which branch it is in."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _drifted_plan()
+
+    message = get_proposed_construction_plan_with_approval_check(ctx)["error_message"]
+
+    assert "schema_refinement_loop" not in message
+
+
+def test_approval_check_message_names_the_tool_and_forbids_the_unready_claim(ctx):
+    """Would catch a message softened into a neutral status line. The reported
+    bug is the agent asserting 'not ready for approval' when nothing blocks
+    approval; this message is the only place that claim is contradicted."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+
+    message = get_proposed_construction_plan_with_approval_check(ctx)["result"]["message"]
+
+    assert "approve_proposed_construction_plan" in message
+    assert "not ready for approval" in message
 
 
 # Required values must be present
