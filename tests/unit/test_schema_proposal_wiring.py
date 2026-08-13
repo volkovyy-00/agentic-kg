@@ -5,6 +5,7 @@ whose absence would silently disable the feature -- the evidence tool not being
 reachable, and the revision paragraph not naming property_types.
 """
 
+import asyncio
 import inspect
 import re
 
@@ -12,11 +13,20 @@ import pytest
 
 from agentic_kg.common.value_types import ALLOWED_TYPES
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
+    agent as agent_module,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
     variants as variants_module,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+    CheckStatusAndEscalate,
+    prepare_refinement_loop_invocation,
+    root_agent,
 )
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.variants import (
     variants,
 )
+from agentic_kg.tools import adk_tools, construction_plan_tools
 from agentic_kg.tools.construction_plan_tools import (
     propose_node_construction,
     propose_relationship_construction,
@@ -162,4 +172,101 @@ def test_the_args_section_names_exactly_the_real_parameters(fn):
     )
     assert actual - documented == set(), (
         f"parameters but not documented: {actual - documented}"
+    )
+
+
+class _FakeCallbackContext:
+    def __init__(self):
+        self.state = {}
+
+
+class _FakeSession:
+    def __init__(self, state):
+        self.state = state
+
+
+class _FakeInvocationContext:
+    def __init__(self, state):
+        self.session = _FakeSession(state)
+
+
+def _stopped_verdict_text():
+    """The text prepare_refinement_loop_invocation returns when the loop is
+    called a second time in one turn. First call returns None and arms the
+    counter; the second short-circuits."""
+    ctx = _FakeCallbackContext()
+    assert prepare_refinement_loop_invocation(ctx) is None
+    content = prepare_refinement_loop_invocation(ctx)
+    return content.parts[0].text
+
+
+def _empty_verdict_text():
+    """The text CheckStatusAndEscalate yields when the critic returned no
+    verdict at all."""
+    checker = CheckStatusAndEscalate(name="StopChecker")
+    ctx = _FakeInvocationContext({"feedback": ""})
+
+    async def collect():
+        return [event async for event in checker._run_async_impl(ctx)]
+
+    events = asyncio.run(collect())
+    return events[-1].content.parts[0].text
+
+
+def _tool_names_in(namespace):
+    return {
+        name
+        for name, value in namespace.items()
+        if callable(value)
+        and not isinstance(value, type)
+        and getattr(value, "__module__", "").startswith("agentic_kg.tools.")
+        and not name.startswith("_")
+    }
+
+
+def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
+    """The coordinator's instruction and tools are inline attributes on
+    root_agent, a shape test_every_tool_an_instruction_names_is_a_tool_that_agent_has
+    cannot reach -- it only scans the variants dict. So a rename that updates
+    the instruction but forgets one of the two generated tool-result strings
+    ships silently, and the coordinator then receives tool output naming a tool
+    that is not in tools_dict: ADK raises mid-turn, giving a dead turn with no
+    response and no spinner.
+
+    Two details are load-bearing, and getting either wrong makes this test pass
+    on the failure it exists to catch:
+
+    The pattern matches UNQUOTED names. The generated string in
+    prepare_refinement_loop_invocation says 'call get_proposed_construction_plan
+    and present' with no quotes, so the quoted-only pattern used by the sibling
+    test above sees one of the two sites and misses the other.
+
+    known_tools comes from the tools modules as well as this agent's namespace.
+    Sourcing it from vars(agent_module) alone -- as the sibling test does, which
+    is safe there only because variants.py imports every name it uses -- makes
+    the check blind to a RENAME: once the old name is no longer imported here, a
+    forgotten mention of it is not recognised as a tool name at all.
+    """
+    texts = [
+        root_agent.instruction,
+        _stopped_verdict_text(),
+        _empty_verdict_text(),
+    ]
+    wired = {getattr(tool, "name", None) or tool.__name__ for tool in root_agent.tools}
+    known_tools = (
+        _tool_names_in(vars(agent_module))
+        | _tool_names_in(vars(construction_plan_tools))
+        | _tool_names_in(vars(adk_tools))
+    )
+
+    named = {
+        match
+        for text in texts
+        for match in re.findall(r"[a-z_][a-z0-9_]*", text)
+        if match in known_tools
+    }
+    missing = named - wired
+    assert not missing, (
+        f"the coordinator names {sorted(missing)}, which it cannot call. "
+        f"Either wire the tool in or stop advertising it."
     )
