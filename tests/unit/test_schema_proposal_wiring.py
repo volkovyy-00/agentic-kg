@@ -213,6 +213,46 @@ def _empty_verdict_text():
     return events[-1].content.parts[0].text
 
 
+def _refusal_message_text():
+    """The text approve_proposed_construction_plan returns when the plan is
+    internally inconsistent. approve_proposed_construction_plan is held by
+    exactly one agent -- this coordinator -- so this refusal string lands in
+    the coordinator's context and, if it names a tool the coordinator does not
+    hold, is the same dead-turn failure this file's other checks exist to
+    prevent. Drives the refusal branch with a plan shaped like the drifted one
+    in test_construction_plan_tools.py: a relationship joining on a column its
+    node does not carry."""
+    ctx = _FakeCallbackContext()
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = {
+        "Product": {
+            "construction_type": "node",
+            "source_file": "products.csv",
+            "label": "Product",
+            "unique_column_name": "product_id",
+            "properties": ["product_name"],
+        },
+        "Assembly": {
+            "construction_type": "node",
+            "source_file": "assemblies.csv",
+            "label": "Assembly",
+            "unique_column_name": "assembly_id",
+            "properties": ["component_name", "quantity", "product_id"],
+        },
+        "ASSEMBLY_OF": {
+            "construction_type": "relationship",
+            "source_file": "assemblies.csv",
+            "relationship_type": "ASSEMBLY_OF",
+            "from_node_label": "Assembly",
+            "from_node_column": "assembly_name",
+            "to_node_label": "Product",
+            "to_node_column": "product_id",
+            "properties": ["quantity"],
+        },
+    }
+    result = construction_plan_tools.approve_proposed_construction_plan(ctx)
+    return result["error_message"]
+
+
 def _tool_names_in(namespace):
     return {
         name
@@ -251,6 +291,7 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
         root_agent.instruction,
         _stopped_verdict_text(),
         _empty_verdict_text(),
+        _refusal_message_text(),
     ]
     wired = {getattr(tool, "name", None) or tool.__name__ for tool in root_agent.tools}
     known_tools = (

@@ -528,8 +528,9 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
             "The proposed construction plan is internally inconsistent and was NOT approved:\n- "
             + "\n- ".join(problems)
             + "\nFix the plan, then show the user the corrected plan returned by "
-            "'get_proposed_construction_plan' and ask them to approve again. Do not "
-            "describe the plan as fixed until this tool reports success."
+            "'get_proposed_construction_plan_with_approval_check' and ask them to "
+            "approve again. Do not describe the plan as fixed until this tool "
+            "reports success."
         )
 
     tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
