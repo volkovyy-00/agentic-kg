@@ -538,7 +538,9 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     )
 
 
-def get_proposed_construction_plan_with_approval_check(tool_context: ToolContext) -> dict:
+def get_proposed_construction_plan_with_approval_check(
+    tool_context: ToolContext,
+) -> dict:
     """Get the proposed construction plan, and whether it can be approved right now.
 
     Use this whenever you are about to show the user a construction plan. It runs

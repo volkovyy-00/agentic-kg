@@ -496,7 +496,9 @@ def test_approval_check_message_names_the_tool_and_forbids_the_unready_claim(ctx
     approval; this message is the only place that claim is contradicted."""
     ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
 
-    message = get_proposed_construction_plan_with_approval_check(ctx)["result"]["message"]
+    message = get_proposed_construction_plan_with_approval_check(ctx)["result"][
+        "message"
+    ]
 
     assert "approve_proposed_construction_plan" in message
     assert "not ready for approval" in message
