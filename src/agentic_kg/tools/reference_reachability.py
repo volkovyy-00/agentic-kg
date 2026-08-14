@@ -106,6 +106,29 @@ def _survives_collapse(rule: dict, column: str) -> Tuple[bool, str | None]:
     return all(len(values) == 1 for values in groups.values()), None
 
 
+def _rule_properties(rule: dict) -> List[str]:
+    """A rule's 'properties', defensively.
+
+    A malformed rule can carry anything here -- an int, a string, another
+    dict. Only a genuine list is a property list; anything else is treated as
+    empty rather than risking a crash (non-iterable) or silent substring
+    matching (a string 'in' check) against a value the rule never declared.
+    """
+    properties = rule.get("properties")
+    return properties if isinstance(properties, list) else []
+
+
+def _rule_unique_column_name(rule: dict) -> str | None:
+    """A rule's 'unique_column_name', defensively.
+
+    A malformed rule can carry a non-string here (e.g. a list), which is not
+    a column name and must not be treated as one -- putting it straight into
+    a set literal alongside properties raises 'unhashable type' instead.
+    """
+    name = rule.get("unique_column_name")
+    return name if isinstance(name, str) else None
+
+
 def _report(column: str, homes: List[str], referencing: List[str], detail: str) -> str:
     """The refusal. It must offer BOTH routes out, every time.
 
@@ -178,8 +201,8 @@ def check_reference_columns_are_reachable(
         # a file was unreadable, but only this knows which candidate that cost.
         for rule in rules:
             if rule.get("source_file") in unreadable and column in {
-                rule.get("unique_column_name"),
-                *(rule.get("properties") or []),
+                _rule_unique_column_name(rule),
+                *_rule_properties(rule),
             }:
                 evidence_complete = False
                 notes.append(
@@ -196,7 +219,7 @@ def check_reference_columns_are_reachable(
             f"'{column}', and none retains it as a property."
         )
         for rule in home_rules:
-            if column not in (rule.get("properties") or []):
+            if column not in _rule_properties(rule):
                 continue
             survives, error_message = _survives_collapse(rule, column)
             if survives:

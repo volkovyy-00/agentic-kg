@@ -222,8 +222,9 @@ def test_incomplete_evidence_downgrades_a_refusal_to_unverified(survey_source):
 
 
 def test_one_unreadable_candidate_does_not_suppress_another(survey_source):
-    """Case 9: catches abort-on-first-error. Two independent candidates; the
-    readable one is still reported while the other is only noted."""
+    """Case 9: catches abort-on-first-error. The unreadable file drops out at
+    stage 1, so its candidate never actually forms -- but a readable, unrelated
+    candidate is still reported rather than swallowed by the earlier failure."""
     fs = survey_source
     with fs.open("/src/sites.csv", "w") as handle:
         handle.write("site_label,site_id\nnorth,ST-1\nnorth,ST-2\n")
@@ -288,6 +289,58 @@ def test_an_empty_approved_file_list_produces_nothing(survey_source):
         [],
         [],
     )
+
+
+def test_malformed_rule_field_types_do_not_raise_or_substring_match(survey_source):
+    """Case 11: catches skipping the isinstance guards on a rule's fields. An
+    unreadable rule's non-string 'unique_column_name' (a list) built into a set
+    literal alongside a non-list 'properties' (an int) must not raise
+    'unhashable type: list' / 'argument of type int is not iterable', and a
+    *string* 'properties' value must not silently substring-match instead of
+    being treated as absent."""
+    plan = {
+        "Ghost": {
+            "construction_type": "node",
+            "source_file": "ghost.csv",
+            "label": "Ghost",
+            "unique_column_name": ["x"],
+            "properties": 5,
+        }
+    }
+    approved = ["plots.csv", "readings.csv", "ghost.csv"]
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, approved)
+    assert isinstance(problems, list) and isinstance(unverified, list)
+    assert len(problems) == 1 and "plot_id" in problems[0]
+
+    string_properties_plan = _plot_node("plot_label", "plot_id")
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        string_properties_plan, APPROVED
+    )
+    assert len(problems) == 1 and "plot_id" in problems[0]
+
+
+def test_a_read_failure_elsewhere_does_not_block_a_confirmed_reachable_candidate(
+    survey_source,
+):
+    """Catches conflating 'some read failed' with 'this candidate's evidence is
+    incomplete'. plot_id is fully confirmed reachable via plot_slug plus a
+    surviving property; a wholly unrelated approved file that fails to read
+    must add its own note but must not downgrade THIS column's verdict -- a
+    failed read withholds evidence, it never manufactures a problem either."""
+    fs = survey_source
+    with fs.open("/src/plots.csv", "w") as handle:
+        handle.write(
+            "plot_label,plot_id,plot_slug\n"
+            "ridge,PL-1,ridge-a\n"
+            "ridge,PL-2,ridge-b\n"
+            "hollow,PL-3,hollow-a\n"
+        )
+    approved = ["plots.csv", "readings.csv", "absent.csv"]
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_slug", ["plot_id"]), approved
+    )
+    assert problems == []
+    assert any("absent.csv" in note for note in unverified)
 
 
 def test_a_malformed_plan_does_not_raise(survey_source):

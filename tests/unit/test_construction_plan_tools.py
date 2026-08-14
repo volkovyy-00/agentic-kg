@@ -407,6 +407,23 @@ def test_approve_records_a_consistent_plan(ctx):
     assert ctx.state[APPROVED_CONSTRUCTION_PLAN] == _consistent_plan()
 
 
+def test_approve_success_payload_shape_is_pinned(ctx):
+    """Catches the outer key drifting to APPROVED_CONSTRUCTION_PLAN (the string
+    'approved_construction_plan') instead of the literal 'result' -- since that
+    constant IS the nested key's name, a substring assertion on
+    json.dumps(...) would not catch the outer key nesting inside itself."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+
+    result = approve_proposed_construction_plan(ctx)
+
+    assert set(result.keys()) == {"status", "result"}
+    assert result["status"] == "success"
+    payload = result["result"]
+    assert set(payload.keys()) == {"approved_construction_plan", "not_verified"}
+    assert payload["approved_construction_plan"] == _consistent_plan()
+    assert payload["not_verified"] == []
+
+
 def test_approve_refuses_a_plan_whose_relationship_endpoint_has_no_node(
     ctx, any_column_exists
 ):

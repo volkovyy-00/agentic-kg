@@ -546,12 +546,14 @@ def _read_plan_for_approval(
 
 # Tool: Approve the proposed construction plan
 def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
-    """Approve the proposed construction plan, if it is internally consistent.
+    """Approve the proposed construction plan, if it can actually be built.
 
     Approval is refused when a relationship construction joins on a column the
     referenced node does not carry, or names an endpoint label that has no node
-    construction in the plan, since such a plan cannot build the graph that was
-    described to the user no matter what was said in conversation.
+    construction in the plan, or when it leaves an approved file's reference
+    column with no node in the plan that carries it reachably -- in every one
+    of these cases the plan cannot build the graph that was described to the
+    user no matter what was said in conversation.
     """
     construction_plan, problems, unverified = _read_plan_for_approval(tool_context)
     if construction_plan is None:
