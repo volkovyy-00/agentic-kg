@@ -5,6 +5,7 @@ whose absence would silently disable the feature -- the evidence tool not being
 reachable, and the revision paragraph not naming property_types.
 """
 
+import asyncio
 import inspect
 import re
 
@@ -12,11 +13,20 @@ import pytest
 
 from agentic_kg.common.value_types import ALLOWED_TYPES
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
+    agent as agent_module,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
     variants as variants_module,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+    CheckStatusAndEscalate,
+    prepare_refinement_loop_invocation,
+    root_agent,
 )
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.variants import (
     variants,
 )
+from agentic_kg.tools import adk_tools, construction_plan_tools
 from agentic_kg.tools.construction_plan_tools import (
     propose_node_construction,
     propose_relationship_construction,
@@ -54,13 +64,7 @@ def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
     """
     instruction = variants[agent]["instruction"]
     wired = {tool.__name__ for tool in variants[agent]["tools"]}
-    known_tools = {
-        name
-        for name, value in vars(variants_module).items()
-        if callable(value)
-        and not isinstance(value, type)
-        and getattr(value, "__module__", "").startswith("agentic_kg.tools.")
-    }
+    known_tools = _tool_names_in(vars(variants_module))
 
     named = {
         match
@@ -162,4 +166,173 @@ def test_the_args_section_names_exactly_the_real_parameters(fn):
     )
     assert actual - documented == set(), (
         f"parameters but not documented: {actual - documented}"
+    )
+
+
+class _FakeCallbackContext:
+    def __init__(self):
+        self.state = {}
+
+
+class _FakeSession:
+    def __init__(self, state):
+        self.state = state
+
+
+class _FakeInvocationContext:
+    def __init__(self, state):
+        self.session = _FakeSession(state)
+
+
+def _stopped_verdict_text():
+    """The text prepare_refinement_loop_invocation returns when the loop is
+    called a second time in one turn. First call returns None and arms the
+    counter; the second short-circuits."""
+    ctx = _FakeCallbackContext()
+    assert prepare_refinement_loop_invocation(ctx) is None
+    content = prepare_refinement_loop_invocation(ctx)
+    return content.parts[0].text
+
+
+def _empty_verdict_text():
+    """The text CheckStatusAndEscalate yields when the critic returned no
+    verdict at all."""
+    checker = CheckStatusAndEscalate(name="StopChecker")
+    ctx = _FakeInvocationContext({"feedback": ""})
+
+    async def collect():
+        return [event async for event in checker._run_async_impl(ctx)]
+
+    events = asyncio.run(collect())
+    return events[-1].content.parts[0].text
+
+
+def _plan(join_column):
+    """A minimal two-node plan whose relationship joins on `join_column`.
+    'assembly_name' is not a column Assembly carries, so that spelling drives
+    every refusal branch here; 'assembly_id' is, so it drives the success
+    branch."""
+    return {
+        "Product": {
+            "construction_type": "node",
+            "source_file": "products.csv",
+            "label": "Product",
+            "unique_column_name": "product_id",
+            "properties": ["product_name"],
+        },
+        "Assembly": {
+            "construction_type": "node",
+            "source_file": "assemblies.csv",
+            "label": "Assembly",
+            "unique_column_name": "assembly_id",
+            "properties": ["component_name", "quantity", "product_id"],
+        },
+        "ASSEMBLY_OF": {
+            "construction_type": "relationship",
+            "source_file": "assemblies.csv",
+            "relationship_type": "ASSEMBLY_OF",
+            "from_node_label": "Assembly",
+            "from_node_column": join_column,
+            "to_node_label": "Product",
+            "to_node_column": "product_id",
+            "properties": ["quantity"],
+        },
+    }
+
+
+def _refusal_message_text():
+    """The text approve_proposed_construction_plan returns when the plan is
+    internally inconsistent. approve_proposed_construction_plan is held by
+    exactly one agent -- this coordinator -- so this refusal string lands in
+    the coordinator's context and, if it names a tool the coordinator does not
+    hold, is the same dead-turn failure this file's other checks exist to
+    prevent."""
+    ctx = _FakeCallbackContext()
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan(
+        "assembly_name"
+    )
+    result = construction_plan_tools.approve_proposed_construction_plan(ctx)
+    return result["error_message"]
+
+
+def _approval_check_texts():
+    """Both messages the coordinator's own plan-reading tool can return. They
+    name 'approve_proposed_construction_plan' and land in the coordinator's
+    context exactly as the refusal above does, so the same rename that would
+    break the strings in agent.py would break these -- and this file's stated
+    job is catching precisely that."""
+    read = construction_plan_tools.get_proposed_construction_plan_with_approval_check
+    ctx = _FakeCallbackContext()
+
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan(
+        "assembly_name"
+    )
+    blocked = read(ctx)
+
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan("assembly_id")
+    allowed = read(ctx)
+
+    assert blocked["status"] == "error" and allowed["status"] == "success"
+    return [blocked["error_message"], allowed["result"]["message"]]
+
+
+def _tool_names_in(namespace):
+    return {
+        name
+        for name, value in namespace.items()
+        if callable(value)
+        and not isinstance(value, type)
+        and getattr(value, "__module__", "").startswith("agentic_kg.tools.")
+        and not name.startswith("_")
+    }
+
+
+def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
+    """The coordinator's instruction and tools are inline attributes on
+    root_agent, a shape test_every_tool_an_instruction_names_is_a_tool_that_agent_has
+    cannot reach -- it only scans the variants dict. So a rename that updates
+    the instruction but forgets one of the two generated tool-result strings
+    ships silently, and the coordinator then receives tool output naming a tool
+    that is not in tools_dict: ADK raises mid-turn, giving a dead turn with no
+    response and no spinner.
+
+    Two details are load-bearing, and getting either wrong makes this test pass
+    on the failure it exists to catch:
+
+    The pattern matches UNQUOTED names. The generated string in
+    prepare_refinement_loop_invocation says "call
+    get_proposed_construction_plan_with_approval_check and present" with no
+    quotes, so the quoted-only pattern used by the sibling test above sees one
+    of the two sites and misses the other.
+
+    known_tools comes from the tools modules as well as this agent's namespace.
+    Sourcing it from vars(agent_module) alone -- as the sibling test does, which
+    is safe there only because variants.py imports every name it uses -- makes
+    the check blind to a RENAME: once the old name is no longer imported here, a
+    forgotten mention of it is not recognised as a tool name at all.
+    """
+    texts = [
+        root_agent.instruction,
+        _stopped_verdict_text(),
+        _empty_verdict_text(),
+        _refusal_message_text(),
+        *_approval_check_texts(),
+    ]
+    wired = {getattr(tool, "name", None) or tool.__name__ for tool in root_agent.tools}
+    known_tools = (
+        _tool_names_in(vars(agent_module))
+        | _tool_names_in(vars(construction_plan_tools))
+        | _tool_names_in(vars(adk_tools))
+    )
+
+    named = {
+        match
+        for text in texts
+        for match in re.findall(r"[a-z_][a-z0-9_]*", text)
+        if match in known_tools
+    }
+    missing = named - wired
+    assert not missing, (
+        f"the coordinator names {sorted(missing)}, which it cannot call. "
+        f"Either wire the tool in or stop advertising it."
     )
