@@ -350,3 +350,46 @@ def test_a_malformed_plan_does_not_raise(survey_source):
         {"Plot": "not-a-dict"}, APPROVED
     )
     assert isinstance(problems, list) and isinstance(unverified, list)
+
+
+def test_one_file_listed_twice_is_not_two_files(survey_source):
+    """Catches counting entries instead of distinct files: a duplicated approved path
+    made a single file satisfy the two-file condition and refuse a plan over a column
+    nothing else references, in a message naming the same file twice."""
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_label", ["canopy"]), ["plots.csv", "plots.csv"]
+    )
+    assert problems == []
+    assert unverified == []
+
+
+def test_a_column_repeated_inside_one_header_is_not_two_files(survey_source):
+    """Catches recording one entry per header occurrence: a CSV whose header repeats a
+    name made that one file look like two, refusing a plan over a column that exists in
+    no other file."""
+    fs = survey_source
+    with fs.open("/src/twin.csv", "w") as handle:
+        handle.write("code,code,label\nA,X,alpha\nB,Y,beta\n")
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        {
+            "Twin": {
+                "construction_type": "node",
+                "source_file": "twin.csv",
+                "label": "Twin",
+                "unique_column_name": "label",
+                "properties": [],
+            }
+        },
+        ["twin.csv"],
+    )
+    assert problems == []
+    assert unverified == []
+
+
+def test_a_non_iterable_approved_file_list_does_not_raise(survey_source):
+    """Catches iterating approved_files without checking its type: the contract is two
+    lists for ANY input, and a raise here dies inside a plan presentation."""
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_label", ["canopy"]), 5
+    )
+    assert problems == [] and unverified == []

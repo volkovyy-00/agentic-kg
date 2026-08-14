@@ -514,6 +514,18 @@ NO_PROPOSED_PLAN_MESSAGE = (
 )
 
 
+def _format_unverified_notes(unverified: list[str]) -> str:
+    """Render the reachability check's unverified notes for a caller's message.
+
+    Shared for the same reason the preconditions themselves are: both callers
+    append this block, and two copies of the format would drift the moment one
+    is reworded.
+    """
+    if not unverified:
+        return ""
+    return "\n\nNot verified:\n- " + "\n- ".join(unverified)
+
+
 def _read_plan_for_approval(
     tool_context: ToolContext,
 ) -> tuple[dict | None, list[str], list[str]]:
@@ -559,7 +571,7 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     if construction_plan is None:
         return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
-    notes = "\n\nNot verified:\n- " + "\n- ".join(unverified) if unverified else ""
+    notes = _format_unverified_notes(unverified)
 
     if problems:
         return tool_error(
@@ -597,7 +609,7 @@ def get_proposed_construction_plan_with_approval_check(
     if construction_plan is None:
         return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
-    notes = "\n\nNot verified:\n- " + "\n- ".join(unverified) if unverified else ""
+    notes = _format_unverified_notes(unverified)
 
     if problems:
         return tool_error(

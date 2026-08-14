@@ -40,14 +40,24 @@ def _columns_by_file(
     columns: Dict[str, List[str]] = {}
     unreadable: List[str] = []
     notes: List[str] = []
-    for path in approved_files or []:
+    if not isinstance(approved_files, (list, tuple)):
+        return columns, unreadable, notes
+
+    seen_paths: set = set()
+    for path in approved_files:
+        # One file cannot reference itself. A path repeated in the approved list,
+        # or a column name repeated inside one header, would otherwise make a
+        # single file look like the two files the whole check keys on.
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
         try:
             header = read_csv_header(path)
         except Exception as exc:  # noqa: BLE001 - a bad source must not raise here
             unreadable.append(path)
             notes.append(f"the header of '{path}' could not be read ({exc})")
             continue
-        for column in header:
+        for column in dict.fromkeys(header):
             columns.setdefault(column, []).append(path)
     return columns, unreadable, notes
 
@@ -129,6 +139,16 @@ def _rule_unique_column_name(rule: dict) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _quoted_list(paths: List[str]) -> str:
+    """Comma-separated, single-quoted file names for a message.
+
+    One spelling, because these lists are read side by side in the same refusal:
+    two ways of quoting the same kind of value diverge the moment a path contains
+    a quote or a backslash.
+    """
+    return ", ".join(f"'{path}'" for path in paths)
+
+
 def _report(column: str, homes: List[str], referencing: List[str], detail: str) -> str:
     """The refusal. It must offer BOTH routes out, every time.
 
@@ -142,9 +162,9 @@ def _report(column: str, homes: List[str], referencing: List[str], detail: str) 
     percentage reported and moved past. And it never suggests dropping the
     relationship, which is the failure this whole check exists to prevent.
     """
-    home_list = ", ".join(f"'{path}'" for path in homes)
+    home_list = _quoted_list(homes)
     if referencing:
-        other_list = ", ".join(f"'{path}'" for path in referencing)
+        other_list = _quoted_list(referencing)
         appears_clause = f" and also appears in {other_list}"
         join_clause = f"joining {other_list} to {home_list}"
     else:
@@ -215,7 +235,7 @@ def check_reference_columns_are_reachable(
             continue  # stage 3: keyed by it, on a file that owns it
 
         detail = (
-            f"no node built from {', '.join(repr(h) for h in homes)} is keyed by "
+            f"no node built from {_quoted_list(homes)} is keyed by "
             f"'{column}', and none retains it as a property."
         )
         for rule in home_rules:
