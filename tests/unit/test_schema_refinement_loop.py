@@ -83,7 +83,7 @@ def test_a_missing_verdict_reads_as_retry_not_as_valid():
     the plan rather than inventing one from memory."""
     text = _event_text(_run("")[0])
     assert text.lower().startswith("retry")
-    assert "get_proposed_construction_plan" in text
+    assert "get_proposed_construction_plan_with_approval_check" in text
 
 
 def test_a_missing_verdict_still_escalates():

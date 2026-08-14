@@ -300,9 +300,10 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
     on the failure it exists to catch:
 
     The pattern matches UNQUOTED names. The generated string in
-    prepare_refinement_loop_invocation says 'call get_proposed_construction_plan
-    and present' with no quotes, so the quoted-only pattern used by the sibling
-    test above sees one of the two sites and misses the other.
+    prepare_refinement_loop_invocation says "call
+    get_proposed_construction_plan_with_approval_check and present" with no
+    quotes, so the quoted-only pattern used by the sibling test above sees one
+    of the two sites and misses the other.
 
     known_tools comes from the tools modules as well as this agent's namespace.
     Sourcing it from vars(agent_module) alone -- as the sibling test does, which
