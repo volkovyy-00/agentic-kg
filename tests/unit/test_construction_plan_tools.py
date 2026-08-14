@@ -13,8 +13,12 @@ Two layers are covered here:
   * approval now mechanically refuses the inconsistent plan the drift produced.
 """
 
+import json
+
+import fsspec
 import pytest
 
+from agentic_kg.common.config import reset_settings
 from agentic_kg.tools import construction_plan_tools as cpt
 from agentic_kg.tools.construction_plan_tools import (
     APPROVED_CONSTRUCTION_PLAN,
@@ -29,6 +33,7 @@ from agentic_kg.tools.construction_plan_tools import (
     propose_relationship_constructions,
     remove_node_construction,
 )
+from agentic_kg.tools.file_tools import APPROVED_FILES
 
 
 class FakeToolContext:
@@ -878,3 +883,99 @@ def test_approval_refuses_a_plan_with_an_illegal_type(ctx):
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "error"
     assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+# --- reachability wiring ------------------------------------------------------
+
+
+@pytest.fixture
+def stranding_state(monkeypatch):
+    """A plan whose node key leaves the second file's reference unreachable."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/src/plots.csv", "w") as handle:
+        handle.write("plot_label,plot_id\nridge,PL-1\nridge,PL-2\nhollow,PL-3\n")
+    with fs.open("/src/readings.csv", "w") as handle:
+        handle.write("reading_id,plot_id\nR-1,PL-1\nR-2,PL-3\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    state = {
+        PROPOSED_CONSTRUCTION_PLAN: {
+            "Plot": {
+                "construction_type": "node",
+                "source_file": "plots.csv",
+                "label": "Plot",
+                "unique_column_name": "plot_label",
+                "properties": [],
+            }
+        },
+        APPROVED_FILES: ["plots.csv", "readings.csv"],
+    }
+    yield FakeToolContext(state)
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+
+
+def test_both_callers_report_the_same_reachability_problems(stranding_state):
+    """The PR #20 anti-drift pin, extended: a precondition added to one path and
+    not the other is exactly what _read_plan_for_approval exists to prevent."""
+    refusal = approve_proposed_construction_plan(stranding_state)
+    check = get_proposed_construction_plan_with_approval_check(stranding_state)
+    assert refusal["status"] == "error" and check["status"] == "error"
+    assert "plot_id" in refusal["error_message"]
+    assert "plot_id" in check["error_message"]
+
+
+def test_approval_refuses_a_plan_that_strands_a_reference_column(stranding_state):
+    """Catches wiring the check somewhere that does not gate approval: the whole
+    point is that this plan stops being approvable."""
+    result = approve_proposed_construction_plan(stranding_state)
+    assert result["status"] == "error"
+    assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
+
+
+def test_unverified_notes_surface_on_the_success_path(monkeypatch):
+    """Catches surfacing notes only on refusal: a plan approved with unverified
+    reachability would then look identical to one fully checked."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/src/plots.csv", "w") as handle:
+        handle.write("plot_label,plot_id\nridge,PL-1\nhollow,PL-2\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    ctx = FakeToolContext(
+        {
+            PROPOSED_CONSTRUCTION_PLAN: _consistent_plan(),
+            APPROVED_FILES: ["plots.csv", "absent.csv"],
+        }
+    )
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "success"
+    assert "absent.csv" in json.dumps(result)
+    fs.store.clear()
+
+
+def test_structural_problems_still_reported_when_no_source_is_readable(monkeypatch):
+    """Catches making the structural check depend on file access. A broken plan must
+    still be refused during a total source outage."""
+    monkeypatch.setenv("SOURCE_URI", "memory://nowhere")
+    reset_settings()
+    ctx = FakeToolContext(
+        {
+            PROPOSED_CONSTRUCTION_PLAN: _drifted_plan(),
+            APPROVED_FILES: ["anything.csv", "other.csv"],
+        }
+    )
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "error"
+    assert "ASSEMBLY_OF" in result["error_message"]
+
+
+def test_a_plan_with_no_approved_files_is_unaffected(ctx):
+    """Catches a check that reads files it was never given. Every pre-existing
+    approval test omits approved_file_list and must stay green."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "success"

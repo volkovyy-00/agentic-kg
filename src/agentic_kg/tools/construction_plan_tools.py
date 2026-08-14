@@ -9,7 +9,8 @@ from agentic_kg.common.value_types import ALLOWED_TYPES
 
 graphdb = get_graphdb()
 
-from .file_tools import search_file
+from .file_tools import APPROVED_FILES, search_file
+from .reference_reachability import check_reference_columns_are_reachable
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
@@ -515,7 +516,7 @@ NO_PROPOSED_PLAN_MESSAGE = (
 
 def _read_plan_for_approval(
     tool_context: ToolContext,
-) -> tuple[dict | None, list[str]]:
+) -> tuple[dict | None, list[str], list[str]]:
     """Read the proposed plan and whatever would make approval refuse it.
 
     Approval and its dry run both read their preconditions through here, so the
@@ -525,14 +526,22 @@ def _read_plan_for_approval(
     a dry run that reports success where approval refuses is the exact bug the
     dry run exists to prevent.
 
+    The reachability check reads the approved files, unlike the structural one.
+    It fails open: a source it cannot read produces a note in the third return
+    value, never a problem, so an unreachable disk cannot make a plan unshowable.
+
     Callers phrase their own refusals -- only the facts are shared. Returns
-    (None, []) when there is no plan to read.
+    (None, [], []) when there is no plan to read.
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
     if not construction_plan:
-        return None, []
+        return None, [], []
 
-    return construction_plan, check_construction_plan_consistency(construction_plan)
+    problems = check_construction_plan_consistency(construction_plan)
+    reachability_problems, unverified = check_reference_columns_are_reachable(
+        construction_plan, tool_context.state.get(APPROVED_FILES) or []
+    )
+    return construction_plan, problems + reachability_problems, unverified
 
 
 # Tool: Approve the proposed construction plan
@@ -544,23 +553,28 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     construction in the plan, since such a plan cannot build the graph that was
     described to the user no matter what was said in conversation.
     """
-    construction_plan, problems = _read_plan_for_approval(tool_context)
+    construction_plan, problems, unverified = _read_plan_for_approval(tool_context)
     if construction_plan is None:
         return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
+    notes = "\n\nNot verified:\n- " + "\n- ".join(unverified) if unverified else ""
+
     if problems:
         return tool_error(
-            "The proposed construction plan is internally inconsistent and was NOT approved:\n- "
+            "The proposed construction plan was NOT approved. It is inconsistent, "
+            "or it leaves an approved file's reference column unreachable:\n- "
             + "\n- ".join(problems)
             + "\nFix the plan, then show the user the corrected plan returned by "
             "'get_proposed_construction_plan_with_approval_check' and ask them to "
             "approve again. Do not describe the plan as fixed until "
             "'get_proposed_construction_plan_with_approval_check' reports success."
+            + notes
         )
 
     tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(
-        APPROVED_CONSTRUCTION_PLAN, tool_context.state[APPROVED_CONSTRUCTION_PLAN]
+        "result",
+        {"approved_construction_plan": construction_plan, "not_verified": unverified},
     )
 
 
@@ -577,9 +591,11 @@ def get_proposed_construction_plan_with_approval_check(
     problems that would cause it. A success result means nothing is blocking
     approval, and carries both the plan and what to do next.
     """
-    construction_plan, problems = _read_plan_for_approval(tool_context)
+    construction_plan, problems, unverified = _read_plan_for_approval(tool_context)
     if construction_plan is None:
         return tool_error(NO_PROPOSED_PLAN_MESSAGE)
+
+    notes = "\n\nNot verified:\n- " + "\n- ".join(unverified) if unverified else ""
 
     if problems:
         return tool_error(
@@ -603,13 +619,14 @@ def get_proposed_construction_plan_with_approval_check(
             + json.dumps(construction_plan, indent=2)
             + "\nShow the user this plan and these problems if your instruction "
             "has you presenting it, but do not present it for approval until "
-            "this tool reports success."
+            "this tool reports success." + notes
         )
 
     return tool_success(
         "result",
         {
             "proposed_construction_plan": construction_plan,
+            "not_verified": unverified,
             "message": (
                 # Does NOT claim the critic's remaining objections are advisory
                 # or that no schema change will clear them: this tool cannot see
@@ -623,13 +640,14 @@ def get_proposed_construction_plan_with_approval_check(
                 # required.
                 "This plan can be approved right now: "
                 "'approve_proposed_construction_plan' will accept it as it stands. "
-                "That is all this tool knows: it checks joins, endpoint labels and "
-                "typed columns, not whether the plan is the right one. When your "
-                "instruction has you presenting this plan, show it to the user "
-                "together with any outstanding critic objections, ask them to "
-                "approve it as it stands or ask for a change, and leave that "
-                "decision to them -- when you present it, do not tell them the "
-                "plan is not ready for approval."
+                "That is all this tool knows: it checks joins, endpoint labels, "
+                "typed columns, and whether every approved file's reference "
+                "columns can still be reached, not whether the plan is the right "
+                "one. When your instruction has you presenting this plan, show it "
+                "to the user together with any outstanding critic objections, ask "
+                "them to approve it as it stands or ask for a change, and leave "
+                "that decision to them -- when you present it, do not tell them "
+                "the plan is not ready for approval."
             ),
         },
     )
