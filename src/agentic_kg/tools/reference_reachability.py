@@ -120,15 +120,24 @@ def _report(column: str, homes: List[str], referencing: List[str], detail: str) 
     relationship, which is the failure this whole check exists to prevent.
     """
     home_list = ", ".join(f"'{path}'" for path in homes)
-    other_list = ", ".join(f"'{path}'" for path in referencing)
+    if referencing:
+        other_list = ", ".join(f"'{path}'" for path in referencing)
+        appears_clause = f" and also appears in {other_list}"
+        join_clause = f"joining {other_list} to {home_list}"
+    else:
+        # Every file sharing the column identifies rows by it -- there is no
+        # "other" file left to name, but the column is still stranded: no home
+        # file's node carries it reachably, so any relationship between those
+        # home files still has nothing to join on.
+        appears_clause = ""
+        join_clause = f"among {home_list}"
     return (
-        f"'{column}' identifies rows in {home_list} and also appears in "
-        f"{other_list}, but no node in the plan carries it reachably: {detail} "
-        f"Any relationship joining {other_list} to {home_list} therefore has no "
-        f"column to join on and cannot be built at all. Fix it either by keying a "
-        f"node built from {home_list} by '{column}', or by adding a node "
-        f"construction from {home_list} keyed by '{column}' alongside the "
-        f"existing one."
+        f"'{column}' identifies rows in {home_list}{appears_clause}, but no node "
+        f"in the plan carries it reachably: {detail} Any relationship {join_clause} "
+        f"therefore has no column to join on and cannot be built at all. Fix it "
+        f"either by keying a node built from {home_list} by '{column}', or by "
+        f"adding a node construction from {home_list} keyed by '{column}' "
+        f"alongside the existing one."
     )
 
 

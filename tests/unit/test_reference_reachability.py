@@ -258,6 +258,27 @@ def test_the_report_names_both_routes_out(survey_source):
     assert "drop" not in text.lower()
 
 
+def test_the_report_has_no_blank_slot_when_every_file_is_a_home_file(survey_source):
+    """Catches _report leaving blank slots ('appears in ' / 'joining  to') when the
+    column is per-row unique in every file that shares it, so referencing is empty --
+    a legitimate 1:1 split with no 'other' file left to name."""
+    fs = survey_source
+    with fs.open("/src/detail.csv", "w") as handle:
+        handle.write("plot_id,notes\nPL-1,a\nPL-2,b\nPL-3,c\nPL-4,d\n")
+    problems, _ = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_label", ["canopy"]), ["plots.csv", "detail.csv"]
+    )
+    assert len(problems) == 1
+    text = problems[0]
+    assert "plot_id" in text
+    assert "cannot be built at all" in text
+    assert "keying a node built from" in text
+    assert "adding a node construction" in text
+    assert ", but " in text and ", but  " not in text
+    assert "joining  to" not in text
+    assert " to  " not in text
+
+
 def test_an_empty_approved_file_list_produces_nothing(survey_source):
     """Catches a check that reads files it was never given. Every existing approval
     test has no approved_file_list in state and must stay green."""
