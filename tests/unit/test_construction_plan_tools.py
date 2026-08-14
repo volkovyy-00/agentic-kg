@@ -14,6 +14,7 @@ Two layers are covered here:
 """
 
 import json
+from pathlib import Path
 
 import fsspec
 import pytest
@@ -34,6 +35,9 @@ from agentic_kg.tools.construction_plan_tools import (
     remove_node_construction,
 )
 from agentic_kg.tools.file_tools import APPROVED_FILES
+from agentic_kg.tools.reference_reachability import (
+    check_reference_columns_are_reachable,
+)
 
 
 class FakeToolContext:
@@ -979,3 +983,68 @@ def test_a_plan_with_no_approved_files_is_unaffected(ctx):
     ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "success"
+
+
+# --- regression pins on the bundled dataset -----------------------------------
+
+BOM = Path(__file__).resolve().parents[2] / "data" / "bom"
+BOM_FILES = [
+    "products.csv",
+    "suppliers.csv",
+    "assemblies.csv",
+    "components.csv",
+    "part_supplier_mapping.csv",
+]
+
+
+def _bom_node(source_file, label, unique_column_name, properties):
+    return {
+        "construction_type": "node",
+        "source_file": source_file,
+        "label": label,
+        "unique_column_name": unique_column_name,
+        "properties": properties,
+    }
+
+
+@pytest.fixture
+def bom_source(monkeypatch):
+    monkeypatch.setenv("SOURCE_URI", str(BOM))
+    reset_settings()
+    yield
+    reset_settings()
+
+
+def test_the_reference_plan_reports_nothing(bom_source):
+    """Catches a check that fires on a correct plan. Every identifier column is
+    keyed by a node built from the file that owns it."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_id", ["product_name"]),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv", "Assembly", "assembly_id", ["quantity"]
+        ),
+        "Part": _bom_node("components.csv", "Part", "part_id", ["part_name"]),
+    }
+    problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
+    assert problems == []
+    assert unverified == []
+
+
+def test_the_regression_plan_reports_exactly_the_stranded_column(bom_source):
+    """The defect this ticket exists for: keying the assembly node by its repeating
+    name leaves components.csv's reference with nothing to point at, and the only
+    approvable plan is one with the containment relationship missing."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_id", ["product_name"]),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv", "Assembly", "assembly_name", ["quantity"]
+        ),
+        "Part": _bom_node("components.csv", "Part", "part_id", ["part_name"]),
+    }
+    problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
+    assert len(problems) == 1
+    assert "assembly_id" in problems[0]
+    assert "assemblies.csv" in problems[0] and "components.csv" in problems[0]
+    assert unverified == []
