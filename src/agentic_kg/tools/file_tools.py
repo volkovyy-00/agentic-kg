@@ -256,7 +256,7 @@ def _missing_column_error(file_path: str, column: str, header: List[str]) -> dic
     )
 
 
-def _collect_column_values(file_path: str, column: str):
+def collect_column_values(file_path: str, column: str):
     """Read every value of one column from a source CSV.
 
     Returns:
@@ -268,6 +268,9 @@ def _collect_column_values(file_path: str, column: str):
     "". The two are the same absence to column_stats, whose row_count and
     empty_count treat both as empty -- but not to the loader, which skips an
     absent key and clears a blank one, so the hint tool counts them apart.
+
+    Public because `tools/reference_reachability.py` reads source columns through
+    it rather than reimplementing CSV reading.
     """
     try:
         if not source_exists(file_path):
@@ -321,7 +324,7 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
               key with 'path', 'column', 'row_count', 'distinct_count',
               'empty_count' and 'is_unique'.
     """
-    values, error = _collect_column_values(file_path, column)
+    values, error = collect_column_values(file_path, column)
     if error is not None:
         return error
 
@@ -448,7 +451,7 @@ def _collect_columns_values(file_path: str, columns: List[str]):
     any row is collected, so an unreadable column still fails on the first
     batch rather than after a full scan. A ragged row contributes None and a
     present-but-empty cell contributes "", the distinction
-    _collect_column_values documents and _hint_from_values counts apart.
+    collect_column_values documents and _hint_from_values counts apart.
     """
     try:
         if not source_exists(file_path):
@@ -516,7 +519,7 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
               'unconvertible_count' and up to three 'example_unconvertible'
               values.
     """
-    values, error = _collect_column_values(file_path, column)
+    values, error = collect_column_values(file_path, column)
     if error is not None:
         return error
 
@@ -573,13 +576,16 @@ def column_type_hints(
     )
 
 
-def _collect_column_pairs(file_path: str, column_a: str, column_b: str):
+def collect_column_pairs(file_path: str, column_a: str, column_b: str):
     """Read two columns of one source CSV, row by row.
 
     Returns:
         (pairs, error) where pairs is a list of (value_a, value_b) tuples and
         error is a tool_error dict when the file or either column cannot be
         read.
+
+    Public because `tools/reference_reachability.py` reads source columns through
+    it rather than reimplementing CSV reading.
     """
     try:
         if not source_exists(file_path):
@@ -608,6 +614,24 @@ def _collect_column_pairs(file_path: str, column_a: str, column_b: str):
         return None, tool_error(f"CSV file has no header row: {file_path}")
 
     return pairs, None
+
+
+def group_values_by_key(pairs) -> Dict[str, set]:
+    """Group a column's values by a node key's values, as MERGE would collapse them.
+
+    Returns EVERY group, not only the conflicting ones: 'collapse_check' reports
+    'group_count' (the number of distinct node keys) alongside
+    'groups_with_conflicts', and those are different numbers. Callers filter.
+
+    Values of None become "" so a ragged row's absent key groups with a blank one,
+    which is how the loader treats them.
+    """
+    groups: Dict[str, set] = {}
+    for key, value in pairs:
+        key_text = "" if key is None else str(key)
+        value_text = "" if value is None else str(value)
+        groups.setdefault(key_text, set()).add(value_text)
+    return groups
 
 
 def collapse_check(
@@ -650,15 +674,11 @@ def collapse_check(
               conflicts) and 'example_conflicts' (up to 5 entries of
               {'node_key', 'values'}).
     """
-    pairs, error = _collect_column_pairs(file_path, node_key_column, candidate_column)
+    pairs, error = collect_column_pairs(file_path, node_key_column, candidate_column)
     if error is not None:
         return error
 
-    groups: Dict[str, set] = {}
-    for key, value in pairs:
-        key_text = "" if key is None else str(key)
-        value_text = "" if value is None else str(value)
-        groups.setdefault(key_text, set()).add(value_text)
+    groups = group_values_by_key(pairs)
 
     conflicts = [(key, values) for key, values in groups.items() if len(values) > 1]
     example_conflicts = [
@@ -703,10 +723,10 @@ def join_preview(
               of them have a match on the other side, and the matched fraction
               (0.0 when a side has no usable values).
     """
-    values_a, error = _collect_column_values(file_a, column_a)
+    values_a, error = collect_column_values(file_a, column_a)
     if error is not None:
         return error
-    values_b, error = _collect_column_values(file_b, column_b)
+    values_b, error = collect_column_values(file_b, column_b)
     if error is not None:
         return error
 

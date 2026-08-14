@@ -536,3 +536,28 @@ def test_the_hint_docstring_documents_every_key_it_returns(bom_source):
 
     for key in hint:
         assert f"'{key}'" in file_tools.column_type_hint.__doc__, key
+
+
+def test_group_values_by_key_returns_every_group_not_only_conflicts():
+    """Catches an extraction that returns the filtered conflict list: collapse_check
+    needs group_count, which is len(groups) BEFORE filtering."""
+    groups = file_tools.group_values_by_key([("k1", "a"), ("k1", "b"), ("k2", "c")])
+    assert set(groups) == {"k1", "k2"}
+    assert groups["k1"] == {"a", "b"}
+    assert groups["k2"] == {"c"}
+
+
+def test_group_values_by_key_normalises_none_to_empty_string():
+    """Catches an extraction that drops collapse_check's None handling, which would
+    make a ragged row's absent key crash on set membership."""
+    groups = file_tools.group_values_by_key([(None, None)])
+    assert groups == {"": {""}}
+
+
+def test_the_column_readers_are_importable_under_their_public_names(memory_source):
+    """Catches a promotion that renamed only the definition and left call sites (or
+    vice versa) — reference_reachability imports these by their public names."""
+    values, error = file_tools.collect_column_values("people.csv", "name")
+    assert error is None and values == ["Ada", "Grace"]
+    pairs, error = file_tools.collect_column_pairs("people.csv", "id", "name")
+    assert error is None and pairs == [("1", "Ada"), ("2", "Grace")]
