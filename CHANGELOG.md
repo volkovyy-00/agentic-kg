@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Fixed
-- **Withheld schema approval (#NN)**: the schema agent no longer tells the user a construction plan is
+- **Withheld schema approval (#20)**: the schema agent no longer tells the user a construction plan is
   "not ready for approval" when nothing is actually blocking it. When the critic's remaining objections
   describe the source data rather than a fault in the plan — or when the refinement budget for the turn
   is spent — the agent now reads whether approval would succeed and presents the plan with the choice to
