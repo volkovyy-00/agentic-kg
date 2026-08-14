@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-14
+
+### Fixed
+- **Orphaned reference columns (#21)**: approval now refuses a construction plan that leaves an
+  approved file's reference column unreachable — a column identifying rows in one file and named
+  identically in another, which the plan neither keys a node by nor preserves through collapsing.
+  Such a plan could previously only be made approvable by dropping the affected relationship
+  entirely, which happened silently and produced a graph missing every edge of that type. The
+  check reads the approved files and fails open: a source it cannot read is reported as unverified
+  rather than blocking approval.
+
 ## [0.5.1] - 2026-08-14
 
 ### Fixed
@@ -144,7 +155,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Documentation of the colima/Testcontainers `DOCKER_HOST` + Ryuk workaround needed to run integration
   tests locally (#1).
 
-[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.3.0...v0.4.0

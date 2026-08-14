@@ -46,3 +46,24 @@ def test_dataset_vocabulary_absent_from_src(token):
         "Shipped code must reason about graph shapes, not about one dataset. "
         "See 'Generality constraints' in the design spec."
     )
+
+
+NEUTRAL_FIXTURES = Path(__file__).resolve().parent / "test_reference_reachability.py"
+
+
+@pytest.mark.parametrize(
+    "token", FORBIDDEN_TOKENS + ["assembly", "supplier", "furniture"]
+)
+def test_dataset_vocabulary_absent_from_the_reachability_fixtures(token):
+    """This file's fixtures are the ticket's evidence that the rule keys on
+    structure and not on the bundled example's names, so they are the one test
+    file whose vocabulary is load-bearing. The sibling test above scans src/ only
+    and cannot see this; collapse_source in test_file_tools.py already leaks
+    'assembly_id' precisely because nothing checks it.
+    """
+    text = NEUTRAL_FIXTURES.read_text(encoding="utf-8")
+    assert token not in text, (
+        f"Dataset token {token!r} found in {NEUTRAL_FIXTURES.name}. These fixtures "
+        "must be a domain unrelated to the bundled example; rename the column or "
+        "file rather than relaxing this check."
+    )

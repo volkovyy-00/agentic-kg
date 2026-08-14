@@ -13,8 +13,13 @@ Two layers are covered here:
   * approval now mechanically refuses the inconsistent plan the drift produced.
 """
 
+import json
+from pathlib import Path
+
+import fsspec
 import pytest
 
+from agentic_kg.common.config import reset_settings
 from agentic_kg.tools import construction_plan_tools as cpt
 from agentic_kg.tools.construction_plan_tools import (
     APPROVED_CONSTRUCTION_PLAN,
@@ -28,6 +33,10 @@ from agentic_kg.tools.construction_plan_tools import (
     propose_relationship_construction,
     propose_relationship_constructions,
     remove_node_construction,
+)
+from agentic_kg.tools.file_tools import APPROVED_FILES
+from agentic_kg.tools.reference_reachability import (
+    check_reference_columns_are_reachable,
 )
 
 
@@ -396,6 +405,23 @@ def test_approve_records_a_consistent_plan(ctx):
 
     assert result["status"] == "success"
     assert ctx.state[APPROVED_CONSTRUCTION_PLAN] == _consistent_plan()
+
+
+def test_approve_success_payload_shape_is_pinned(ctx):
+    """Catches the outer key drifting to APPROVED_CONSTRUCTION_PLAN (the string
+    'approved_construction_plan') instead of the literal 'result' -- since that
+    constant IS the nested key's name, a substring assertion on
+    json.dumps(...) would not catch the outer key nesting inside itself."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+
+    result = approve_proposed_construction_plan(ctx)
+
+    assert set(result.keys()) == {"status", "result"}
+    assert result["status"] == "success"
+    payload = result["result"]
+    assert set(payload.keys()) == {"approved_construction_plan", "not_verified"}
+    assert payload["approved_construction_plan"] == _consistent_plan()
+    assert payload["not_verified"] == []
 
 
 def test_approve_refuses_a_plan_whose_relationship_endpoint_has_no_node(
@@ -878,3 +904,164 @@ def test_approval_refuses_a_plan_with_an_illegal_type(ctx):
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "error"
     assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+# --- reachability wiring ------------------------------------------------------
+
+
+@pytest.fixture
+def stranding_state(monkeypatch):
+    """A plan whose node key leaves the second file's reference unreachable."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/src/plots.csv", "w") as handle:
+        handle.write("plot_label,plot_id\nridge,PL-1\nridge,PL-2\nhollow,PL-3\n")
+    with fs.open("/src/readings.csv", "w") as handle:
+        handle.write("reading_id,plot_id\nR-1,PL-1\nR-2,PL-3\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    state = {
+        PROPOSED_CONSTRUCTION_PLAN: {
+            "Plot": {
+                "construction_type": "node",
+                "source_file": "plots.csv",
+                "label": "Plot",
+                "unique_column_name": "plot_label",
+                "properties": [],
+            }
+        },
+        APPROVED_FILES: ["plots.csv", "readings.csv"],
+    }
+    yield FakeToolContext(state)
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+
+
+def test_both_callers_report_the_same_reachability_problems(stranding_state):
+    """The PR #20 anti-drift pin, extended: a precondition added to one path and
+    not the other is exactly what _read_plan_for_approval exists to prevent."""
+    refusal = approve_proposed_construction_plan(stranding_state)
+    check = get_proposed_construction_plan_with_approval_check(stranding_state)
+    assert refusal["status"] == "error" and check["status"] == "error"
+    assert "plot_id" in refusal["error_message"]
+    assert "plot_id" in check["error_message"]
+
+
+def test_approval_refuses_a_plan_that_strands_a_reference_column(stranding_state):
+    """Catches wiring the check somewhere that does not gate approval: the whole
+    point is that this plan stops being approvable."""
+    result = approve_proposed_construction_plan(stranding_state)
+    assert result["status"] == "error"
+    assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
+
+
+def test_unverified_notes_surface_on_the_success_path(monkeypatch):
+    """Catches surfacing notes only on refusal: a plan approved with unverified
+    reachability would then look identical to one fully checked."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/src/plots.csv", "w") as handle:
+        handle.write("plot_label,plot_id\nridge,PL-1\nhollow,PL-2\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    ctx = FakeToolContext(
+        {
+            PROPOSED_CONSTRUCTION_PLAN: _consistent_plan(),
+            APPROVED_FILES: ["plots.csv", "absent.csv"],
+        }
+    )
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "success"
+    assert "absent.csv" in json.dumps(result)
+    fs.store.clear()
+
+
+def test_structural_problems_still_reported_when_no_source_is_readable(monkeypatch):
+    """Catches making the structural check depend on file access. A broken plan must
+    still be refused during a total source outage."""
+    monkeypatch.setenv("SOURCE_URI", "memory://nowhere")
+    reset_settings()
+    ctx = FakeToolContext(
+        {
+            PROPOSED_CONSTRUCTION_PLAN: _drifted_plan(),
+            APPROVED_FILES: ["anything.csv", "other.csv"],
+        }
+    )
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "error"
+    assert "ASSEMBLY_OF" in result["error_message"]
+
+
+def test_a_plan_with_no_approved_files_is_unaffected(ctx):
+    """Catches a check that reads files it was never given. Every pre-existing
+    approval test omits approved_file_list and must stay green."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _consistent_plan()
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "success"
+
+
+# --- regression pins on the bundled dataset -----------------------------------
+
+BOM = Path(__file__).resolve().parents[2] / "data" / "bom"
+BOM_FILES = [
+    "products.csv",
+    "suppliers.csv",
+    "assemblies.csv",
+    "components.csv",
+    "part_supplier_mapping.csv",
+]
+
+
+def _bom_node(source_file, label, unique_column_name, properties):
+    return {
+        "construction_type": "node",
+        "source_file": source_file,
+        "label": label,
+        "unique_column_name": unique_column_name,
+        "properties": properties,
+    }
+
+
+@pytest.fixture
+def bom_source(monkeypatch):
+    monkeypatch.setenv("SOURCE_URI", str(BOM))
+    reset_settings()
+    yield
+    reset_settings()
+
+
+def test_the_reference_plan_reports_nothing(bom_source):
+    """Catches a check that fires on a correct plan. Every identifier column is
+    keyed by a node built from the file that owns it."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_id", ["product_name"]),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv", "Assembly", "assembly_id", ["quantity"]
+        ),
+        "Part": _bom_node("components.csv", "Part", "part_id", ["part_name"]),
+    }
+    problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
+    assert problems == []
+    assert unverified == []
+
+
+def test_the_regression_plan_reports_exactly_the_stranded_column(bom_source):
+    """The defect this ticket exists for: keying the assembly node by its repeating
+    name leaves components.csv's reference with nothing to point at, and the only
+    approvable plan is one with the containment relationship missing."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_id", ["product_name"]),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv", "Assembly", "assembly_name", ["quantity"]
+        ),
+        "Part": _bom_node("components.csv", "Part", "part_id", ["part_name"]),
+    }
+    problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
+    assert len(problems) == 1
+    assert "assembly_id" in problems[0]
+    assert "assemblies.csv" in problems[0] and "components.csv" in problems[0]
+    assert unverified == []

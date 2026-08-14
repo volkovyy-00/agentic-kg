@@ -63,7 +63,7 @@ fix for the Neo4j singleton's use-after-close defect (PR #10 — see Architectur
 which already documents the resulting behavior), a fix for both handoff gates being bypassable via ADK's
 own injected `transfer_to_agent` tool (PR #11 — see Architecture's *Handoff confirmation gates* subsection),
 and a gate on the user-intent phase so it cannot be left before the user's goal approval is actually
-recorded (PR #12, open — same subsection; it is the one gate that holds no per-turn flag). None of these
+recorded (PR #12 — same subsection; it is the one gate that holds no per-turn flag). None of these
 touch sub-projects 2/3, which remain unstarted.
 
 ## Commands
@@ -175,6 +175,20 @@ control flow is the issue.
 invocation per user turn (deliberate, not an unexplained restriction): `reset_schema_refinement_turn_budget`
 (coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
 `before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
+
+The current variant's plan-reading tool is `get_proposed_construction_plan_with_approval_check`
+(`tools/construction_plan_tools.py`, PR #20, `0.5.1`, 2026-08-14) — not the plain `get_proposed_construction_plan`,
+which still exists only because the older `v1`/`v2` variants in `variants.py` still call it (the `variants` pattern
+above). It runs the same checks `approve_proposed_construction_plan` runs — `check_construction_plan_consistency`
+and, since PR #21 (`0.5.2`), `check_reference_columns_are_reachable` — through a shared `_read_plan_for_approval`
+helper, so what the coordinator presents as approvable can never drift
+from what approval will then actually do — the bug this fixed was the coordinator judging a plan ready from its
+own reading of the critic's verdict, then `approve_proposed_construction_plan` refusing it anyway. Its error
+branch still returns the plan alongside the specific problems, so the coordinator has something to show even when
+approval isn't possible; its success branch is explicit that it only checked joins, endpoint labels, typed
+columns, and whether every approved file's reference columns can still be reached, not whether it's the *right*
+plan — accepting remaining critic objections stays the user's call. Reachability reads the approved sources and
+fails open: a file it cannot read yields a `not_verified` note, never a refusal.
 
 ### Handoff confirmation gates
 
