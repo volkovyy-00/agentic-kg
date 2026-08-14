@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Approval now refuses a construction plan that leaves an approved file's reference
+  column unreachable — a column identifying rows in one file and named identically in
+  another, which the plan neither keys a node by nor preserves through collapsing. Such
+  a plan could previously only be made approvable by dropping the affected relationship
+  entirely, which happened silently and produced a graph missing every edge of that type.
+  The check reads the approved files and fails open: a source it cannot read is reported
+  as unverified rather than blocking approval.
+
 ## [0.5.1] - 2026-08-14
 
 ### Fixed
