@@ -117,15 +117,23 @@ def _survives_collapse(rule: dict, column: str) -> Tuple[bool, str | None]:
 
 
 def _rule_properties(rule: dict) -> List[str]:
-    """A rule's 'properties', defensively.
+    """A rule's 'properties', defensively -- only the strings in it.
 
     A malformed rule can carry anything here -- an int, a string, another
     dict. Only a genuine list is a property list; anything else is treated as
     empty rather than risking a crash (non-iterable) or silent substring
     matching (a string 'in' check) against a value the rule never declared.
+
+    The elements need the same guard as the container: a property name is a
+    column name, so a non-string is not one, and dropping it here cannot
+    change a match. Passing one through can still crash -- an unhashable
+    element (a dict, a list) raises the moment a caller splats this into a
+    set, which is exactly what stage 1's unreadable-source scan does.
     """
     properties = rule.get("properties")
-    return properties if isinstance(properties, list) else []
+    if not isinstance(properties, list):
+        return []
+    return [name for name in properties if isinstance(name, str)]
 
 
 def _rule_unique_column_name(rule: dict) -> str | None:

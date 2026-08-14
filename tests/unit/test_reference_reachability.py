@@ -386,6 +386,29 @@ def test_a_column_repeated_inside_one_header_is_not_two_files(survey_source):
     assert unverified == []
 
 
+def test_an_unhashable_property_entry_does_not_raise(survey_source):
+    """Catches guarding a rule's 'properties' container but not its elements: a dict
+    inside the list is unhashable, and the unreadable-source scan splats that list into
+    a set literal -- raising 'unhashable type: dict' inside a plan presentation."""
+    plan = {
+        "Ghost": {
+            "construction_type": "node",
+            "source_file": "ghost.csv",
+            "label": "Ghost",
+            "unique_column_name": "plot_id",
+            "properties": [{"name": "plot_id"}, ["plot_id"], "canopy"],
+        }
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        plan, ["plots.csv", "readings.csv", "ghost.csv"]
+    )
+    assert isinstance(problems, list) and isinstance(unverified, list)
+    # 'ghost.csv' is unreadable and could have been plot_id's home file, so the
+    # verdict is withheld rather than refused -- the evidence rule, not a crash.
+    assert problems == []
+    assert any("reachability of 'plot_id' was not verified" in n for n in unverified)
+
+
 def test_a_non_iterable_approved_file_list_does_not_raise(survey_source):
     """Catches iterating approved_files without checking its type: the contract is two
     lists for ANY input, and a raise here dies inside a plan presentation."""

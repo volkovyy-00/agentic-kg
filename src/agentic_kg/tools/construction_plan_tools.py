@@ -646,8 +646,9 @@ def get_proposed_construction_plan_with_approval_check(
                 # or that no schema change will clear them: this tool cannot see
                 # which branch the coordinator is in, and on a first 'retry' the
                 # instruction mandates another schema_refinement_loop pass on an
-                # objection this consistency check has no way to observe (it
-                # only knows joins, endpoint labels, and typed join columns). An
+                # objection these checks have no way to observe (they only know
+                # joins, endpoint labels, typed join columns, and reference-
+                # column reachability). An
                 # unconditional claim here would be true on 'stopped:' and the
                 # second 'retry' but false on the first, contradicting the
                 # instruction on exactly the branch where refinement is still

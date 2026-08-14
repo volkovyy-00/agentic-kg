@@ -179,13 +179,16 @@ invocation per user turn (deliberate, not an unexplained restriction): `reset_sc
 The current variant's plan-reading tool is `get_proposed_construction_plan_with_approval_check`
 (`tools/construction_plan_tools.py`, PR #20, `0.5.1`, 2026-08-14) — not the plain `get_proposed_construction_plan`,
 which still exists only because the older `v1`/`v2` variants in `variants.py` still call it (the `variants` pattern
-above). It runs the same `check_construction_plan_consistency` check `approve_proposed_construction_plan` runs,
-through a shared `_read_plan_for_approval` helper, so what the coordinator presents as approvable can never drift
+above). It runs the same checks `approve_proposed_construction_plan` runs — `check_construction_plan_consistency`
+and, since PR #21 (`0.5.2`), `check_reference_columns_are_reachable` — through a shared `_read_plan_for_approval`
+helper, so what the coordinator presents as approvable can never drift
 from what approval will then actually do — the bug this fixed was the coordinator judging a plan ready from its
 own reading of the critic's verdict, then `approve_proposed_construction_plan` refusing it anyway. Its error
 branch still returns the plan alongside the specific problems, so the coordinator has something to show even when
-approval isn't possible; its success branch is explicit that it only checked joins, endpoint labels, and typed
-columns, not whether it's the *right* plan — accepting remaining critic objections stays the user's call.
+approval isn't possible; its success branch is explicit that it only checked joins, endpoint labels, typed
+columns, and whether every approved file's reference columns can still be reached, not whether it's the *right*
+plan — accepting remaining critic objections stays the user's call. Reachability reads the approved sources and
+fails open: a file it cannot read yields a `not_verified` note, never a refusal.
 
 ### Handoff confirmation gates
 
