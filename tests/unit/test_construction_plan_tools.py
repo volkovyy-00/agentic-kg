@@ -450,6 +450,39 @@ def test_approval_check_reports_the_same_problems_approval_would(ctx):
         assert problem in result["error_message"]
 
 
+def test_approval_check_still_returns_the_plan_when_approval_would_refuse(ctx):
+    """Would catch an error branch that reports the problems but withholds the
+    plan. This is the coordinator's only plan-reading tool, and its instruction
+    both forbids describing a plan from memory and requires reproducing this
+    tool's returned fields -- so withholding the plan leaves it nothing to show
+    on the one branch where the user most needs to see what is wrong, and the
+    recovery path approve_proposed_construction_plan's own refusal names would
+    not exist. Refusing approval is not refusing to show."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _drifted_plan()
+
+    message = get_proposed_construction_plan_with_approval_check(ctx)["error_message"]
+
+    for label in _drifted_plan():
+        assert label in message
+
+
+def test_approval_check_refuses_on_the_same_preconditions_approval_does(ctx):
+    """Would catch the dry run drifting from approval on a precondition other
+    than plan consistency. The pair agrees on drifted plans by construction,
+    but a precondition copied into each tool separately -- the no-plan branch
+    is one -- agrees only by convention, and a dry run reporting success where
+    approval refuses is the exact failure the dry run exists to prevent."""
+    for state in ({}, {PROPOSED_CONSTRUCTION_PLAN: _drifted_plan()}):
+        ctx.state.clear()
+        ctx.state.update(state)
+
+        dry_run = get_proposed_construction_plan_with_approval_check(ctx)
+        approval = approve_proposed_construction_plan(ctx)
+
+        assert dry_run["status"] == approval["status"] == "error"
+        assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
 def test_approval_check_returns_the_plan_and_a_directive_when_nothing_blocks(ctx):
     """Would catch a success payload that omits the plan (leaving the
     coordinator to describe it from memory, which its instruction forbids) or

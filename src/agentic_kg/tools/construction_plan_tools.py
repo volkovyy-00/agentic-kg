@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 
 from google.adk.tools import ToolContext
@@ -506,6 +507,34 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     return problems
 
 
+NO_PROPOSED_PLAN_MESSAGE = (
+    "There is no proposed construction plan to approve. "
+    "Produce one first, then present it to the user."
+)
+
+
+def _read_plan_for_approval(
+    tool_context: ToolContext,
+) -> tuple[dict | None, list[str]]:
+    """Read the proposed plan and whatever would make approval refuse it.
+
+    Approval and its dry run both read their preconditions through here, so the
+    dry run's verdict cannot drift from what approval actually does: a second
+    precondition added here binds both at once. Copying the preconditions into
+    each tool instead would make that equivalence hold only by convention, and
+    a dry run that reports success where approval refuses is the exact bug the
+    dry run exists to prevent.
+
+    Callers phrase their own refusals -- only the facts are shared. Returns
+    (None, []) when there is no plan to read.
+    """
+    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
+    if not construction_plan:
+        return None, []
+
+    return construction_plan, check_construction_plan_consistency(construction_plan)
+
+
 # Tool: Approve the proposed construction plan
 def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Approve the proposed construction plan, if it is internally consistent.
@@ -515,14 +544,10 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     construction in the plan, since such a plan cannot build the graph that was
     described to the user no matter what was said in conversation.
     """
-    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
-    if not construction_plan:
-        return tool_error(
-            "There is no proposed construction plan to approve. "
-            "Produce one first, then present it to the user."
-        )
+    construction_plan, problems = _read_plan_for_approval(tool_context)
+    if construction_plan is None:
+        return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
-    problems = check_construction_plan_consistency(construction_plan)
     if problems:
         return tool_error(
             "The proposed construction plan is internally inconsistent and was NOT approved:\n- "
@@ -552,14 +577,10 @@ def get_proposed_construction_plan_with_approval_check(
     problems that would cause it. A success result means nothing is blocking
     approval, and carries both the plan and what to do next.
     """
-    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
-    if not construction_plan:
-        return tool_error(
-            "There is no proposed construction plan to approve. "
-            "Produce one first, then present it to the user."
-        )
+    construction_plan, problems = _read_plan_for_approval(tool_context)
+    if construction_plan is None:
+        return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
-    problems = check_construction_plan_consistency(construction_plan)
     if problems:
         return tool_error(
             # States the fact and stops. It deliberately does NOT say "run
@@ -571,8 +592,18 @@ def get_proposed_construction_plan_with_approval_check(
             "This plan cannot be approved as it stands. "
             "'approve_proposed_construction_plan' will refuse it for:\n- "
             + "\n- ".join(problems)
-            + "\nDo not present this plan for approval until this tool reports "
-            "success."
+            # Carries the plan even though approval would refuse it. The
+            # coordinator's instruction forbids describing a plan from memory
+            # and requires reproducing this tool's returned fields, and this is
+            # its only plan-reading tool -- so an error that withheld the plan
+            # would leave it nothing to show on exactly the branch where the
+            # user most needs to see what is wrong. Refusing approval is not
+            # the same as refusing to show.
+            + "\n\nThe plan as it currently stands is:\n"
+            + json.dumps(construction_plan, indent=2)
+            + "\nShow the user this plan and these problems if your instruction "
+            "has you presenting it, but do not present it for approval until "
+            "this tool reports success."
         )
 
     return tool_success(
@@ -595,10 +626,10 @@ def get_proposed_construction_plan_with_approval_check(
                 "That is all this tool knows: it checks joins, endpoint labels and "
                 "typed columns, not whether the plan is the right one. When your "
                 "instruction has you presenting this plan, show it to the user "
-                "together with any outstanding critic objections and ask them to "
-                "approve it as it stands or ask for a change. The decision is "
-                "theirs, not yours: do not tell them the plan is not ready for "
-                "approval."
+                "together with any outstanding critic objections, ask them to "
+                "approve it as it stands or ask for a change, and leave that "
+                "decision to them -- when you present it, do not tell them the "
+                "plan is not ready for approval."
             ),
         },
     )

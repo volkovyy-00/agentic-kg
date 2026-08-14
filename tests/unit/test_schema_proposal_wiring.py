@@ -64,13 +64,7 @@ def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
     """
     instruction = variants[agent]["instruction"]
     wired = {tool.__name__ for tool in variants[agent]["tools"]}
-    known_tools = {
-        name
-        for name, value in vars(variants_module).items()
-        if callable(value)
-        and not isinstance(value, type)
-        and getattr(value, "__module__", "").startswith("agentic_kg.tools.")
-    }
+    known_tools = _tool_names_in(vars(variants_module))
 
     named = {
         match
@@ -213,17 +207,12 @@ def _empty_verdict_text():
     return events[-1].content.parts[0].text
 
 
-def _refusal_message_text():
-    """The text approve_proposed_construction_plan returns when the plan is
-    internally inconsistent. approve_proposed_construction_plan is held by
-    exactly one agent -- this coordinator -- so this refusal string lands in
-    the coordinator's context and, if it names a tool the coordinator does not
-    hold, is the same dead-turn failure this file's other checks exist to
-    prevent. Drives the refusal branch with a plan shaped like the drifted one
-    in test_construction_plan_tools.py: a relationship joining on a column its
-    node does not carry."""
-    ctx = _FakeCallbackContext()
-    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = {
+def _plan(join_column):
+    """A minimal two-node plan whose relationship joins on `join_column`.
+    'assembly_name' is not a column Assembly carries, so that spelling drives
+    every refusal branch here; 'assembly_id' is, so it drives the success
+    branch."""
+    return {
         "Product": {
             "construction_type": "node",
             "source_file": "products.csv",
@@ -243,14 +232,48 @@ def _refusal_message_text():
             "source_file": "assemblies.csv",
             "relationship_type": "ASSEMBLY_OF",
             "from_node_label": "Assembly",
-            "from_node_column": "assembly_name",
+            "from_node_column": join_column,
             "to_node_label": "Product",
             "to_node_column": "product_id",
             "properties": ["quantity"],
         },
     }
+
+
+def _refusal_message_text():
+    """The text approve_proposed_construction_plan returns when the plan is
+    internally inconsistent. approve_proposed_construction_plan is held by
+    exactly one agent -- this coordinator -- so this refusal string lands in
+    the coordinator's context and, if it names a tool the coordinator does not
+    hold, is the same dead-turn failure this file's other checks exist to
+    prevent."""
+    ctx = _FakeCallbackContext()
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan(
+        "assembly_name"
+    )
     result = construction_plan_tools.approve_proposed_construction_plan(ctx)
     return result["error_message"]
+
+
+def _approval_check_texts():
+    """Both messages the coordinator's own plan-reading tool can return. They
+    name 'approve_proposed_construction_plan' and land in the coordinator's
+    context exactly as the refusal above does, so the same rename that would
+    break the strings in agent.py would break these -- and this file's stated
+    job is catching precisely that."""
+    read = construction_plan_tools.get_proposed_construction_plan_with_approval_check
+    ctx = _FakeCallbackContext()
+
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan(
+        "assembly_name"
+    )
+    blocked = read(ctx)
+
+    ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan("assembly_id")
+    allowed = read(ctx)
+
+    assert blocked["status"] == "error" and allowed["status"] == "success"
+    return [blocked["error_message"], allowed["result"]["message"]]
 
 
 def _tool_names_in(namespace):
@@ -292,6 +315,7 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
         _stopped_verdict_text(),
         _empty_verdict_text(),
         _refusal_message_text(),
+        *_approval_check_texts(),
     ]
     wired = {getattr(tool, "name", None) or tool.__name__ for tool in root_agent.tools}
     known_tools = (
