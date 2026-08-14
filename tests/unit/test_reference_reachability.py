@@ -409,6 +409,18 @@ def test_an_unhashable_property_entry_does_not_raise(survey_source):
     assert any("reachability of 'plot_id' was not verified" in n for n in unverified)
 
 
+def test_a_non_string_approved_file_entry_is_skipped_and_does_not_raise(survey_source):
+    """Catches guarding the approved list's type but not its entries: an unhashable
+    entry raises on the dedupe before the read is ever guarded, and a hashable
+    non-string one reaches the reader and yields a note about a file nobody named."""
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_id", ["canopy"]),
+        ["plots.csv", ["nested"], {"k": "v"}, 5, None],
+    )
+    assert problems == []
+    assert unverified == []
+
+
 def test_a_non_iterable_approved_file_list_does_not_raise(survey_source):
     """Catches iterating approved_files without checking its type: the contract is two
     lists for ANY input, and a raise here dies inside a plan presentation."""

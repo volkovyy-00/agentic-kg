@@ -45,6 +45,11 @@ def _columns_by_file(
 
     seen_paths: set = set()
     for path in approved_files:
+        # A path is a string. Anything else names no file, and an unhashable one
+        # (a list, a dict) would raise on the dedupe below rather than reaching
+        # the read guarded above -- a raise inside a plan presentation.
+        if not isinstance(path, str):
+            continue
         # One file cannot reference itself. A path repeated in the approved list,
         # or a column name repeated inside one header, would otherwise make a
         # single file look like the two files the whole check keys on.
