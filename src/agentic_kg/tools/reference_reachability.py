@@ -22,7 +22,7 @@ from typing import Dict, List, Tuple
 
 from agentic_kg.common.csv_reader import read_csv_header
 
-from .file_tools import collect_column_values
+from .file_tools import collect_column_pairs, collect_column_values, group_values_by_key
 
 
 def _columns_by_file(
@@ -77,3 +77,146 @@ def _home_files(column: str, files: List[str]) -> Tuple[List[str], bool, List[st
         if values and len(non_empty) == len(values) == len(set(non_empty)):
             homes.append(path)
     return homes, evidence_complete, notes
+
+
+def _node_rules(construction_plan: dict) -> List[dict]:
+    """Every well-formed node rule in the plan, in plan order."""
+    if not isinstance(construction_plan, dict):
+        return []
+    return [
+        rule
+        for rule in construction_plan.values()
+        if isinstance(rule, dict) and rule.get("construction_type") == "node"
+    ]
+
+
+def _survives_collapse(rule: dict, column: str) -> Tuple[bool, str | None]:
+    """Stage 4 for one node rule: does the column keep one value per node?
+
+    Returns (survives, error_message). An unreadable source returns
+    (False, message) -- the caller must treat that as missing evidence, never as
+    proof the column fails to survive.
+    """
+    pairs, error = collect_column_pairs(
+        rule.get("source_file"), rule.get("unique_column_name"), column
+    )
+    if error is not None:
+        return False, error["error_message"]
+    groups = group_values_by_key(pairs)
+    return all(len(values) == 1 for values in groups.values()), None
+
+
+def _report(column: str, homes: List[str], referencing: List[str], detail: str) -> str:
+    """The refusal. It must offer BOTH routes out, every time.
+
+    Re-keying and adding a second node construction both resolve this, and the
+    check has no opinion on which is the better model. A message naming only one
+    would smuggle in the modelling verdict this check deliberately does not make.
+
+    It says the relationship cannot be built AT ALL, never that coverage is low:
+    the standing rules tell the model to keep a partially-covered relationship and
+    report the fraction, so a refusal that reads as a coverage complaint gets a
+    percentage reported and moved past. And it never suggests dropping the
+    relationship, which is the failure this whole check exists to prevent.
+    """
+    home_list = ", ".join(f"'{path}'" for path in homes)
+    other_list = ", ".join(f"'{path}'" for path in referencing)
+    return (
+        f"'{column}' identifies rows in {home_list} and also appears in "
+        f"{other_list}, but no node in the plan carries it reachably: {detail} "
+        f"Any relationship joining {other_list} to {home_list} therefore has no "
+        f"column to join on and cannot be built at all. Fix it either by keying a "
+        f"node built from {home_list} by '{column}', or by adding a node "
+        f"construction from {home_list} keyed by '{column}' alongside the "
+        f"existing one."
+    )
+
+
+def check_reference_columns_are_reachable(
+    construction_plan: dict, approved_files: List[str]
+) -> Tuple[List[str], List[str]]:
+    """Report reference columns the plan leaves with nothing to point at.
+
+    Returns (problems, unverified). Both are always lists and this never raises:
+    it runs on every plan presentation, so a bad source must not make a plan
+    unshowable.
+
+    THE EVIDENCE RULE, which is one flag per candidate and NOT a per-stage check:
+    a 'reachable' verdict may short-circuit freely, because a failed read only
+    ever withholds evidence and never manufactures it. A refusal is emitted only
+    when no read relevant to that column failed; otherwise it downgrades to
+    unverified. Checking this per stage instead looks correct and is not -- a
+    column unique in a readable file AND in an unreadable one the node is built
+    from would short-circuit on the readable file, never credit the unreadable one
+    as a home file, and refuse a correct plan on the strength of a failed read.
+    """
+    columns, unreadable, problems_notes = _columns_by_file(approved_files)
+    rules = _node_rules(construction_plan)
+    problems: List[str] = []
+    unverified: List[str] = list(problems_notes)
+
+    for column, files in sorted(columns.items()):
+        if len(files) < 2:
+            continue
+
+        homes, evidence_complete, notes = _home_files(column, files)
+        if not homes and evidence_complete:
+            continue  # shared, but identifies rows nowhere: not a reference column
+
+        # An unreadable file cannot be shown to lack this column, so a node rule
+        # built from it may have supplied the home file that makes this reachable.
+        # Each blocker is named in this column's OWN notes: the stage 1 note says
+        # a file was unreadable, but only this knows which candidate that cost.
+        for rule in rules:
+            if rule.get("source_file") in unreadable and column in {
+                rule.get("unique_column_name"),
+                *(rule.get("properties") or []),
+            }:
+                evidence_complete = False
+                notes.append(
+                    f"'{rule.get('source_file')}' could not be read, and "
+                    f"'{rule.get('label')}' is built from it"
+                )
+
+        home_rules = [rule for rule in rules if rule.get("source_file") in homes]
+        if any(rule.get("unique_column_name") == column for rule in home_rules):
+            continue  # stage 3: keyed by it, on a file that owns it
+
+        detail = (
+            f"no node built from {', '.join(repr(h) for h in homes)} is keyed by "
+            f"'{column}', and none retains it as a property."
+        )
+        for rule in home_rules:
+            if column not in (rule.get("properties") or []):
+                continue
+            survives, error_message = _survives_collapse(rule, column)
+            if survives:
+                detail = None
+                break
+            if error_message is not None:
+                evidence_complete = False
+                notes.append(
+                    f"'{column}' could not be checked against "
+                    f"'{rule.get('label')}' ({error_message})"
+                )
+            else:
+                detail = (
+                    f"'{rule.get('label')}' (built from '{rule.get('source_file')}', "
+                    f"keyed by '{rule.get('unique_column_name')}') retains "
+                    f"'{column}' as a property, but it does not survive collapsing: "
+                    f"nodes sharing a key disagree about it, so each keeps one "
+                    f"arbitrary value and a relationship joining on it would match "
+                    f"almost nothing, with no error at build time."
+                )
+        if detail is None:
+            continue  # stage 4: a home-file node preserves it
+
+        if evidence_complete:
+            referencing = [path for path in files if path not in homes]
+            problems.append(_report(column, homes, referencing, detail))
+        else:
+            unverified.append(
+                f"reachability of '{column}' was not verified: " + "; ".join(notes)
+            )
+
+    return problems, unverified
