@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-14
+
 ### Fixed
 - **Withheld schema approval (#20)**: the schema agent no longer tells the user a construction plan is
   "not ready for approval" when nothing is actually blocking it. When the critic's remaining objections
@@ -142,7 +144,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Documentation of the colima/Testcontainers `DOCKER_HOST` + Ryuk workaround needed to run integration
   tests locally (#1).
 
-[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.2.1...v0.3.0
