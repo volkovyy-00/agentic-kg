@@ -555,8 +555,7 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
             + "\nFix the plan, then show the user the corrected plan returned by "
             "'get_proposed_construction_plan_with_approval_check' and ask them to "
             "approve again. Do not describe the plan as fixed until "
-            "'get_proposed_construction_plan_with_approval_check' reports success "
-            "-- not merely until this call stops refusing it."
+            "'get_proposed_construction_plan_with_approval_check' reports success."
         )
 
     tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
