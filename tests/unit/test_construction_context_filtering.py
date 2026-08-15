@@ -211,3 +211,25 @@ def test_the_stale_critic_warning_never_reaches_the_model(monkeypatch):
     requests = asyncio.run(scenario())
     assert requests, "the model was never called"
     assert not _sentinel_present(requests)
+
+
+def test_the_critic_still_speaks_of_warnings():
+    """Pins the one token this file's fixture imitates.
+
+    STALE_CRITIC_REPLY is hand-written, so nothing else notices if the critic's
+    vocabulary moves -- the fixture would keep passing while representing a
+    word collision that no longer exists.
+    """
+    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.variants import (
+        variants as schema_variants,
+    )
+
+    critic_instruction = schema_variants["schema_critic_agent_v1"]["instruction"]
+    assert "Warnings:" in critic_instruction, (
+        "schema_critic_agent_v1 no longer emits a line reading 'Warnings:'. "
+        "STALE_CRITIC_REPLY in this file imitates the critic's output, and "
+        "the word collision between the critic's warnings and the loader's is "
+        "the whole scenario these tests reproduce -- so the fixture now stands "
+        "for nothing. Update STALE_CRITIC_REPLY to match the critic's new "
+        "wording, or delete this file's premise deliberately."
+    )
