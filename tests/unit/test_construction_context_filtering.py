@@ -233,3 +233,24 @@ def test_the_critic_still_speaks_of_warnings():
         "for nothing. Update STALE_CRITIC_REPLY to match the critic's new "
         "wording, or delete this file's premise deliberately."
     )
+
+
+def test_the_instruction_covers_the_no_warnings_case():
+    """The other half of the 0.4.0 defect.
+
+    Step 6 told the agent what to do when the build result carries warnings and
+    said nothing about when it does not. Silence, plus a word the schema critic
+    also uses, is what let a 'Construction warnings' section be assembled from
+    the critic's feedback. Wiring alone cannot fix that -- the instruction has
+    to name the empty case.
+
+    Whether the model then obeys is not unit-testable and is verified by hand;
+    see the plan's Task 6.
+    """
+    from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
+        variants as construction_variants,
+    )
+
+    instruction = construction_variants["graph_construction_agent_v1"]["instruction"]
+    assert "If the result has no 'warnings' key" in instruction
+    assert "no warnings section" in instruction
