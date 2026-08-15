@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **Invented construction warnings (#22)**: the construction agent no longer presents a "Construction
+  warnings" section when the loader reported none. Its instruction previously said what to do when the
+  build result carried warnings and nothing about when it did not, and a schema-critic reply from
+  earlier in the session — which uses the same word — could be relabelled as construction output. The
+  agent now reports only the warnings in its own build result and writes no section when there are
+  none. The context filter that keeps other agents' turns out of this agent's requests, wired on in
+  0.5.0, is now covered by tests against exactly that scenario.
+
 ## [0.5.2] - 2026-08-14
 
 ### Fixed
