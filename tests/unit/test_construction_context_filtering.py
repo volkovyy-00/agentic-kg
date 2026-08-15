@@ -191,3 +191,23 @@ def test_without_the_filter_the_stale_warning_does_reach_the_model(monkeypatch):
         "the fixture no longer produces foreign context, so the positive test "
         "in this file would pass for the wrong reason"
     )
+
+
+def test_the_stale_critic_warning_never_reaches_the_model(monkeypatch):
+    """AC1: the critic's 'Warnings:' turn cannot reach the model request.
+
+    In a traced 0.4.0 session the agent presented a 'Construction warnings'
+    section built from exactly this text -- the critic's, from two turns
+    earlier -- while the loader had returned no warnings at all. PR #11 wired
+    drop_foreign_context onto this agent six days later. This is the proof it
+    closes that route.
+    """
+    monkeypatch.setattr(graph_construction_agent, "model", _scripted_model())
+
+    async def scenario():
+        runner, session = await _prepare_session("ctx_filter_test")
+        return await _drive_one_turn(runner, session)
+
+    requests = asyncio.run(scenario())
+    assert requests, "the model was never called"
+    assert not _sentinel_present(requests)
