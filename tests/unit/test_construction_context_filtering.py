@@ -123,22 +123,34 @@ async def _drive_one_turn(runner, session, message="summarize the graph"):
     return graph_construction_agent.model.requests
 
 
+def _part_texts(requests):
+    """Every part's text across every request, flattened.
+
+    Shared by the two checks below so the request/content/part walk exists
+    once: if ADK reshapes any of those three levels, only this breaks, rather
+    than one check silently going always-False while the other is fixed.
+    """
+    return [
+        getattr(part, "text", None)
+        for request in requests
+        for content in (request.contents or [])
+        for part in (content.parts or [])
+    ]
+
+
 def _sentinel_present(requests):
-    for request in requests:
-        for content in request.contents or []:
-            for part in content.parts or []:
-                if getattr(part, "text", None) == FOREIGN_CONTEXT_SENTINEL:
-                    return True
-    return False
+    """Exact match, mirroring the filter's own predicate.
+
+    drop_foreign_context decides with `parts[0].text == FOREIGN_CONTEXT_SENTINEL`
+    (adk_context.py `_is_foreign`), so this asks the same question rather than a
+    looser substring one.
+    """
+    return FOREIGN_CONTEXT_SENTINEL in _part_texts(requests)
 
 
 def _text_present(requests, needle):
-    for request in requests:
-        for content in request.contents or []:
-            for part in content.parts or []:
-                if needle in (getattr(part, "text", None) or ""):
-                    return True
-    return False
+    """Substring match, for payload text that arrives inside a larger part."""
+    return any(needle in (text or "") for text in _part_texts(requests))
 
 
 def _scripted_model():
