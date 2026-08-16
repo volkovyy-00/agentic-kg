@@ -582,9 +582,9 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     if counted is not None:
         loaded["relationships_in_graph"] = counted
 
-    # Two independent conditions can now warn about the same load, and 'warning'
-    # is a single string that construct_domain_graph lifts verbatim. Collect and
-    # join rather than assigning twice, or the second silently erases the first.
+    # Independent conditions can each warn about the same load, and 'warning' is
+    # a single string that construct_domain_graph lifts verbatim. Collect and
+    # join rather than assigning, or a later one silently erases an earlier one.
     warnings = []
     type_warning = _type_warning(totals, typed_types, source_file)
     if type_warning:
@@ -601,6 +601,22 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             f"{to_label}.{to_column}) — check whether the join columns actually match. "
             "A join column that is a per-row property collapsed during node loading "
             "will match few or no rows."
+        )
+
+    # The opposite direction, and it needs no slack. A relationship row states
+    # one instance-level fact, so more matched pairs than rows read means a
+    # join column matched a group of nodes where the row named one of them.
+    # Not an error: joining on a stored property is legitimate and this module
+    # cannot know that property's real cardinality -- but it is always worth a
+    # look. MERGE may collapse the duplicates back, hiding it in the graph.
+    if rows_committed and rows_matched > rows_committed:
+        warnings.append(
+            f"{source_file}: {relationship_type} matched {rows_matched} pairs from "
+            f"{rows_committed} rows ({from_label}.{from_column} -> "
+            f"{to_label}.{to_column}) — more pairs than rows read means at least "
+            "one join column matched more than one node instead of the one row "
+            "identifies. Check whether the join column identifies one node or a "
+            "group of them."
         )
 
     if warnings:

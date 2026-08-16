@@ -488,6 +488,62 @@ def test_import_relationships_no_warning_when_most_rows_match(monkeypatch, two_b
     assert "warning" not in result["rows_loaded"]
 
 
+def test_import_relationships_warns_when_matches_exceed_rows(monkeypatch, one_batch):
+    """A join column that is not the endpoint's key can match several nodes per
+    row. MERGE may collapse the duplicates back, so the graph can look right
+    while the join is wrong -- the count is the only evidence."""
+    db = FakeGraphDb(
+        responses=[{"status": "success", "records": [{"rows_matched": 3}]}]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["status"] == "success", "over-matching warns, it never fails"
+    assert result["rows_loaded"]["rows_matched"] == 3
+    warning = result["rows_loaded"]["warning"]
+    assert "knows.csv" in warning
+    assert "KNOWS matched 3 pairs from 1 rows" in warning
+    assert "(Person.id -> Person.name)" in warning
+    assert "each row" not in warning, (
+        "the counts prove at least one row over-matched, not that every row did"
+    )
+
+
+def test_import_relationships_does_not_warn_at_exactly_one_match_per_row(
+    monkeypatch, two_batches
+):
+    """The boundary the whole check turns on: a correct one-to-one join lands
+    here, so a '>=' instead of '>' would warn on every correctly keyed rule in
+    the project."""
+    db = FakeGraphDb(
+        responses=[
+            {"status": "success", "records": [{"rows_matched": 2}]},
+            {"status": "success", "records": [{"rows_matched": 2}]},
+        ]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows"] == 4
+    assert result["rows_loaded"]["rows_matched"] == 4
+    assert "warning" not in result["rows_loaded"]
+
+
+def test_import_relationships_sums_over_matches_across_batches(
+    monkeypatch, two_batches
+):
+    """Neither batch exceeds its own row count; only the totals do. A per-batch
+    comparison would stay silent here."""
+    db = FakeGraphDb(
+        responses=[
+            {"status": "success", "records": [{"rows_matched": 2}]},
+            {"status": "success", "records": [{"rows_matched": 5}]},
+        ]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows_matched"] == 7
+    assert "matched 7 pairs from 4 rows" in result["rows_loaded"]["warning"]
+
+
 def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     monkeypatch.setattr(
         kg,
