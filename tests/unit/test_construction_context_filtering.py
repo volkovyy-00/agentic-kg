@@ -280,6 +280,12 @@ def test_the_instruction_covers_the_no_warnings_case():
     'warnings' key, and the instruction must not read that key's absence as
     license to suppress them.
 
+    It also has to scope the warnings by which build produced them. This agent's
+    own earlier tool results stay in its context -- drop_foreign_context removes
+    other agents' turns, not its own -- and a retry after a partial failure is
+    the expected flow, so 'that tool result' alone would still license quoting
+    build #1's warnings under a build #2 that reported none.
+
     Whether the model then obeys is not unit-testable and is verified by hand;
     see the plan's Task 6.
     """
@@ -288,6 +294,7 @@ def test_the_instruction_covers_the_no_warnings_case():
     )
 
     instruction = construction_variants["graph_construction_agent_v1"]["instruction"]
-    assert "Report only warnings that appear in that tool result itself" in instruction
+    assert "the most recent 'build_graph_from_construction_rules'" in instruction
     assert "inside its error message on a partial failure" in instruction
+    assert "or an earlier build" in instruction
     assert "no warnings section" in instruction
