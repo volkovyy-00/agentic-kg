@@ -575,6 +575,50 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     assert result["warnings"] == ["only 0 of 88 rows matched both endpoints"]
 
 
+def test_construct_domain_graph_keeps_warnings_when_another_rule_fails(monkeypatch):
+    """A failure elsewhere in the plan must not swallow the warnings from the
+    rules that did load. They arrive as a list on the error result, the same
+    shape the success path uses, so the agent reads them the same way."""
+
+    def fake_import_nodes(rule):
+        if rule["label"] == "Broken":
+            return {"status": "error", "error_message": "boom"}
+        return {
+            "status": "success",
+            "rows_loaded": {"source_file": "people.csv", "rows": 3},
+        }
+
+    def fake_import_relationships(rule):
+        return {
+            "status": "success",
+            "rows_loaded": {
+                "source_file": f"{rule['relationship_type'].lower()}.csv",
+                "rows": 10,
+                "rows_matched": 40,
+                "warning": f"{rule['relationship_type']} matched 40 pairs from 10 rows",
+            },
+        }
+
+    monkeypatch.setattr(kg, "import_nodes", fake_import_nodes)
+    monkeypatch.setattr(kg, "import_relationships", fake_import_relationships)
+    plan = {
+        "Person": {"construction_type": "node", "label": "Person"},
+        "Broken": {"construction_type": "node", "label": "Broken"},
+        "KNOWS": {"construction_type": "relationship", "relationship_type": "KNOWS"},
+        "OWNS": {"construction_type": "relationship", "relationship_type": "OWNS"},
+    }
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
+    assert result["warnings"] == [
+        "KNOWS matched 40 pairs from 10 rows",
+        "OWNS matched 40 pairs from 10 rows",
+    ]
+    # The existing text path is unchanged -- step 6 of the construction agent's
+    # instruction still reads warnings out of the error message.
+    assert "warnings: KNOWS matched 40 pairs" in result["error_message"]
+    assert "failed: Broken: boom" in result["error_message"]
+
+
 # Header validation before any query is sent
 
 

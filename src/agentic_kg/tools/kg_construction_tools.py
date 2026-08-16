@@ -721,7 +721,14 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
         if warnings:
             message_parts.append("warnings: " + "; ".join(warnings))
         message_parts.append("failed: " + "; ".join(failures))
-        return tool_error("; ".join(message_parts))
+        # The same list the success branch attaches below. It is built above,
+        # before this branch splits, so a partial failure has always had these
+        # strings -- until now they survived only inside the message text, which
+        # left the two branches structurally different for no reason.
+        failed = tool_error("; ".join(message_parts))
+        if warnings:
+            failed["warnings"] = warnings
+        return failed
 
     success = tool_success("domain_graph_constructed", outcomes)
     if warnings:
