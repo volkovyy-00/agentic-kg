@@ -132,6 +132,15 @@ def _sentinel_present(requests):
     return False
 
 
+def _text_present(requests, needle):
+    for request in requests:
+        for content in request.contents or []:
+            for part in content.parts or []:
+                if needle in (getattr(part, "text", None) or ""):
+                    return True
+    return False
+
+
 def _scripted_model():
     return CapturingLlm(model="scripted", responses=[_text("nothing to do")])
 
@@ -191,6 +200,12 @@ def test_without_the_filter_the_stale_warning_does_reach_the_model(monkeypatch):
         "the fixture no longer produces foreign context, so the positive test "
         "in this file would pass for the wrong reason"
     )
+    assert _text_present(requests, "Warnings:"), (
+        "the sentinel arrived but the critic's own payload did not -- the "
+        "sentinel is only the marker that travels with the payload today, and "
+        "the payload (not the marker) is what this control is supposed to prove "
+        "reaches the model when the filter is absent"
+    )
 
 
 def test_the_stale_critic_warning_never_reaches_the_model(monkeypatch):
@@ -211,6 +226,12 @@ def test_the_stale_critic_warning_never_reaches_the_model(monkeypatch):
     requests = asyncio.run(scenario())
     assert requests, "the model was never called"
     assert not _sentinel_present(requests)
+    assert not _text_present(requests, "Warnings:"), (
+        "the sentinel was stripped but the critic's own 'Warnings:' payload "
+        "still reached the model -- the sentinel is only the marker that "
+        "travels with the payload today, and the payload is what KG-3 is "
+        "actually about"
+    )
 
 
 def test_the_critic_still_speaks_of_warnings():
@@ -242,7 +263,10 @@ def test_the_instruction_covers_the_no_warnings_case():
     said nothing about when it does not. Silence, plus a word the schema critic
     also uses, is what let a 'Construction warnings' section be assembled from
     the critic's feedback. Wiring alone cannot fix that -- the instruction has
-    to name the empty case.
+    to name the empty case, and also name the partial-failure case: the loader
+    can carry real warnings inside its error message with no top-level
+    'warnings' key, and the instruction must not read that key's absence as
+    license to suppress them.
 
     Whether the model then obeys is not unit-testable and is verified by hand;
     see the plan's Task 6.
@@ -252,5 +276,6 @@ def test_the_instruction_covers_the_no_warnings_case():
     )
 
     instruction = construction_variants["graph_construction_agent_v1"]["instruction"]
-    assert "If the result has no 'warnings' key" in instruction
+    assert "Report only warnings that appear in that tool result itself" in instruction
+    assert "inside its error message on a partial failure" in instruction
     assert "no warnings section" in instruction
