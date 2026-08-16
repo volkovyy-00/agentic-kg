@@ -1,6 +1,6 @@
 [project]
 name = "agentic_kg"
-version = "0.5.2"
+version = "0.5.3"
 description = "Multi-agent system that builds a Neo4j knowledge graph from source files, built on Google ADK"
 readme = "README.md"
 authors = [
