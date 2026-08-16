@@ -65,6 +65,10 @@ def test_loads_bom_csvs_into_the_graph(neo4j_graph, monkeypatch):
     result = kg.construct_domain_graph(PLAN)
     assert result["status"] == "success", result.get("error_message")
 
+    # A correctly keyed plan must be silent. Both SUPPLIED_BY join columns are
+    # their endpoints' unique keys, so matching is capped at one pair per row.
+    assert "warnings" not in result, result.get("warnings")
+
     # Counts come from the bundled data: products.csv has 10 data rows,
     # suppliers.csv has 20, and part_supplier_mapping.csv has 176 rows over
     # 88 distinct part_id values.
@@ -407,3 +411,75 @@ def test_typed_bom_graph_answers_numeric_questions_without_casting(
         "RETURN count(r) AS c"
     )["records"][0]["c"]
     assert preferred > 0
+
+
+# A deliberately miskeyed plan, kept separate from PLAN so the correctly-keyed
+# tests above keep their counts and their no-warnings assertion.
+OVER_MATCHING_PLAN = {
+    "Product": {
+        "construction_type": "node",
+        "source_file": "products.csv",
+        "label": "Product",
+        "unique_column_name": "product_id",
+        "properties": ["product_name"],
+    },
+    "Assembly": {
+        "construction_type": "node",
+        "source_file": "assemblies.csv",
+        "label": "Assembly",
+        "unique_column_name": "assembly_id",
+        # product_id is retained as a property, which is what makes the
+        # miskeyed join below match at all.
+        "properties": ["assembly_name", "product_id"],
+    },
+    "ASSEMBLY_OF": {
+        "construction_type": "relationship",
+        "source_file": "assemblies.csv",
+        "relationship_type": "ASSEMBLY_OF",
+        # The defect: Assembly is keyed by assembly_id, so joining it on
+        # product_id matches every assembly sharing the row's product.
+        "from_node_label": "Assembly",
+        "from_node_column": "product_id",
+        "to_node_label": "Product",
+        "to_node_column": "product_id",
+        "properties": [],
+    },
+}
+
+
+def test_over_matching_join_warns_without_changing_what_is_written(
+    neo4j_graph, monkeypatch
+):
+    """The reported defect, against the real data that produced it.
+
+    64 rows fan out to hundreds of matched pairs because product_id is not
+    Assembly's key. MERGE collapses them back to one relationship per distinct
+    endpoint pair, so the graph looks right -- the warning is the only signal.
+    """
+    import agentic_kg.tools.kg_construction_tools as kg
+
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    import agentic_kg.tools.cypher_tools as cypher_tools
+
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+
+    result = kg.construct_domain_graph(OVER_MATCHING_PLAN)
+    assert result["status"] == "success", result.get("error_message")
+
+    assert len(result["warnings"]) == 1, result["warnings"]
+    warning = result["warnings"][0]
+    assert "assemblies.csv" in warning
+    assert "ASSEMBLY_OF matched" in warning
+    assert "(Assembly.product_id -> Product.product_id)" in warning
+
+    loaded = result["domain_graph_constructed"]["ASSEMBLY_OF"]["rows_loaded"]
+    assert loaded["rows"] == 64
+    assert loaded["rows_matched"] > 64, "the fan-out is the whole point"
+
+    # The warning changes nothing about what was written: one relationship per
+    # distinct (assembly, product) pair, i.e. one per assembly.
+    rels = neo4j_graph.send_query(
+        "MATCH (:Assembly)-[r:ASSEMBLY_OF]->(:Product) RETURN count(r) AS c"
+    )
+    assert rels["records"][0]["c"] == 64
+    assert loaded["relationships_in_graph"] == 64
