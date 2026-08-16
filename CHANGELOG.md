@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **Over-matching relationship joins (#23)**: relationship loading now warns when a construction rule
+  matches more endpoint pairs than the rows it read, not only when it matches too few. A join key
+  coarser than the fact each row describes — joining on a node's stored property rather than the
+  column identifying it — previously reported a clean build; where `MERGE` collapsed the duplicates
+  back, the graph looked correct too. The warning names the relationship type and both endpoints, and
+  nothing about what a build writes has changed. Warnings raised by rules that loaded successfully now
+  also survive a partial failure as a structured list rather than only as text inside the error
+  message.
+
 ## [0.5.3] - 2026-08-16
 
 ### Fixed
