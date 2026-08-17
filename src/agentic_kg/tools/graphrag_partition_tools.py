@@ -49,7 +49,9 @@ def declare_partition_interpretation(
     'property' must name one of the properties the graph's current profile
     actually flags as numeric-partitioned, or be 'none'; anything else is
     refused, so this cannot be satisfied by naming something that was never
-    actually flagged.
+    actually flagged. 'reading' must be non-blank -- its content is not
+    otherwise judged, but an empty reading records no interpretation at all,
+    defeating the point of a durable, reviewable disclosure.
     """
     flagged = numeric_partitioned_properties(peek_cached_profile())
     normalized = property.strip()
@@ -59,6 +61,11 @@ def declare_partition_interpretation(
             "property. The properties flagged this way right now are: "
             f"{', '.join(flagged) if flagged else '(none)'}. Pass one of "
             "those, or 'none' if this query does not touch any of them."
+        )
+    if not reading.strip():
+        return tool_error(
+            "'reading' must state how the property's values are being read "
+            "-- an empty string records no interpretation at all."
         )
     tool_context.state[PARTITION_INTERPRETATION_DECLARED_KEY] = True
     return tool_success(PARTITION_INTERPRETATION_DECLARED_KEY, True)

@@ -146,6 +146,17 @@ def test_declare_with_an_unflagged_property_is_refused(flagged_quantity_profile)
     assert PARTITION_INTERPRETATION_DECLARED_KEY not in context.state
 
 
+def test_declare_with_a_blank_reading_is_refused(flagged_quantity_profile):
+    """Catches a real, flagged property paired with an empty (or
+    whitespace-only) reading -- that would set the flag and open the gate
+    while recording no interpretation at all, defeating the point of a
+    durable, reviewable disclosure."""
+    context = FakeToolContext()
+    result = declare_partition_interpretation("quantity", "   ", context)
+    assert is_error(result)
+    assert PARTITION_INTERPRETATION_DECLARED_KEY not in context.state
+
+
 def test_declare_refusal_names_the_properties_that_are_flagged(
     flagged_quantity_profile,
 ):
