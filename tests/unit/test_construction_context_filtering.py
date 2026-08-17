@@ -312,6 +312,10 @@ def test_step_six_gloss_covers_over_matching_too():
     instruction = construction_variants["graph_construction_agent_v1"]["instruction"]
     assert "far below the rows read, or above it at all" in instruction
     assert "matched far fewer rows than were read" not in instruction
+    # Same constraint the warning text itself is held to: rows_matched counts
+    # one per (row x from-match x to-match) combination, so neither the message
+    # nor the gloss steering how it is narrated may call those numbers pairs.
+    assert "pair" not in instruction.lower()
     # The asymmetry is deliberate: under-match is a half-the-rows threshold,
     # over-match has no slack at all.
     assert "far below or far above" not in instruction
