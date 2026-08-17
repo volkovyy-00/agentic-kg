@@ -9,9 +9,16 @@ unit-testable and is verified by hand (see the plan's manual verification
 task).
 """
 
+import inspect
+
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import (
     variants as variants_module,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.agent import (
+    graphrag_agent,
+    reset_graphrag_handoff_confirmation,
+    reset_partition_interpretation_declaration,
 )
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
     read_neo4j_cypher,
@@ -308,3 +315,45 @@ def test_v2_holds_the_gated_read_tool_and_the_declare_tool():
     assert declare_partition_interpretation in tools
     assert read_neo4j_cypher not in tools
     assert any(getattr(tool, "__name__", None) == "read_neo4j_cypher" for tool in tools)
+
+
+class FakeCallbackContext:
+    """A callback context carrying state only -- callbacks never touch .actions."""
+
+    def __init__(self, state=None):
+        self.state = dict(state or {})
+
+
+def test_reset_clears_a_previous_declaration():
+    """Catches a reset that only initialises a missing key -- a declaration
+    from an earlier turn would otherwise let the gate stay open on a later
+    turn that never actually declared anything."""
+    context = FakeCallbackContext({PARTITION_INTERPRETATION_DECLARED_KEY: True})
+    reset_partition_interpretation_declaration(context)
+    assert context.state[PARTITION_INTERPRETATION_DECLARED_KEY] is False
+
+
+def test_reset_is_wired_onto_the_graphrag_agent():
+    """Catches the callback being defined but never attached, which leaves
+    the flag sticky for the whole session after the first declaration."""
+    callbacks = graphrag_agent.canonical_before_agent_callbacks
+    assert reset_partition_interpretation_declaration in callbacks
+
+
+def test_reset_parameter_is_named_callback_context():
+    """Catches a rename. ADK invokes these callbacks by keyword
+    (base_agent.py:385-387), so a different parameter name fails at request
+    time with a TypeError rather than at import."""
+    parameters = list(
+        inspect.signature(reset_partition_interpretation_declaration).parameters
+    )
+    assert parameters == ["callback_context"]
+
+
+def test_both_resets_are_wired_together():
+    """Catches one reset replacing the other in the before_agent_callback
+    list instead of joining it -- the handoff-confirmation gate would
+    silently stop being reset every turn."""
+    callbacks = graphrag_agent.canonical_before_agent_callbacks
+    assert reset_graphrag_handoff_confirmation in callbacks
+    assert reset_partition_interpretation_declaration in callbacks

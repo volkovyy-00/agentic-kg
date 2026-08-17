@@ -4,6 +4,9 @@ from google.adk.agents.callback_context import CallbackContext
 from agentic_kg.common.adk_transfer import strip_transfer_to_agent
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED_KEY
+from agentic_kg.tools.graphrag_partition_tools import (
+    PARTITION_INTERPRETATION_DECLARED_KEY,
+)
 
 from .variants import variants
 
@@ -26,6 +29,19 @@ def reset_graphrag_handoff_confirmation(callback_context: CallbackContext) -> No
     TypeError, not at import.
     """
     callback_context.state[GRAPHRAG_HANDOFF_CONFIRMED_KEY] = False
+
+
+def reset_partition_interpretation_declaration(
+    callback_context: CallbackContext,
+) -> None:
+    """Clear the partition-interpretation declaration at the start of every turn.
+
+    Same lifecycle as reset_graphrag_handoff_confirmation above, and joined
+    with it in the same before_agent_callback list: a declaration made on an
+    earlier turn must not silently authorise an undeclared aggregation on a
+    later one, the same stale-flag risk that reset guards against.
+    """
+    callback_context.state[PARTITION_INTERPRETATION_DECLARED_KEY] = False
 
 
 AGENT_NAME = "graphrag_agent_v2"
@@ -72,11 +88,15 @@ graphrag_agent = Agent(
         else variants[AGENT_NAME].get("before_model_callback")
     ),
     # Conditional because only v2 is gated. Attaching unconditionally would
-    # write an inert graphrag_handoff_confirmed every turn under v1, read by
-    # nobody -- harmless, but untrue to "v1 is untouched" and avoidable in one
-    # line. Same None-default reasoning as the model callback above.
+    # write inert flags every turn under v1, read by nobody -- harmless, but
+    # untrue to "v1 is untouched" and avoidable in one line. Same None-default
+    # reasoning as the model callback above. A list, not a single callback:
+    # ADK's canonical_before_agent_callbacks accepts either, the same way
+    # canonical_before_model_callbacks already does above.
     before_agent_callback=(
-        reset_graphrag_handoff_confirmation if IS_GATED_VARIANT else None
+        [reset_graphrag_handoff_confirmation, reset_partition_interpretation_declaration]
+        if IS_GATED_VARIANT
+        else None
     ),
 )
 
