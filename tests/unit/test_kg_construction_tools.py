@@ -501,8 +501,14 @@ def test_import_relationships_warns_when_matches_exceed_rows(monkeypatch, one_ba
     assert result["rows_loaded"]["rows_matched"] == 3
     warning = result["rows_loaded"]["warning"]
     assert "knows.csv" in warning
-    assert "KNOWS matched 3 pairs from 1 rows" in warning
+    assert "KNOWS matched both endpoints 3 times from 1 rows" in warning
     assert "(Person.id -> Person.name)" in warning
+    assert "pairs" not in warning, (
+        "rows_matched counts one per (row x from-match x to-match) combination, "
+        "not distinct endpoint pairs -- 64 rows fanning out to 426 matches still "
+        "describe only 64 pairs, so calling them pairs states a number the query "
+        "cannot support"
+    )
     assert "each row" not in warning, (
         "the counts prove at least one row over-matched, not that every row did"
     )
@@ -541,7 +547,9 @@ def test_import_relationships_sums_over_matches_across_batches(
     monkeypatch.setattr(kg, "graphdb", db)
     result = kg.import_relationships(dict(REL_RULE))
     assert result["rows_loaded"]["rows_matched"] == 7
-    assert "matched 7 pairs from 4 rows" in result["rows_loaded"]["warning"]
+    assert (
+        "matched both endpoints 7 times from 4 rows" in result["rows_loaded"]["warning"]
+    )
 
 
 def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):

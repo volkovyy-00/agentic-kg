@@ -604,19 +604,26 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         )
 
     # The opposite direction, and it needs no slack. A relationship row states
-    # one instance-level fact, so more matched pairs than rows read means a
+    # one instance-level fact, so more endpoint matches than rows read means a
     # join column matched a group of nodes where the row named one of them.
     # Not an error: joining on a stored property is legitimate and this module
     # cannot know that property's real cardinality -- but it is always worth a
     # look. MERGE may collapse the duplicates back, hiding it in the graph.
+    #
+    # Counted in matches, not pairs: rows_matched is one per (row x from-match
+    # x to-match) combination, so it is not a count of distinct endpoint pairs
+    # -- the same caveat the comment above _count_in_graph makes. Saying
+    # "pairs" here would state a number the query cannot support, and would be
+    # wrong in the case this check was built from: 64 rows fanning out to 426
+    # matches still describe only 64 distinct pairs.
     if rows_committed and rows_matched > rows_committed:
         warnings.append(
-            f"{source_file}: {relationship_type} matched {rows_matched} pairs from "
-            f"{rows_committed} rows ({from_label}.{from_column} -> "
-            f"{to_label}.{to_column}) — more pairs than rows read means at least "
-            "one join column matched more than one node instead of the one row "
-            "identifies. Check whether the join column identifies one node or a "
-            "group of them."
+            f"{source_file}: {relationship_type} matched both endpoints "
+            f"{rows_matched} times from {rows_committed} rows "
+            f"({from_label}.{from_column} -> {to_label}.{to_column}) — more "
+            "matches than rows read means at least one join column matched more "
+            "than one node instead of the one the row identifies. Check whether "
+            "the join column identifies one node or a group of them."
         )
 
     if warnings:
