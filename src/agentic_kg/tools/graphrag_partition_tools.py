@@ -52,7 +52,8 @@ def declare_partition_interpretation(
     actually flagged.
     """
     flagged = numeric_partitioned_properties(peek_cached_profile())
-    if property.strip().lower() != NONE_APPLY_SENTINEL and property not in flagged:
+    normalized = property.strip()
+    if normalized.lower() != NONE_APPLY_SENTINEL and normalized not in flagged:
         return tool_error(
             f"'{property}' is not a currently numeric-flagged partitioned_by "
             "property. The properties flagged this way right now are: "

@@ -118,6 +118,21 @@ def test_declare_with_the_none_sentinel_also_records_the_flag(
     assert context.state[PARTITION_INTERPRETATION_DECLARED_KEY] is True
 
 
+def test_declare_with_incidental_whitespace_still_matches_the_flagged_property(
+    flagged_quantity_profile,
+):
+    """Catches stripping applied to the sentinel check but not reused for the
+    flagged-property membership check -- a real property name with incidental
+    leading/trailing whitespace would otherwise be refused as if it were not
+    flagged at all."""
+    context = FakeToolContext()
+    result = declare_partition_interpretation(
+        " quantity ", "treating as a total", context
+    )
+    assert is_success(result)
+    assert context.state[PARTITION_INTERPRETATION_DECLARED_KEY] is True
+
+
 def test_declare_with_an_unflagged_property_is_refused(flagged_quantity_profile):
     """Catches a rubber-stamped declaration: a property the profile does not
     currently flag would open the gate without the model ever having looked
