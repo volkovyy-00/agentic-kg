@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- **Partition-interpretation disclosure (KG-5)**: an aggregating query over a graph property whose values
+  could be a total or separate kinds now requires the retrieval agent to record which reading it is using,
+  before the query runs — a durable, reviewable fact instead of a prose instruction that had been shown to
+  fade after a few questions in one session.
+
 ## [0.5.4] - 2026-08-17
 
 ### Fixed
