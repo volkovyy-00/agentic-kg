@@ -775,3 +775,61 @@ def test_a_property_the_library_only_sampled_is_reported_as_unknown(monkeypatch)
     assert [e["property"] for e in entries] == ["sampled"]
     assert entries[0]["distribution"] == "unknown"
     assert entries[0]["values_are"] == "unknown"
+
+
+def test_numeric_partitioned_properties_collects_only_numeric_flagged_names():
+    """Catches a scan that also picks up 'categories' or 'unknown' entries --
+    the gate must trigger only for the branch this ticket is about."""
+    from agentic_kg.common.graph_profile import numeric_partitioned_properties
+
+    profile = {
+        "schema": {},
+        "profile": {
+            "patterns": [
+                {
+                    "pattern": "Part-[PART_OF]->Assembly",
+                    "partitioned_by": [
+                        {"property": "quantity", "values_are": "numbers"},
+                        {"property": "tier", "values_are": "categories"},
+                    ],
+                },
+                {
+                    "pattern": "Supplier-[SUPPLIES]->Part",
+                    "partitioned_by": "unknown",
+                },
+            ]
+        },
+    }
+    assert numeric_partitioned_properties(profile) == ["quantity"]
+
+
+def test_numeric_partitioned_properties_pools_across_patterns():
+    """Catches scanning only the first pattern -- the gate is deliberately
+    coarse and must see a flagged property anywhere in the graph, not only
+    in whichever pattern happens to be listed first."""
+    from agentic_kg.common.graph_profile import numeric_partitioned_properties
+
+    profile = {
+        "schema": {},
+        "profile": {
+            "patterns": [
+                {"pattern": "A", "partitioned_by": []},
+                {
+                    "pattern": "B",
+                    "partitioned_by": [
+                        {"property": "weight", "values_are": "numbers"}
+                    ],
+                },
+            ]
+        },
+    }
+    assert numeric_partitioned_properties(profile) == ["weight"]
+
+
+def test_numeric_partitioned_properties_is_none_safe():
+    """Catches a crash when called before any profile has been cached --
+    declare_partition_interpretation and the gate both call this with
+    peek_cached_profile()'s result, which is None on a cold session."""
+    from agentic_kg.common.graph_profile import numeric_partitioned_properties
+
+    assert numeric_partitioned_properties(None) == []

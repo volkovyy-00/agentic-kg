@@ -124,3 +124,24 @@ def test_unreadable_fingerprint_does_not_poison_the_cache(db, monkeypatch):
         "the failed call cached fingerprint=None, so the recovered call missed "
         "and rebuilt a second time"
     )
+
+
+def test_peek_returns_none_before_anything_is_cached(db):
+    """Catches peek_cached_profile forcing a build on a cold cache -- fail-open
+    for the partition gate depends on this returning None, never triggering
+    the loader, when nothing has been profiled yet this session."""
+    assert graph_profile.peek_cached_profile() is None
+
+
+def test_peek_returns_the_cached_value_without_issuing_a_query(db):
+    """Catches peek_cached_profile re-verifying freshness via a fingerprint
+    query -- it must be a pure read of in-process state, or a call the agent
+    expects to be free becomes a hidden network round trip on every read."""
+    graph_profile.get_cached_profile(_loader([]))
+    fingerprint_calls_before = db.fingerprint_calls
+    result = graph_profile.peek_cached_profile()
+    assert result == {
+        "schema": {"node_props": {}, "rel_props": {}, "relationships": []},
+        "profile": {"built": True},
+    }
+    assert db.fingerprint_calls == fingerprint_calls_before
