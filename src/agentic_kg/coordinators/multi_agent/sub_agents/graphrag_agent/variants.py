@@ -196,8 +196,14 @@ variants = {
            - 'values_are': 'categories' means the values name kinds and this
              rule binds. 'numbers' means they may be quantities rather than
              kinds -- decide from the question which they are and say what you
-             decided. 'unknown' means the graph was too large to enumerate
-             them, so assume a split may exist and check it with a query.
+             decided. Before running an aggregating query (sum, count, avg,
+             collect, min, or max) over such a property, call
+             'declare_partition_interpretation' first, naming the property and
+             your reading, or 'none' if this query does not touch one --
+             'read_neo4j_cypher' refuses an undeclared aggregation on a graph
+             that has one, and tells you which property. 'unknown' means the
+             graph was too large to enumerate them, so assume a split may
+             exist and check it with a query.
            - 'distribution': the count per kind, or 'unknown' when the values
              could not be enumerated.
            - 'distribution_covers': 'this_pattern' means those counts are exact
