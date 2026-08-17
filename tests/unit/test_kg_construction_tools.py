@@ -536,8 +536,10 @@ def test_import_relationships_does_not_warn_at_exactly_one_match_per_row(
 def test_import_relationships_sums_over_matches_across_batches(
     monkeypatch, two_batches
 ):
-    """Neither batch exceeds its own row count; only the totals do. A per-batch
-    comparison would stay silent here."""
+    """Matched counts accumulate across batches and the threshold is checked on
+    the totals: 2 + 5 matches against 2 + 2 rows, reported as one number each.
+    What this catches is a check that looked at only the last batch, or one
+    that quoted a batch's counts in the message instead of the run's."""
     db = FakeGraphDb(
         responses=[
             {"status": "success", "records": [{"rows_matched": 2}]},

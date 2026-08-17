@@ -452,9 +452,10 @@ def test_over_matching_join_warns_without_changing_what_is_written(
 ):
     """The reported defect, against the real data that produced it.
 
-    64 rows fan out to hundreds of matched pairs because product_id is not
-    Assembly's key. MERGE collapses them back to one relationship per distinct
-    endpoint pair, so the graph looks right -- the warning is the only signal.
+    64 rows fan out to hundreds of endpoint-match combinations because
+    product_id is not Assembly's key. The distinct endpoint pairs still number
+    only 64 -- which is the whole trap: MERGE writes one relationship per
+    distinct pair, so the graph looks right and the warning is the only signal.
     """
     import agentic_kg.tools.kg_construction_tools as kg
 
