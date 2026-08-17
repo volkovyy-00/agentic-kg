@@ -151,8 +151,13 @@ which is what makes the whole path work unchanged on Aura.
 - `graph_construction_agent_v1` was observed emitting a "Construction warnings" section that the
   construction tool did not produce — it re-labelled the schema critic's `feedback` text from two turns
   earlier as construction output. The same class of error §4 exists to prevent, one stage later.
-- The construction warning heuristic only catches *under*-matching. An `ASSEMBLY_OF` rule with
-  `rows: 64, rows_matched: 426` — 6.6× fan-out — passed silently.
+- The construction warning heuristic now catches over-matching as well as under-matching. The case it
+  was built from: an `ASSEMBLY_OF` rule with `rows: 64, rows_matched: 426` — 6.6× fan-out — passed
+  silently, because the only check asked whether too *few* rows had matched. `MERGE` collapsed the
+  duplicates back to 64 relationships, so the graph looked correct; a coarser join reaching distinct
+  endpoints would have written real extra edges. Over-matching warns with no slack, unlike
+  under-matching's half-the-rows threshold: a relationship row states one instance-level fact, so any
+  excess means a join column matched a group where the row named one node.
 
 ---
 

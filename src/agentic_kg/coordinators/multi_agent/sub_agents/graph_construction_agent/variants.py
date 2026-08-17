@@ -84,7 +84,7 @@ variants = {
         5. verify that the graph is reasonable by proposing a hypothetical question that reflects the user goal. try to answer it using the 'read_neo4j_cypher' tool
         6. summarize the state of the graph and your post-construction analysis to the user.
            If the 'build_graph_from_construction_rules' result includes a 'warnings' list, report every
-           warning to the user verbatim: a relationship that matched far fewer rows than were read is a
+           warning to the user verbatim: a relationship whose endpoint-match count sits far below the rows read, or above it at all, is a
            sign that its join columns do not line up, even though construction reported success.
            Report only warnings that appear in the most recent 'build_graph_from_construction_rules'
            result -- in its 'warnings' list, or inside its error message on a partial failure. If that

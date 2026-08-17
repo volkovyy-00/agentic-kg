@@ -582,9 +582,9 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     if counted is not None:
         loaded["relationships_in_graph"] = counted
 
-    # Two independent conditions can now warn about the same load, and 'warning'
-    # is a single string that construct_domain_graph lifts verbatim. Collect and
-    # join rather than assigning twice, or the second silently erases the first.
+    # Independent conditions can each warn about the same load, and 'warning' is
+    # a single string that construct_domain_graph lifts verbatim. Collect and
+    # join rather than assigning, or a later one silently erases an earlier one.
     warnings = []
     type_warning = _type_warning(totals, typed_types, source_file)
     if type_warning:
@@ -601,6 +601,29 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             f"{to_label}.{to_column}) — check whether the join columns actually match. "
             "A join column that is a per-row property collapsed during node loading "
             "will match few or no rows."
+        )
+
+    # The opposite direction, and it needs no slack. A relationship row states
+    # one instance-level fact, so more endpoint matches than rows read means a
+    # join column matched a group of nodes where the row named one of them.
+    # Not an error: joining on a stored property is legitimate and this module
+    # cannot know that property's real cardinality -- but it is always worth a
+    # look. MERGE may collapse the duplicates back, hiding it in the graph.
+    #
+    # Counted in matches, not pairs: rows_matched is one per (row x from-match
+    # x to-match) combination, so it is not a count of distinct endpoint pairs
+    # -- the same caveat the comment above _count_in_graph makes. Saying
+    # "pairs" here would state a number the query cannot support, and would be
+    # wrong in the case this check was built from: 64 rows fanning out to 426
+    # matches still describe only 64 distinct pairs.
+    if rows_committed and rows_matched > rows_committed:
+        warnings.append(
+            f"{source_file}: {relationship_type} matched both endpoints "
+            f"{rows_matched} times from {rows_committed} rows "
+            f"({from_label}.{from_column} -> {to_label}.{to_column}) — more "
+            "matches than rows read means at least one join column matched more "
+            "than one node instead of the one the row identifies. Check whether "
+            "the join column identifies one node or a group of them."
         )
 
     if warnings:
@@ -705,7 +728,14 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
         if warnings:
             message_parts.append("warnings: " + "; ".join(warnings))
         message_parts.append("failed: " + "; ".join(failures))
-        return tool_error("; ".join(message_parts))
+        # The same list the success branch attaches below. It is built above,
+        # before this branch splits, so a partial failure has always had these
+        # strings -- until now they survived only inside the message text, which
+        # left the two branches structurally different for no reason.
+        failed = tool_error("; ".join(message_parts))
+        if warnings:
+            failed["warnings"] = warnings
+        return failed
 
     success = tool_success("domain_graph_constructed", outcomes)
     if warnings:

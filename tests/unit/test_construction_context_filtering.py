@@ -298,3 +298,24 @@ def test_the_instruction_covers_the_no_warnings_case():
     assert "inside its error message on a partial failure" in instruction
     assert "or an earlier build" in instruction
     assert "no warnings section" in instruction
+
+
+def test_step_six_gloss_covers_over_matching_too():
+    """The gloss motivates reporting a warning on an otherwise successful
+    build. While it named only under-matching, a model holding an over-match
+    warning read a cause that contradicted it -- and rewriting the warning to
+    fit is exactly what the rest of step 6 forbids."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
+        variants as construction_variants,
+    )
+
+    instruction = construction_variants["graph_construction_agent_v1"]["instruction"]
+    assert "far below the rows read, or above it at all" in instruction
+    assert "matched far fewer rows than were read" not in instruction
+    # Same constraint the warning text itself is held to: rows_matched counts
+    # one per (row x from-match x to-match) combination, so neither the message
+    # nor the gloss steering how it is narrated may call those numbers pairs.
+    assert "pair" not in instruction.lower()
+    # The asymmetry is deliberate: under-match is a half-the-rows threshold,
+    # over-match has no slack at all.
+    assert "far below or far above" not in instruction

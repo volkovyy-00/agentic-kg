@@ -488,6 +488,72 @@ def test_import_relationships_no_warning_when_most_rows_match(monkeypatch, two_b
     assert "warning" not in result["rows_loaded"]
 
 
+def test_import_relationships_warns_when_matches_exceed_rows(monkeypatch, one_batch):
+    """A join column that is not the endpoint's key can match several nodes per
+    row. MERGE may collapse the duplicates back, so the graph can look right
+    while the join is wrong -- the count is the only evidence."""
+    db = FakeGraphDb(
+        responses=[{"status": "success", "records": [{"rows_matched": 3}]}]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["status"] == "success", "over-matching warns, it never fails"
+    assert result["rows_loaded"]["rows_matched"] == 3
+    warning = result["rows_loaded"]["warning"]
+    assert "knows.csv" in warning
+    assert "KNOWS matched both endpoints 3 times from 1 rows" in warning
+    assert "(Person.id -> Person.name)" in warning
+    assert "pairs" not in warning, (
+        "rows_matched counts one per (row x from-match x to-match) combination, "
+        "not distinct endpoint pairs -- 64 rows fanning out to 426 matches still "
+        "describe only 64 pairs, so calling them pairs states a number the query "
+        "cannot support"
+    )
+    assert "each row" not in warning, (
+        "the counts prove at least one row over-matched, not that every row did"
+    )
+
+
+def test_import_relationships_does_not_warn_at_exactly_one_match_per_row(
+    monkeypatch, two_batches
+):
+    """The boundary the whole check turns on: a correct one-to-one join lands
+    here, so a '>=' instead of '>' would warn on every correctly keyed rule in
+    the project."""
+    db = FakeGraphDb(
+        responses=[
+            {"status": "success", "records": [{"rows_matched": 2}]},
+            {"status": "success", "records": [{"rows_matched": 2}]},
+        ]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows"] == 4
+    assert result["rows_loaded"]["rows_matched"] == 4
+    assert "warning" not in result["rows_loaded"]
+
+
+def test_import_relationships_sums_over_matches_across_batches(
+    monkeypatch, two_batches
+):
+    """Matched counts accumulate across batches and the threshold is checked on
+    the totals: 2 + 5 matches against 2 + 2 rows, reported as one number each.
+    What this catches is a check that looked at only the last batch, or one
+    that quoted a batch's counts in the message instead of the run's."""
+    db = FakeGraphDb(
+        responses=[
+            {"status": "success", "records": [{"rows_matched": 2}]},
+            {"status": "success", "records": [{"rows_matched": 5}]},
+        ]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows_matched"] == 7
+    assert (
+        "matched both endpoints 7 times from 4 rows" in result["rows_loaded"]["warning"]
+    )
+
+
 def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     monkeypatch.setattr(
         kg,
@@ -517,6 +583,50 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
     result = kg.construct_domain_graph(plan)
     assert result["status"] == "success"
     assert result["warnings"] == ["only 0 of 88 rows matched both endpoints"]
+
+
+def test_construct_domain_graph_keeps_warnings_when_another_rule_fails(monkeypatch):
+    """A failure elsewhere in the plan must not swallow the warnings from the
+    rules that did load. They arrive as a list on the error result, the same
+    shape the success path uses, so the agent reads them the same way."""
+
+    def fake_import_nodes(rule):
+        if rule["label"] == "Broken":
+            return {"status": "error", "error_message": "boom"}
+        return {
+            "status": "success",
+            "rows_loaded": {"source_file": "people.csv", "rows": 3},
+        }
+
+    def fake_import_relationships(rule):
+        return {
+            "status": "success",
+            "rows_loaded": {
+                "source_file": f"{rule['relationship_type'].lower()}.csv",
+                "rows": 10,
+                "rows_matched": 40,
+                "warning": f"{rule['relationship_type']} matched 40 pairs from 10 rows",
+            },
+        }
+
+    monkeypatch.setattr(kg, "import_nodes", fake_import_nodes)
+    monkeypatch.setattr(kg, "import_relationships", fake_import_relationships)
+    plan = {
+        "Person": {"construction_type": "node", "label": "Person"},
+        "Broken": {"construction_type": "node", "label": "Broken"},
+        "KNOWS": {"construction_type": "relationship", "relationship_type": "KNOWS"},
+        "OWNS": {"construction_type": "relationship", "relationship_type": "OWNS"},
+    }
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "error"
+    assert result["warnings"] == [
+        "KNOWS matched 40 pairs from 10 rows",
+        "OWNS matched 40 pairs from 10 rows",
+    ]
+    # The existing text path is unchanged -- step 6 of the construction agent's
+    # instruction still reads warnings out of the error message.
+    assert "warnings: KNOWS matched 40 pairs" in result["error_message"]
+    assert "failed: Broken: boom" in result["error_message"]
 
 
 # Header validation before any query is sent
