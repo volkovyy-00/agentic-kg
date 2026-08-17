@@ -5,12 +5,17 @@ This module defines functions that return instruction prompts for the graphrag
 tool usage.
 """
 
-from typing import Any, Dict
+import re
+from typing import Any, Callable, Dict, Optional
 
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.common.graph_profile import (
+    numeric_partitioned_properties,
+    peek_cached_profile,
+)
 from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.cypher_tools import (
@@ -21,6 +26,10 @@ from agentic_kg.tools.cypher_tools import (
 from agentic_kg.tools.graphrag_handoff_tools import (
     GRAPHRAG_HANDOFF_CONFIRMED_KEY,
     confirm_graphrag_handoff,
+)
+from agentic_kg.tools.graphrag_partition_tools import (
+    PARTITION_INTERPRETATION_DECLARED_KEY,
+    declare_partition_interpretation,
 )
 
 # v1's exit, ungated and unchanged in behaviour. v1 is a controlled A/B
@@ -58,6 +67,79 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
             "same reply, confirming first."
         )
     return _transfer_to_coordinator(tool_context)
+
+
+_AGGREGATE_KEYWORD_RE = re.compile(
+    r"\b(sum|count|avg|collect|min|max)\s*\(", re.IGNORECASE
+)
+
+
+def make_gated_read_neo4j_cypher(
+    read_neo4j_cypher_impl: Callable[..., Dict[str, Any]] = read_neo4j_cypher,
+) -> Callable[..., Dict[str, Any]]:
+    """Build the v2-only gated 'read_neo4j_cypher'.
+
+    Presents to the model under that same name -- this is a wrapper, not a
+    new tool -- so the instruction text naming 'read_neo4j_cypher' by name
+    stays literally true without a rename, the same reasoning make_finished
+    already documents for itself.
+
+    read_neo4j_cypher_impl is bound as a default-argument value, evaluated
+    once at THIS function's definition time -- not referenced as a free
+    variable inside the closure below. The inner 'def read_neo4j_cypher'
+    rebinds that name in this factory's own local scope, so a free-variable
+    reference to it from inside the closure body would resolve, via Python's
+    scoping rules, to the closure itself rather than to the module-level
+    import: infinite self-recursion, not a call to the original. Binding it
+    as a default argument sidesteps that entirely.
+    """
+
+    def read_neo4j_cypher(
+        query: str,
+        tool_context: ToolContext,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Submits a read-only Cypher query to a Neo4j database.
+
+        Args:
+            query: The Cypher query string to execute.
+            tool_context: ToolContext object.
+            params: Optional parameters to pass to the query.
+
+        Returns:
+            A dictionary with "status" and, on success, "query_result" holding
+            "records", "row_count" (or "row_count_at_least"), "truncated", and
+            "values_summarised". Counts and rankings must come from a Cypher
+            aggregation, never from counting the returned records.
+
+            Refuses (status "error") if this query aggregates -- calls sum,
+            count, avg, collect, min, or max -- and the graph's current
+            profile flags at least one partitioned_by property as numeric,
+            unless 'declare_partition_interpretation' has already been called
+            this turn. Call that tool first -- naming the flagged property and
+            how you are reading it, or 'none' if this query does not touch
+            one -- then resend this same query.
+        """
+        profile = peek_cached_profile()
+        if profile is not None:
+            flagged = numeric_partitioned_properties(profile)
+            if (
+                flagged
+                and _AGGREGATE_KEYWORD_RE.search(query)
+                and not tool_context.state.get(PARTITION_INTERPRETATION_DECLARED_KEY)
+            ):
+                return tool_error(
+                    "this query aggregates data, and the graph's current "
+                    "profile flags at least one numeric partitioned_by "
+                    f"property ({', '.join(flagged)}) whose values could be "
+                    "either a total or separate kinds -- call "
+                    "'declare_partition_interpretation' first, naming the "
+                    "property and how you are reading it (or 'none' if this "
+                    "query does not touch one), then resend this same query."
+                )
+        return read_neo4j_cypher_impl(query, params)
+
+    return read_neo4j_cypher
 
 
 variants = {
@@ -176,8 +258,9 @@ variants = {
         """,
         "tools": [
             get_graph_schema_with_profile,
-            read_neo4j_cypher,
+            make_gated_read_neo4j_cypher(),
             confirm_graphrag_handoff,
+            declare_partition_interpretation,
             finished,
         ],
         "before_model_callback": drop_foreign_context,
