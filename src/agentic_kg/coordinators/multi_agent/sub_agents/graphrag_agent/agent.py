@@ -94,7 +94,10 @@ graphrag_agent = Agent(
     # ADK's canonical_before_agent_callbacks accepts either, the same way
     # canonical_before_model_callbacks already does above.
     before_agent_callback=(
-        [reset_graphrag_handoff_confirmation, reset_partition_interpretation_declaration]
+        [
+            reset_graphrag_handoff_confirmation,
+            reset_partition_interpretation_declaration,
+        ]
         if IS_GATED_VARIANT
         else None
     ),

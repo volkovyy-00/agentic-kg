@@ -816,9 +816,7 @@ def test_numeric_partitioned_properties_pools_across_patterns():
                 {"pattern": "A", "partitioned_by": []},
                 {
                     "pattern": "B",
-                    "partitioned_by": [
-                        {"property": "weight", "values_are": "numbers"}
-                    ],
+                    "partitioned_by": [{"property": "weight", "values_are": "numbers"}],
                 },
             ]
         },
