@@ -24,7 +24,7 @@ against schema.py will find that branch and wonder why it is unhandled.
 
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .neo4j_for_adk import get_graphdb
 from .tool_result import is_success
@@ -621,3 +621,36 @@ def get_cached_profile(schema_loader) -> Dict[str, Any]:
         {"write_count": write_count, "fingerprint": fingerprint, "value": value}
     )
     return value
+
+
+def peek_cached_profile() -> Optional[Dict[str, Any]]:
+    """Return the last cached {"schema": ..., "profile": ...}, or None.
+
+    Never issues a query -- a pure read of in-process state, unlike
+    get_cached_profile, which invokes its schema_loader unconditionally on a
+    miss. Does not re-verify freshness against the graph's fingerprint;
+    callers of this function (the partition-interpretation gate) never write
+    to the graph, so nothing they do can make this stale.
+    """
+    return _cache.get("value")
+
+
+def numeric_partitioned_properties(profile: Optional[Dict[str, Any]]) -> List[str]:
+    """Names of every partitioned_by property flagged 'numbers', anywhere in profile.
+
+    profile is the {"schema": ..., "profile": ...} shape peek_cached_profile()
+    and get_cached_profile() both return. None (nothing cached yet) yields an
+    empty list -- callers treat that as "nothing known to be flagged", not as
+    grounds to skip a check they would otherwise make.
+    """
+    if profile is None:
+        return []
+    names = set()
+    for pattern in profile.get("profile", {}).get("patterns", []):
+        partitioned_by = pattern.get("partitioned_by")
+        if not isinstance(partitioned_by, list):
+            continue
+        for entry in partitioned_by:
+            if entry.get("values_are") == "numbers":
+                names.add(entry["property"])
+    return sorted(names)

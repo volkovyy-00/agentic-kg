@@ -169,7 +169,7 @@ query results, and whatever else is in the conversation — and each of those ch
 different way, silently, because in every case the payload *looks* complete.
 
 The organising rule is that **anything the system does not know is spelled out as a word, never left as
-an absence**, because an omitted key reads to a model as "fine." Three mechanisms, three distinct
+an absence**, because an omitted key reads to a model as "fine." Four mechanisms, four distinct
 failure modes:
 
 **Context filtering** (`common/adk_context.py`) — ADK rewrites another agent's output into a *user-role*
@@ -206,7 +206,17 @@ This bound covers reads only. The write path (`send_query`) is knowingly unbound
 materialised, since bulk loads legitimately exceed 30s; `graphrag_agent_v2` holds no write tool and
 cannot reach it.
 
-These compose in `graphrag_agent`'s `variants.py`, which is the only place all three meet. Two details
+**Partition-interpretation disclosure** (`tools/graphrag_partition_tools.py`, via the `graphrag_agent`-local
+gated `read_neo4j_cypher`) — a numeric-flagged `partitioned_by` property leaves the categories-vs-numbers
+judgment call to the model, and prose alone was shown to fade by a session's third aggregating question. An
+aggregating query on a graph carrying such a property is refused until `declare_partition_interpretation` has
+recorded, this turn, which property and how its values are being read — validated against the profile's
+currently-flagged properties, not a rubber-stampable presence check. Coarse by design: the trigger fires on
+any aggregation while any numeric-flagged property exists anywhere in the graph, not only on queries that
+touch it, the same trade `docs/spec.md` §4 already makes elsewhere in favour of a cheap, hard-to-get-wrong
+check over an exact one. Fails open when no profile is cached yet.
+
+These compose in `graphrag_agent`'s `variants.py`, which is the only place all four meet. Two details
 that look like accidents and are not: the profiled schema payload deliberately discards the library's
 raw property lists (passing both would let the raw copy assert exactly what the profile exists to deny,
 and appear first), and the profile flag is exposed as two separate zero-argument tools rather than one
