@@ -7,8 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-17
+
 ### Added
-- **Partition-interpretation disclosure (KG-5)**: an aggregating query over a graph property whose values
+- **Partition-interpretation disclosure (#24)**: an aggregating query over a graph property whose values
   could be a total or separate kinds now requires the retrieval agent to record which reading it is using,
   before the query runs — a durable, reviewable fact instead of a prose instruction that had been shown to
   fade after a few questions in one session.
@@ -187,7 +189,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Documentation of the colima/Testcontainers `DOCKER_HOST` + Ryuk workaround needed to run integration
   tests locally (#1).
 
-[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.1...v0.5.2
