@@ -82,19 +82,18 @@ def make_gated_read_neo4j_cypher(
     Presents to the model under that same name -- this is a wrapper, not a
     new tool -- so the instruction text naming 'read_neo4j_cypher' by name
     stays literally true without a rename, the same reasoning make_finished
-    already documents for itself.
-
-    read_neo4j_cypher_impl is bound as a default-argument value, evaluated
-    once at THIS function's definition time -- not referenced as a free
-    variable inside the closure below. The inner 'def read_neo4j_cypher'
-    rebinds that name in this factory's own local scope, so a free-variable
-    reference to it from inside the closure body would resolve, via Python's
-    scoping rules, to the closure itself rather than to the module-level
-    import: infinite self-recursion, not a call to the original. Binding it
-    as a default argument sidesteps that entirely.
+    already documents for itself. The inner closure is deliberately NOT named
+    'read_neo4j_cypher' (its __name__ is set to that below, after
+    definition): naming it that would rebind 'read_neo4j_cypher' in this
+    factory's own local scope, so a free-variable reference to it from
+    inside the closure body would resolve, via Python's scoping rules, to
+    the closure itself rather than to the module-level import -- infinite
+    self-recursion. Keeping the closure's real name distinct means that
+    scoping hazard cannot occur even if a future edit reaches for the bare
+    name instead of the bound 'read_neo4j_cypher_impl' parameter.
     """
 
-    def read_neo4j_cypher(
+    def _gated_read_neo4j_cypher(
         query: str,
         tool_context: ToolContext,
         params: Optional[Dict[str, Any]] = None,
@@ -121,13 +120,13 @@ def make_gated_read_neo4j_cypher(
             one -- then resend this same query.
         """
         profile = peek_cached_profile()
-        if profile is not None:
+        if (
+            profile is not None
+            and _AGGREGATE_KEYWORD_RE.search(query)
+            and not tool_context.state.get(PARTITION_INTERPRETATION_DECLARED_KEY)
+        ):
             flagged = numeric_partitioned_properties(profile)
-            if (
-                flagged
-                and _AGGREGATE_KEYWORD_RE.search(query)
-                and not tool_context.state.get(PARTITION_INTERPRETATION_DECLARED_KEY)
-            ):
+            if flagged:
                 return tool_error(
                     "this query aggregates data, and the graph's current "
                     "profile flags at least one numeric partitioned_by "
@@ -139,7 +138,8 @@ def make_gated_read_neo4j_cypher(
                 )
         return read_neo4j_cypher_impl(query, params)
 
-    return read_neo4j_cypher
+    _gated_read_neo4j_cypher.__name__ = "read_neo4j_cypher"
+    return _gated_read_neo4j_cypher
 
 
 variants = {

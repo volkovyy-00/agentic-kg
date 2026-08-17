@@ -11,6 +11,8 @@ task).
 
 import inspect
 
+import pytest
+
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import (
     variants as variants_module,
@@ -32,7 +34,9 @@ from agentic_kg.tools.graphrag_partition_tools import (
 
 
 class FakeToolContext:
-    """A tool context carrying .state only -- neither new tool touches .actions."""
+    """A tool or callback context carrying .state only -- every tool and
+    callback under test here reads/writes .state and never touches
+    .actions, so one fake plays both roles."""
 
     def __init__(self, state=None):
         self.state = dict(state or {})
@@ -76,13 +80,21 @@ def _categories_pattern():
     }
 
 
-def test_declare_with_a_flagged_property_records_the_flag(monkeypatch):
-    """Catches a declaration that reports success without writing state,
-    which would leave the gated read tool refusing every declared turn."""
+@pytest.fixture
+def flagged_quantity_profile(monkeypatch):
+    """Patches the profile declare_partition_interpretation reads to flag a
+    numeric 'quantity' property -- shared by every declare_* test below,
+    which all need the same flagged graph and differ only in what they call
+    declare_partition_interpretation with."""
     monkeypatch.setattr(
         "agentic_kg.tools.graphrag_partition_tools.peek_cached_profile",
         lambda: _profile([_numbers_pattern("quantity")]),
     )
+
+
+def test_declare_with_a_flagged_property_records_the_flag(flagged_quantity_profile):
+    """Catches a declaration that reports success without writing state,
+    which would leave the gated read tool refusing every declared turn."""
     context = FakeToolContext()
     result = declare_partition_interpretation(
         "quantity", "treating as a total", context
@@ -91,15 +103,13 @@ def test_declare_with_a_flagged_property_records_the_flag(monkeypatch):
     assert context.state[PARTITION_INTERPRETATION_DECLARED_KEY] is True
 
 
-def test_declare_with_the_none_sentinel_also_records_the_flag(monkeypatch):
+def test_declare_with_the_none_sentinel_also_records_the_flag(
+    flagged_quantity_profile,
+):
     """Catches the 'none apply' escape hatch being rejected -- it would turn
     every false-positive trigger into a dead end instead of a one-line
     reply, since the coarse gate fires whether or not a query actually
     touches the flagged property."""
-    monkeypatch.setattr(
-        "agentic_kg.tools.graphrag_partition_tools.peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
     context = FakeToolContext()
     result = declare_partition_interpretation(
         NONE_APPLY_SENTINEL, "not touching it", context
@@ -108,15 +118,11 @@ def test_declare_with_the_none_sentinel_also_records_the_flag(monkeypatch):
     assert context.state[PARTITION_INTERPRETATION_DECLARED_KEY] is True
 
 
-def test_declare_with_an_unflagged_property_is_refused(monkeypatch):
+def test_declare_with_an_unflagged_property_is_refused(flagged_quantity_profile):
     """Catches a rubber-stamped declaration: a property the profile does not
     currently flag would open the gate without the model ever having looked
     at what is actually flagged, reopening the disclosure gap this exists
     to close."""
-    monkeypatch.setattr(
-        "agentic_kg.tools.graphrag_partition_tools.peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
     context = FakeToolContext()
     result = declare_partition_interpretation(
         "not_a_real_property", "guessing", context
@@ -125,13 +131,11 @@ def test_declare_with_an_unflagged_property_is_refused(monkeypatch):
     assert PARTITION_INTERPRETATION_DECLARED_KEY not in context.state
 
 
-def test_declare_refusal_names_the_properties_that_are_flagged(monkeypatch):
+def test_declare_refusal_names_the_properties_that_are_flagged(
+    flagged_quantity_profile,
+):
     """Catches a generic refusal message that leaves the model guessing what
     a valid argument would have been."""
-    monkeypatch.setattr(
-        "agentic_kg.tools.graphrag_partition_tools.peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
     result = declare_partition_interpretation("bogus", "guessing", FakeToolContext())
     assert "quantity" in result["error_message"]
 
@@ -144,15 +148,19 @@ def _fake_impl_recording_calls(calls):
     return impl
 
 
+def _patch_variants_profile(monkeypatch, profile):
+    """Patches the profile the gated read closure sees, via object+name --
+    not a dotted string, since sub_agents/__init__.py's re-export shadows the
+    'sub_agents.graphrag_agent' submodule path a dotted-string setattr would
+    need to walk through."""
+    monkeypatch.setattr(variants_module, "peek_cached_profile", lambda: profile)
+
+
 def test_gated_read_runs_the_query_when_no_profile_is_cached(monkeypatch):
     """Catches the gate forcing a cold profile build, or refusing outright,
     when nothing has been profiled yet this session -- fail-open is the
     whole point of using peek_cached_profile over get_cached_profile here."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: None,
-    )
+    _patch_variants_profile(monkeypatch, None)
     calls = []
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls(calls)
@@ -166,11 +174,7 @@ def test_gated_read_runs_the_query_when_nothing_is_flagged(monkeypatch):
     """Catches the gate firing on a graph where nothing is partitioned by a
     numeric property -- it must not add friction where this ticket's problem
     cannot occur."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: _profile([_categories_pattern()]),
-    )
+    _patch_variants_profile(monkeypatch, _profile([_categories_pattern()]))
     calls = []
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls(calls)
@@ -184,11 +188,7 @@ def test_gated_read_runs_a_non_aggregating_query_unconditionally(monkeypatch):
     """Catches the gate firing on a query that names a flagged property but
     never aggregates it -- e.g. a plain lookup -- which would add friction
     beyond what AC1 ('every answer aggregating...') asks for."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
+    _patch_variants_profile(monkeypatch, _profile([_numbers_pattern("quantity")]))
     calls = []
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls(calls)
@@ -204,11 +204,7 @@ def test_gated_read_refuses_an_undeclared_aggregation_over_a_flagged_graph(
     """Catches the gate being absent: an aggregating query, on a graph with a
     flagged numeric property, must be refused before a declaration is made --
     this is the core behaviour KG-5 asks for."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
+    _patch_variants_profile(monkeypatch, _profile([_numbers_pattern("quantity")]))
     calls = []
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls(calls)
@@ -222,11 +218,7 @@ def test_gated_read_refuses_an_undeclared_aggregation_over_a_flagged_graph(
 def test_gated_read_refusal_names_the_flagged_property(monkeypatch):
     """Catches a generic refusal message that leaves the model guessing which
     property it needs to declare."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
+    _patch_variants_profile(monkeypatch, _profile([_numbers_pattern("quantity")]))
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls([])
     )
@@ -238,11 +230,7 @@ def test_gated_read_detects_uppercase_aggregate_keywords(monkeypatch):
     """Catches a case-sensitive regex: Cypher's SUM/COUNT/etc. are not
     case-sensitive, and a model writing 'SUM(quantity)' must not silently
     bypass the gate."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
+    _patch_variants_profile(monkeypatch, _profile([_numbers_pattern("quantity")]))
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls([])
     )
@@ -253,11 +241,7 @@ def test_gated_read_detects_uppercase_aggregate_keywords(monkeypatch):
 def test_gated_read_runs_once_a_declaration_is_recorded(monkeypatch):
     """Catches a gate that keeps refusing even after a real declaration --
     the model would be unable to ever complete the query it was asked for."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: _profile([_numbers_pattern("quantity")]),
-    )
+    _patch_variants_profile(monkeypatch, _profile([_numbers_pattern("quantity")]))
     calls = []
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls(calls)
@@ -269,16 +253,11 @@ def test_gated_read_runs_once_a_declaration_is_recorded(monkeypatch):
 
 
 def test_gated_wrapper_calls_the_injected_implementation_exactly_once(monkeypatch):
-    """Regression test for the closure-shadowing trap: if the inner closure
-    ever called the bare name 'read_neo4j_cypher' instead of the bound
-    default argument 'read_neo4j_cypher_impl', it would recurse into itself
-    instead of the injected fake, and this test would hang or raise
-    RecursionError instead of passing."""
-    monkeypatch.setattr(
-        variants_module,
-        "peek_cached_profile",
-        lambda: None,
-    )
+    """Catches the wrapper calling something other than the injected
+    'read_neo4j_cypher_impl' -- e.g. the module-level unwrapped tool, which
+    would silently bypass whatever fake or gated implementation a caller
+    injected."""
+    _patch_variants_profile(monkeypatch, None)
     calls = []
     gated = variants_module.make_gated_read_neo4j_cypher(
         read_neo4j_cypher_impl=_fake_impl_recording_calls(calls)
@@ -317,18 +296,11 @@ def test_v2_holds_the_gated_read_tool_and_the_declare_tool():
     assert any(getattr(tool, "__name__", None) == "read_neo4j_cypher" for tool in tools)
 
 
-class FakeCallbackContext:
-    """A callback context carrying state only -- callbacks never touch .actions."""
-
-    def __init__(self, state=None):
-        self.state = dict(state or {})
-
-
 def test_reset_clears_a_previous_declaration():
     """Catches a reset that only initialises a missing key -- a declaration
     from an earlier turn would otherwise let the gate stay open on a later
     turn that never actually declared anything."""
-    context = FakeCallbackContext({PARTITION_INTERPRETATION_DECLARED_KEY: True})
+    context = FakeToolContext({PARTITION_INTERPRETATION_DECLARED_KEY: True})
     reset_partition_interpretation_declaration(context)
     assert context.state[PARTITION_INTERPRETATION_DECLARED_KEY] is False
 
