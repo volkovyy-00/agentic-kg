@@ -27,6 +27,8 @@ that mirrors the deeplearning.ai course structure it was forked from.
 - CI runs unit tests (`pytest -q`), Ruff (`ruff check` / `ruff format --check`), pyright, and a SonarCloud
   analysis on every push and PR against `main`, but none of them is a required check yet. Integration tests
   need Docker and still aren't run in CI — run those yourself before opening a PR (see below).
+- Dependabot (`.github/dependabot.yml`) opens its own weekly PRs for `uv`-managed Python dependencies and
+  for pinned GitHub Actions versions — review and merge those like any other PR; they aren't automatic.
 
 ## Commits and PR descriptions
 
