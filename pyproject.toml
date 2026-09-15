@@ -35,6 +35,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ipykernel>=6.30.1",
+    "pyright>=1.1.414",
     "pytest>=8.2.0",
     "ruff>=0.16.2",
     "testcontainers>=4.7.2",
@@ -59,6 +60,15 @@ line-length = 88
 # code changes rather than a mechanical fix. `select` (not `extend-select`) replaces that
 # broader default outright, keeping this first pass to auto-fixable style/import issues only.
 select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.12"
+# Basic (not the default "standard") mode: the codebase has no prior type coverage, so
+# starting at the stricter default would surface a large volume of unannotated-code noise
+# on day one rather than the real bugs (wrong argument type, unchecked Optional, etc.)
+# this ticket is after. Tighten once the baseline is under control.
+typeCheckingMode = "basic"
 
 [tool.ruff.lint.per-file-ignores]
 # Deliberate late imports: env validation / a module-level DB singleton must run
