@@ -24,9 +24,9 @@ that mirrors the deeplearning.ai course structure it was forked from.
 - PRs are merged with a real merge commit (`gh pr merge --merge`), not squashed or rebased — every
   commit on the branch lands in `main`'s history as-is, so write meaningful individual commit messages,
   not just a summary-worthy PR title.
-- CI runs Ruff (`ruff check` / `ruff format --check`), pyright, and a SonarCloud analysis on every push and
-  PR against `main`, but none of them is a required check yet and pytest still isn't run in CI — run the
-  test suite yourself before opening a PR (see below).
+- CI runs unit tests (`pytest -q`), Ruff (`ruff check` / `ruff format --check`), pyright, and a SonarCloud
+  analysis on every push and PR against `main`, but none of them is a required check yet. Integration tests
+  need Docker and still aren't run in CI — run those yourself before opening a PR (see below).
 
 ## Commits and PR descriptions
 
@@ -37,7 +37,7 @@ messages do. Avoid narrating file-by-file changes; that's what `git diff --stat`
 ## Testing
 
 ```bash
-uv run pytest -q                 # unit tests — fast, no external deps, run before every PR
+uv run pytest -q                 # unit tests — fast, no external deps; also runs in CI on every push/PR
 uv run pytest -q -m integration  # integration tests — need Docker (Testcontainers); skip cleanly without it
 uv run ruff check .               # lint — run before every PR
 uv run ruff format --check .      # formatting check — run before every PR; drop --check to fix locally
