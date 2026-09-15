@@ -22,7 +22,10 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
-from google.adk.flows.llm_flows.agent_transfer import _build_transfer_instructions
+from google.adk.flows.llm_flows.agent_transfer import (
+    _build_transfer_instructions,
+    _get_transfer_targets,
+)
 from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
@@ -41,21 +44,39 @@ def keep_me(query: str) -> str:
     return query
 
 
-def _transfer_instruction(*, parent=_PARENT, description="proposes a schema"):
-    """ADK's real transfer block for one peer, optionally with a parent.
+def _transfer_setup(*, transfer_to_parent=True, description="proposes a schema"):
+    """ADK's real transfer block, and the transfer tool's agent names, for a
+    gated agent under _PARENT with one peer.
 
-    SimpleNamespace stands in for agents: the builder reads only `.name`,
-    `.description`, `.parent_agent` and `.disallow_transfer_to_parent`.
+    Both come from one target list, derived by ADK's own _get_transfer_targets
+    exactly as its request processor derives them. Hand-built lists let the
+    instruction text and the tool's agent_name enum drift apart -- a no-parent
+    instruction beside an enum still offering the parent -- which no real
+    request can contain.
+
+    transfer_to_parent=False sets disallow_transfer_to_parent, the realistic
+    way to get a block with no parent paragraph: without a parent at all ADK
+    finds no peers either, and injects no block or tool. SimpleNamespace stands
+    in for agents; ADK reads only the attributes set here.
     """
-    agent = SimpleNamespace(
-        name="graph_construction_agent_v1",
-        parent_agent=SimpleNamespace(name=parent) if parent else None,
-        disallow_transfer_to_parent=False,
-    )
     peer = SimpleNamespace(
         name="schema_proposal_agent_coordinator", description=description
     )
-    return _build_transfer_instructions(TRANSFER_TOOL_NAME, agent, [peer])
+    agent = SimpleNamespace(
+        name="graph_construction_agent_v1",
+        sub_agents=[],
+        disallow_transfer_to_parent=not transfer_to_parent,
+        disallow_transfer_to_peers=False,
+    )
+    agent.parent_agent = SimpleNamespace(
+        name=_PARENT,
+        description="coordinates the construction phases",
+        sub_agents=[agent, peer],
+        disallow_transfer_to_parent=False,
+    )
+    targets = _get_transfer_targets(agent)
+    instruction = _build_transfer_instructions(TRANSFER_TOOL_NAME, agent, targets)
+    return instruction, [target.name for target in targets]
 
 
 def _declaration_names(request):
@@ -74,7 +95,7 @@ def _drift_warnings(caplog):
     ]
 
 
-async def _request_as_adk_builds_it(**instruction_kwargs):
+async def _request_as_adk_builds_it(**setup_kwargs):
     """Mirrors the real assembly order: the agent's own tools and instruction
     first, then agent_transfer's block last (AutoFlow appends its processor
     after every SingleFlow processor)."""
@@ -83,10 +104,11 @@ async def _request_as_adk_builds_it(**instruction_kwargs):
     await FunctionTool(func=keep_me).process_llm_request(
         tool_context=None, llm_request=request
     )
-    request.append_instructions([_transfer_instruction(**instruction_kwargs)])
-    await TransferToAgentTool(
-        agent_names=["schema_proposal_agent_coordinator", _PARENT]
-    ).process_llm_request(tool_context=None, llm_request=request)
+    instruction, agent_names = _transfer_setup(**setup_kwargs)
+    request.append_instructions([instruction])
+    await TransferToAgentTool(agent_names=agent_names).process_llm_request(
+        tool_context=None, llm_request=request
+    )
     return request
 
 
@@ -131,7 +153,7 @@ def test_real_adk_wording_is_stripped_without_any_drift_warning(caplog):
     themselves, against ADK's own builder, turns a wording change into a
     failing test instead of a log line nobody reads."""
     caplog.set_level(logging.WARNING)
-    for kwargs in ({}, {"parent": None}):
+    for kwargs in ({}, {"transfer_to_parent": False}):
         request = asyncio.run(_request_as_adk_builds_it(**kwargs))
         request.append_instructions(["Some later tool's own instructions."])
         strip_transfer_to_agent(None, request)
@@ -161,7 +183,8 @@ def test_a_reworded_note_paragraph_is_reported(caplog):
     left behind rather than failing a bound. It still quotes the tool name,
     which is what the final check warns on."""
     caplog.set_level(logging.WARNING)
-    reworded = _transfer_instruction().replace(
+    reworded, _ = _transfer_setup()
+    reworded = reworded.replace(
         "**NOTE**: the only available agents", "**NOTE**: agents available"
     )
     result = _without_transfer_block(reworded)
