@@ -81,14 +81,16 @@ uv run adk web src/agentic_kg/coordinators/     # http://localhost:8000, add --p
 uv run pytest -q
 uv run pytest tests/unit/test_pydantic_neo4j.py -v   # single file
 uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # single test
+uv run pytest --cov --cov-report=term-missing   # with coverage (CI sends coverage.xml to SonarCloud)
 
 # Integration tests (require Docker; spins up Neo4j via Testcontainers; ~4 min, function-scoped containers)
 uv run pytest -q -m integration
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
-- Pinned to `google-adk>=1.10,<2` (`pyproject.toml`) — ADK 2.x is a breaking rewrite; check which major
-  version any ADK doc, sample, or blog post is describing before trusting it against this code.
+- Pinned to `google-adk>=1.28.1,<2` (`pyproject.toml`; the floor is the CVE-2026-4810 fix) — ADK 2.x is a
+  breaking rewrite; check which major version any ADK doc, sample, or blog post is describing before trusting
+  it against this code.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
 - `tests/integration/conftest.py` has two fixtures: `neo4j_graph` (plain container) and `neo4j_graph_with_apoc`.

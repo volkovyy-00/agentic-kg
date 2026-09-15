@@ -11,7 +11,8 @@ dependencies = [
     "aiohttp>=3.9",
     "clevercsv[full]>=0.8.3",
     "fsspec>=2024.9,<2025.0.0",
-    "google-adk>=1.10,<2",
+    # >=1.28.1: CVE-2026-4810 (unauthenticated RCE in the ADK web server) is fixed there.
+    "google-adk>=1.28.1,<2",
     # >=1.82.3 required for GPT-5 / reasoning-model streaming: it maps `reasoning`
     # -> `reasoning_content` in the streaming Delta and requires openai>=2.8.0,
     # which understands GPT-5's reasoning stream events (old openai 1.54 parsed
@@ -37,6 +38,7 @@ dev = [
     "ipykernel>=6.30.1",
     "pyright>=1.1.414",
     "pytest>=8.2.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.16.2",
     "testcontainers>=4.7.2",
 ]
@@ -48,6 +50,12 @@ testpaths = ["tests"]
 markers = [
     "integration: mark tests that require external services such as Docker/Neo4j",
 ]
+
+# Coverage for `pytest --cov`. relative_files keeps coverage.xml paths relative to the repo
+# root, which SonarCloud needs to match them against its checkout in GitHub Actions.
+[tool.coverage.run]
+source = ["src/agentic_kg"]
+relative_files = true
 
 [tool.ruff]
 target-version = "py312"

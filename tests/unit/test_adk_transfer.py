@@ -1,23 +1,17 @@
 """Unit tests for the callback that removes ADK's injected transfer tool.
 
-Builds real LlmRequest objects with the real transfer tool rather than fakes,
-because the whole point of this callback is coupling to the shape ADK
-produces -- a fake shaped the way we assume would hide exactly the drift the
-tests exist to catch.
+Builds real LlmRequest objects with the real transfer tool and ADK's own
+transfer-instruction builder rather than fakes or copied text, because the
+whole point of this callback is coupling to the shape ADK produces -- a fixture
+shaped the way we assume would hide exactly the drift the tests exist to catch.
+An earlier version pinned a hand-copied instruction string; ADK 1.28 reworded
+the real block, the strip fell back to its drift path, and every test here kept
+passing against the stale copy.
 
-Fixtures assemble requests via BaseTool.process_llm_request (base_tool.py:89-
-125), the literal same call agent_transfer.py makes to inject the transfer
-tool -- NOT via LlmRequest.append_tools, which has no lazy-init guard for
-config.tools and raises AttributeError against a bare LlmRequest() under the
-pinned google-adk 1.10.0. process_llm_request also does more than lazy-init:
-it calls _find_tool_with_function_declarations and, if a Tool with
-declarations already exists, merges the new declaration into that same shared
-object instead of creating a new one. So a real production request carries
-ONE merged Tool holding every declaration, whereas append_tools would create a
-fresh Tool per call. strip_transfer_to_agent is correct under either shape (it
-filters per-declaration), but only the merged shape is what ADK actually
-produces, and these tests exist specifically to couple to the shape ADK
-produces.
+Fixtures assemble requests the way agent_transfer's request processor does:
+append the text from `_build_transfer_instructions`, then call the transfer
+tool's `process_llm_request`, so the request carries whatever tool and
+declaration shape ADK itself produces.
 
 Fixture helpers are async (process_llm_request is a coroutine) and are driven
 with asyncio.run(...) from inside otherwise-synchronous test functions, this
@@ -25,15 +19,24 @@ repo's established pattern for calling async ADK APIs from sync tests.
 """
 
 import asyncio
+import logging
+from types import SimpleNamespace
 
+from google.adk.flows.llm_flows.agent_transfer import (
+    _build_transfer_instructions,
+    _get_transfer_targets,
+)
 from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.function_tool import FunctionTool
-from google.adk.tools.transfer_to_agent_tool import transfer_to_agent
+from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
 
 from agentic_kg.common.adk_transfer import (
     TRANSFER_TOOL_NAME,
+    _without_transfer_block,
     strip_transfer_to_agent,
 )
+
+_PARENT = "kg_construction_agent_v1"
 
 
 def keep_me(query: str) -> str:
@@ -41,32 +44,39 @@ def keep_me(query: str) -> str:
     return query
 
 
-# The real block ADK appends, with the parent's name interpolated -- there is
-# no fixed literal to match against, which is why the strip is prefix-based.
-# Verbatim output of agent_transfer._build_target_agents_instructions for one
-# transfer target and a parent (confirmed by calling it directly against a
-# fake agent tree) -- the brief's original abbreviated version dropped the
-# middle "If another agent is better..." paragraph, the only place the literal
-# tool name `transfer_to_agent` appears in the instruction text, and the only
-# source of the "the function call." ending in _TRANSFER_INSTRUCTION_ENDINGS.
-_TRANSFER_INSTRUCTION = """
-You have a list of other agents to transfer to:
+def _transfer_setup(*, transfer_to_parent=True, description="proposes a schema"):
+    """ADK's real transfer block, and the transfer tool's agent names, for a
+    gated agent under _PARENT with one peer.
 
-Agent name: schema_proposal_agent_coordinator
-Agent description: proposes a schema
+    Both come from one target list, derived by ADK's own _get_transfer_targets
+    exactly as its request processor derives them. Hand-built lists let the
+    instruction text and the tool's agent_name enum drift apart -- a no-parent
+    instruction beside an enum still offering the parent -- which no real
+    request can contain.
 
-If you are the best to answer the question according to your description, you
-can answer it.
-
-If another agent is better for answering the question according to its
-description, call `transfer_to_agent` function to transfer the
-question to that agent. When transferring, do not generate any text other than
-the function call.
-
-Your parent agent is kg_construction_agent_v1. If neither the other agents nor
-you are best for answering the question according to the descriptions, transfer
-to your parent agent.
-"""
+    transfer_to_parent=False sets disallow_transfer_to_parent, the realistic
+    way to get a block with no parent paragraph: without a parent at all ADK
+    finds no peers either, and injects no block or tool. SimpleNamespace stands
+    in for agents; ADK reads only the attributes set here.
+    """
+    peer = SimpleNamespace(
+        name="schema_proposal_agent_coordinator", description=description
+    )
+    agent = SimpleNamespace(
+        name="graph_construction_agent_v1",
+        sub_agents=[],
+        disallow_transfer_to_parent=not transfer_to_parent,
+        disallow_transfer_to_peers=False,
+    )
+    agent.parent_agent = SimpleNamespace(
+        name=_PARENT,
+        description="coordinates the construction phases",
+        sub_agents=[agent, peer],
+        disallow_transfer_to_parent=False,
+    )
+    targets = _get_transfer_targets(agent)
+    instruction = _build_transfer_instructions(TRANSFER_TOOL_NAME, agent, targets)
+    return instruction, [target.name for target in targets]
 
 
 def _declaration_names(request):
@@ -77,17 +87,26 @@ def _declaration_names(request):
     return names
 
 
-async def _request_as_adk_builds_it():
+def _drift_warnings(caplog):
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "agentic_kg.common.adk_transfer" and r.levelno >= logging.WARNING
+    ]
+
+
+async def _request_as_adk_builds_it(**setup_kwargs):
     """Mirrors the real assembly order: the agent's own tools and instruction
-    first, then agent_transfer's block last (auto_flow.py:44 appends its
-    processor after every SingleFlow processor)."""
+    first, then agent_transfer's block last (AutoFlow appends its processor
+    after every SingleFlow processor)."""
     request = LlmRequest()
     request.append_instructions(["You are an expert at knowledge graph construction."])
     await FunctionTool(func=keep_me).process_llm_request(
         tool_context=None, llm_request=request
     )
-    request.append_instructions([_TRANSFER_INSTRUCTION])
-    await FunctionTool(func=transfer_to_agent).process_llm_request(
+    instruction, agent_names = _transfer_setup(**setup_kwargs)
+    request.append_instructions([instruction])
+    await TransferToAgentTool(agent_names=agent_names).process_llm_request(
         tool_context=None, llm_request=request
     )
     return request
@@ -124,6 +143,53 @@ def test_strip_removes_the_instruction_advertising_it():
     strip_transfer_to_agent(None, request)
     assert TRANSFER_TOOL_NAME not in request.config.system_instruction
     assert "other agents to transfer to" not in request.config.system_instruction
+    assert "**NOTE**" not in request.config.system_instruction
+
+
+def test_real_adk_wording_is_stripped_without_any_drift_warning(caplog):
+    """The alarm that used to be log-only. Every strip path below falls back
+    silently-but-for-a-warning when ADK rewords the block, and the end result
+    can still look right (the block is last today). Asserting on the warnings
+    themselves, against ADK's own builder, turns a wording change into a
+    failing test instead of a log line nobody reads."""
+    caplog.set_level(logging.WARNING)
+    for kwargs in ({}, {"transfer_to_parent": False}):
+        request = asyncio.run(_request_as_adk_builds_it(**kwargs))
+        request.append_instructions(["Some later tool's own instructions."])
+        strip_transfer_to_agent(None, request)
+        assert request.config.system_instruction == (
+            "You are an expert at knowledge graph construction.\n\n"
+            "Some later tool's own instructions."
+        ), kwargs
+    assert _drift_warnings(caplog) == []
+
+
+def test_drift_is_still_reported(caplog):
+    """Negative control for the test above: an opening line with no
+    recognisable closing line must still warn, or an empty warning list would
+    prove nothing."""
+    caplog.set_level(logging.WARNING)
+    reworded = (
+        "Own instruction.\n\n"
+        "You have a list of other agents to transfer to:\n\n"
+        "Use `transfer_to_agent` when you are done."
+    )
+    assert _without_transfer_block(reworded) == "Own instruction."
+    assert any("wording may have changed" in m for m in _drift_warnings(caplog))
+
+
+def test_a_reworded_note_paragraph_is_reported(caplog):
+    """The trailing paragraphs are optional to the matcher, so a reworded one is
+    left behind rather than failing a bound. It still quotes the tool name,
+    which is what the final check warns on."""
+    caplog.set_level(logging.WARNING)
+    reworded, _ = _transfer_setup()
+    reworded = reworded.replace(
+        "**NOTE**: the only available agents", "**NOTE**: agents available"
+    )
+    result = _without_transfer_block(reworded)
+    assert "**NOTE**: agents available" in result
+    assert any("still quoted" in m for m in _drift_warnings(caplog))
 
 
 def test_strip_leaves_the_agents_own_tool_and_instruction_alone():
@@ -140,13 +206,11 @@ def test_strip_keeps_instructions_that_land_after_the_block():
     """Catches a removal that truncates to the end of the string instead of
     bounding itself to the block.
 
-    The block is last today only because no tool on either gated agent appends
-    to system_instruction. _preprocess_async (base_llm_flow.py:374-405) runs
-    the request processors first -- agent_transfer last among them -- and THEN
-    each tool's process_llm_request in a separate loop, so a toolset added
-    later could legitimately append after it. An unbounded strip would delete
-    that silently: no error, no warning, and the prefix-not-found fallback
-    would not fire because the prefix matched fine.
+    The block is last today only because no tool on any gated agent appends to
+    system_instruction. _preprocess_async runs the request processors first --
+    agent_transfer last among them -- and THEN each tool's process_llm_request
+    in a separate loop, so a toolset added later could legitimately append
+    after it. An unbounded strip would delete that silently.
     """
     request = asyncio.run(_request_as_adk_builds_it())
     request.append_instructions(["Some later tool's own instructions."])
@@ -162,9 +226,9 @@ def test_strip_keeps_instructions_that_land_after_the_block():
 def test_strip_keeps_a_later_instruction_containing_the_base_ending_marker():
     """The sharper version of the test above.
 
-    That one's trailing text contains neither ending marker, so it passes
-    against a removal bounded with rfind -- which takes the LAST occurrence of
-    a marker anywhere after the block rather than the first, and so deletes
+    That one's trailing text contains no marker, so it passes against a
+    removal bounded with a backward search -- which takes the LAST occurrence
+    of a marker anywhere after the block rather than the first, and so deletes
     everything from the block's opening line through a later, unrelated
     sentence. "the function call." is ordinary enough English for a future
     toolset to write, and the deletion is silent: no error, no warning.
@@ -182,35 +246,37 @@ def test_strip_keeps_a_later_instruction_containing_the_base_ending_marker():
     assert "expert at knowledge graph construction" in request.config.system_instruction
 
 
-def test_strip_keeps_a_later_instruction_containing_the_parent_ending_marker():
-    """Same trap, the other marker. "to your parent agent." only ends the block
-    when it terminates ADK's parent addendum (agent_transfer.py:101-106), which
-    opens with "Your parent agent is" and follows the base ending immediately.
-    A later sentence that merely happens to end the same way must not extend
-    the removal to reach it."""
+def test_strip_keeps_a_later_instruction_containing_the_parent_marker():
+    """Same trap, the parent paragraph. It only extends the removal when it
+    immediately follows the block and opens with ADK's own words. A later
+    sentence that merely talks about the parent agent must not be swallowed."""
     request = asyncio.run(_request_as_adk_builds_it())
     request.append_instructions(
-        ["Later toolset: hand control back to your parent agent."]
+        ["Later toolset: when stuck, transfer to your parent agent."]
     )
 
     strip_transfer_to_agent(None, request)
 
     assert TRANSFER_TOOL_NAME not in request.config.system_instruction
     assert "other agents to transfer to" not in request.config.system_instruction
-    assert "Later toolset: hand control back" in request.config.system_instruction
+    assert (
+        "Later toolset: when stuck, transfer to your parent agent."
+        in request.config.system_instruction
+    )
     assert "expert at knowledge graph construction" in request.config.system_instruction
 
 
-def test_strip_still_removes_the_parent_addendum_it_is_meant_to():
-    """The negative control for the two tests above: a bound narrowed until it
-    stops at the base ending would pass both of them while leaving ADK's real
-    parent paragraph -- 'transfer to your parent agent' -- in the instruction.
-    """
+def test_strip_still_removes_the_parent_paragraph_it_is_meant_to():
+    """The negative control for the test above: a bound narrowed until it stops
+    at the body's ending would pass that test while leaving ADK's real parent
+    paragraph in the instruction."""
     request = asyncio.run(_request_as_adk_builds_it())
+    assert _PARENT in request.config.system_instruction  # negative control
+
     strip_transfer_to_agent(None, request)
 
-    assert "Your parent agent is" not in request.config.system_instruction
-    assert "to your parent agent." not in request.config.system_instruction
+    assert "transfer to your parent agent" not in request.config.system_instruction
+    assert _PARENT not in request.config.system_instruction
 
 
 async def _request_with_no_transfer_tool():
@@ -237,67 +303,30 @@ def test_strip_is_a_no_op_when_the_tool_was_never_injected():
 
 def test_the_parameter_names_are_the_ones_adk_passes():
     """ADK invokes before_model_callback purely by keyword
-    (base_llm_flow.py:661), so a rename fails at request time with a
-    TypeError rather than at import. Same guard adk_context.py carries."""
+    (_handle_before_model_callback in base_llm_flow.py), so a rename fails at
+    request time with a TypeError rather than at import. Same guard
+    adk_context.py carries."""
     import inspect
 
     parameters = list(inspect.signature(strip_transfer_to_agent).parameters)
     assert parameters == ["callback_context", "llm_request"]
 
 
-# The block ADK builds when a PEER's description happens to end with the same
-# words as the block's own closing line. Everything between the opening line
-# and "If you are the best to answer..." is interpolated from each target's
-# `description=` (agent_transfer.py:88-90), so a description is free to contain
-# any prose at all -- including this one.
-_TRANSFER_INSTRUCTION_WITH_TRAPPED_DESCRIPTION = """
-You have a list of other agents to transfer to:
-
-Agent name: cypher_format_agent
-Agent description: Formats the function call.
-
-If you are the best to answer the question according to your description, you
-can answer it.
-
-If another agent is better for answering the question according to its
-description, call `transfer_to_agent` function to transfer the
-question to that agent. When transferring, do not generate any text other than
-the function call.
-
-Your parent agent is kg_construction_agent_v1. If neither the other agents nor
-you are best for answering the question according to the descriptions, transfer
-to your parent agent.
-"""
-
-
-async def _request_whose_peer_description_shadows_the_end_marker():
-    request = LlmRequest()
-    request.append_instructions(["You are an expert at knowledge graph construction."])
-    await FunctionTool(func=keep_me).process_llm_request(
-        tool_context=None, llm_request=request
-    )
-    request.append_instructions([_TRANSFER_INSTRUCTION_WITH_TRAPPED_DESCRIPTION])
-    await FunctionTool(func=transfer_to_agent).process_llm_request(
-        tool_context=None, llm_request=request
-    )
-    return request
-
-
 def test_a_peer_description_cannot_shadow_the_blocks_end_marker():
     """A peer whose description ends "...the function call." sits BEFORE the
     block's own closing line, because ADK interpolates every target's
-    description into the block (agent_transfer.py:88-90) ahead of the fixed
-    text. Searching the end marker from the block's start would match the
-    description first and stop the removal mid-block -- leaving the whole
-    `transfer_to_agent` advertisement in the instruction, with neither drift
-    warning firing because both markers were technically found.
+    description into the block ahead of the fixed text. Searching the end
+    marker from the block's start would match the description first and stop
+    the removal mid-block -- leaving the whole `transfer_to_agent`
+    advertisement in the instruction.
 
     Anchoring the search at the block's first fixed sentence skips every
-    description. This is a regression test: revert
-    `instruction.find(_TRANSFER_INSTRUCTION_ENDING, body)` to search from
-    `start` and it fails.
+    description. This is a regression test: search the ending from the prefix
+    instead of the body anchor and it fails.
     """
-    request = asyncio.run(_request_whose_peer_description_shadows_the_end_marker())
+    request = asyncio.run(
+        _request_as_adk_builds_it(description="Formats the function call.")
+    )
     assert TRANSFER_TOOL_NAME in request.config.system_instruction  # negative control
 
     strip_transfer_to_agent(None, request)
@@ -305,7 +334,7 @@ def test_a_peer_description_cannot_shadow_the_blocks_end_marker():
     instruction = request.config.system_instruction
     assert TRANSFER_TOOL_NAME not in instruction
     assert "You have a list of other agents to transfer to:" not in instruction
-    assert "cypher_format_agent" not in instruction
-    assert "to your parent agent." not in instruction
+    assert "schema_proposal_agent_coordinator" not in instruction
+    assert "transfer to your parent agent" not in instruction
     # ...and the agent's own instruction is still there.
-    assert "You are an expert at knowledge graph construction." in instruction
+    assert instruction == "You are an expert at knowledge graph construction."

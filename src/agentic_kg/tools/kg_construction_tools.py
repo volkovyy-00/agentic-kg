@@ -298,10 +298,12 @@ def load_nodes_from_csv(
     label: str,
     unique_column_name: str,
     properties: List[str],
-    # Optional[...] rather than Dict[...] = None, the shape ADK's
-    # FunctionDeclaration builder rejects (isinstance(None, dict) is False).
-    # Not model-visible today -- only build_graph_from_construction_rules is
-    # wired as a tool -- but wiring this one later should not be a trap.
+    # Optional[...] rather than Dict[...] = None: google-adk 1.10 rejected
+    # that shape when building a FunctionDeclaration (isinstance(None, dict)
+    # is False). 1.28.1 accepts it, but Optional is the honest type and stays
+    # safe if a later 1.x restores the check. Not model-visible today -- only
+    # build_graph_from_construction_rules is wired as a tool -- but wiring
+    # this one later should not be a trap.
     property_types: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Load nodes from a source CSV in batches."""
