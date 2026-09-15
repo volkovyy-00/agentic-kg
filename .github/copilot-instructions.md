@@ -89,7 +89,7 @@ Always reference these instructions first and fallback to search or bash command
 
 ### Dependencies
 Key dependencies from pyproject.toml:
-- `google-adk>=1.10.0` - Google Agent Development Kit (core framework)
+- `google-adk>=1.28.1,<2` - Google Agent Development Kit (core framework); 1.28.1 is the CVE-2026-4810 fix, 2.x is a breaking rewrite
 - `neo4j>=5.28.2` - Neo4j database driver
 - `neo4j-graphrag>=1.9.1` - Neo4j GraphRAG capabilities
 - `litellm>=1.75.5.post1` - LLM integration layer

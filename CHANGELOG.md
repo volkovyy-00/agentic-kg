@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+- **ADK web server remote code execution (#38)**: raised Google ADK to 1.28.1, which fixes CVE-2026-4810 —
+  an unauthenticated attacker who could reach the ADK web server could run code on the host. The agents'
+  handoff gates and context filtering were adapted to ADK 1.28.1's reworded transfer instructions, and
+  now fail tests instead of only logging a warning if a future ADK release rewords them again.
+
+### Changed
+- **ADK web sessions persist (#38)**: with ADK 1.28.1, `adk web` stores each agent's sessions on disk
+  instead of in memory, so conversations survive a server restart.
+
 ## [0.6.0] - 2026-08-17
 
 ### Added

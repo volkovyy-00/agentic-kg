@@ -99,15 +99,19 @@ def test_both_instructions_carry_the_property_type_rules():
     "fn", [propose_node_construction, propose_relationship_construction]
 )
 def test_proposed_property_types_stays_optional_in_the_declaration(fn):
-    """Pins TRAP 6: ADK 1.10.0 validates that a parameter's default is an
-    instance of its annotation while building the FunctionDeclaration, and
-    isinstance(None, dict) is False. A regression from
-    'proposed_property_types: Optional[dict] = None' back to 'dict = None'
-    raises ValueError at toolset construction and takes down the ENTIRE
-    schema-proposal phase, not just this field -- and nothing else on this
-    branch would catch it, since that failure only happens at runtime when
-    the toolset is built. Building the declaration here reproduces that
-    construction step as a unit test."""
+    """Pins TRAP 6: proposed_property_types must stay an OPTIONAL parameter in
+    the FunctionDeclaration the model sees, or every propose call without it
+    would be rejected.
+
+    History: google-adk 1.10.0 validated that a parameter's default is an
+    instance of its annotation, so 'dict = None' raised ValueError at toolset
+    construction and took down the entire schema-proposal phase. The pinned
+    minimum, 1.28.1, no longer raises for 'dict = None' and still declares the
+    field optional, so this test no longer guards a crash. It still guards the
+    declaration contract. Keep the 'Optional[dict] = None' annotation: it is
+    the honest type, and it stays safe on any 1.x release that restores the
+    check. Building the declaration here reproduces that construction step as
+    a unit test."""
     from google.adk.tools.function_tool import FunctionTool
 
     declared = FunctionTool(fn)._get_declaration()
