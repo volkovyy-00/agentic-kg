@@ -49,7 +49,7 @@ graph_construction_agent = Agent(
     #
     # drop_foreign_context closes the matching context-side hole. The
     # coordinator's own delegating call arrives here rewritten by
-    # _convert_foreign_event (contents.py:241-245) into "For context:
+    # _present_other_agent_message (contents.py) into "For context:
     # [kg_construction_agent_v1] called tool 'transfer_to_agent' with
     # parameters: {'agent_name': 'graph_construction_agent_v1'}" -- a
     # worked example of the exact tool name and argument shape, sitting in

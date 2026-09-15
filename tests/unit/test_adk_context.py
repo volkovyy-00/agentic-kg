@@ -1,14 +1,14 @@
 # tests/unit/test_adk_context.py
 """Unit tests for the graphrag foreign-context filter.
 
-The canary test deliberately drives ADK's own _convert_foreign_event rather
+The canary test deliberately drives ADK's own _present_other_agent_message rather
 than asserting on our copy of the sentinel string: asserting our constant
-equals our constant proves nothing. google-adk is pinned >=1.10,<2, so a
+equals our constant proves nothing. google-adk is pinned >=1.28.1,<2, so a
 routine `uv sync` can change that wording; this test is what notices.
 """
 
 from google.adk.events.event import Event
-from google.adk.flows.llm_flows.contents import _convert_foreign_event
+from google.adk.flows.llm_flows.contents import _present_other_agent_message
 from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
@@ -129,12 +129,12 @@ def test_canary_adk_still_marks_foreign_events_with_our_sentinel():
         author="schema_critic_agent",
         content=_content("model", types.Part(text="4 suppliers have no quote rows")),
     )
-    converted = _convert_foreign_event(original)
+    converted = _present_other_agent_message(original)
 
     assert converted.content.parts[0].text == FOREIGN_CONTEXT_SENTINEL, (
-        "ADK's _convert_foreign_event no longer emits our sentinel as part 0. "
+        "ADK's _present_other_agent_message no longer emits our sentinel as part 0. "
         "The graphrag context filter is now a silent no-op. Check the installed "
-        "google-adk version against the >=1.10,<2 pin in pyproject.toml."
+        "google-adk version against the >=1.28.1,<2 pin in pyproject.toml."
     )
 
     # Paired with a surviving human turn: an all-foreign request is

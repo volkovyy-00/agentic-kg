@@ -11,7 +11,8 @@ dependencies = [
     "aiohttp>=3.9",
     "clevercsv[full]>=0.8.3",
     "fsspec>=2024.9,<2025.0.0",
-    "google-adk>=1.10,<2",
+    # >=1.28.1: CVE-2026-4810 (unauthenticated RCE in the ADK web server) is fixed there.
+    "google-adk>=1.28.1,<2",
     # >=1.82.3 required for GPT-5 / reasoning-model streaming: it maps `reasoning`
     # -> `reasoning_content` in the streaming Delta and requires openai>=2.8.0,
     # which understands GPT-5's reasoning stream events (old openai 1.54 parsed

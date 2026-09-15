@@ -12,6 +12,9 @@ wheels/
 .venv
 .env
 
+# ADK web's per-agent session store (google-adk >=1.28 writes .adk/session.db next to each agent)
+.adk/
+
 # IDEs
 .vscode
 .idea
