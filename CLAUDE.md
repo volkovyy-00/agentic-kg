@@ -81,6 +81,7 @@ uv run adk web src/agentic_kg/coordinators/     # http://localhost:8000, add --p
 uv run pytest -q
 uv run pytest tests/unit/test_pydantic_neo4j.py -v   # single file
 uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # single test
+uv run pytest --cov --cov-report=term-missing   # with coverage (CI sends coverage.xml to SonarCloud)
 
 # Integration tests (require Docker; spins up Neo4j via Testcontainers; ~4 min, function-scoped containers)
 uv run pytest -q -m integration

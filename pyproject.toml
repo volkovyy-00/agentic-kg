@@ -38,6 +38,7 @@ dev = [
     "ipykernel>=6.30.1",
     "pyright>=1.1.414",
     "pytest>=8.2.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.16.2",
     "testcontainers>=4.7.2",
 ]
@@ -49,6 +50,12 @@ testpaths = ["tests"]
 markers = [
     "integration: mark tests that require external services such as Docker/Neo4j",
 ]
+
+# Coverage for `pytest --cov`. relative_files keeps coverage.xml paths relative to the repo
+# root, which SonarCloud needs to match them against its checkout in GitHub Actions.
+[tool.coverage.run]
+source = ["src/agentic_kg"]
+relative_files = true
 
 [tool.ruff]
 target-version = "py312"

@@ -15,6 +15,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Without a report SonarCloud's Zero Coverage Sensor marks every line uncovered, so the
+      # "coverage on new code" gate fails any PR that touches src/. Paths in coverage.xml are
+      # repo-relative ([tool.coverage.run] relative_files in pyproject.toml).
+      - name: Run unit tests with coverage
+        run: uv run pytest --cov --cov-report=xml
+
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         env:

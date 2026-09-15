@@ -7,6 +7,9 @@ wheels/
 *.egg-info
 .ruff_cache/
 .scannerwork/
+# Coverage output (CI generates coverage.xml for SonarCloud)
+.coverage
+coverage.xml
 
 # Virtual environments
 .venv
