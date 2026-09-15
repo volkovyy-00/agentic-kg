@@ -24,7 +24,9 @@ that mirrors the deeplearning.ai course structure it was forked from.
 - PRs are merged with a real merge commit (`gh pr merge --merge`), not squashed or rebased — every
   commit on the branch lands in `main`'s history as-is, so write meaningful individual commit messages,
   not just a summary-worthy PR title.
-- No CI is currently configured — run the test suite yourself before opening a PR (see below).
+- CI runs Ruff (`ruff check` / `ruff format --check`) and a SonarCloud analysis on every push and PR against
+  `main`, but neither is a required check yet and pytest still isn't run in CI — run the test suite yourself
+  before opening a PR (see below).
 
 ## Commits and PR descriptions
 
