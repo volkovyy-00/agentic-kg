@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **ADK web sessions persist (#38)**: with ADK 1.28.1, `adk web` stores each agent's sessions on disk
   instead of in memory, so conversations survive a server restart.
 
+### Fixed
+- **Handoff and partition tools on Vertex AI (#46)**: the construction and retrieval handoff
+  confirmations and the partition-interpretation tool could not be registered when running against
+  Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI`), because their declared result type was one ADK cannot
+  describe there. The Gemini API path was never affected. The corrected type also cleared most of the
+  type checker's findings, leaving the ones that point at real problems.
+
 ## [0.6.0] - 2026-08-17
 
 ### Added

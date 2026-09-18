@@ -258,29 +258,23 @@ def test_chaining_operations():
     print("✓ Operations chain correctly with proper short-circuiting")
 
 
-def test_type_guards():
-    """Test that type guards work correctly for type checking."""
+def test_is_success_and_is_error_recognise_results():
+    """Test that is_success/is_error recognise each kind of result."""
     success_result = tool_success("result", "test")
     error_result = tool_error("test error")
 
-    # Test that type guards narrow types correctly
-    if is_success(success_result):
-        # In a real type checker, success_result would be typed as ResultSuccess here
-        assert "result" in success_result
-        assert success_result["result"] == "test"
+    assert is_success(success_result)
+    assert not is_error(success_result)
+    assert success_result["result"] == "test"
 
-    if is_error(error_result):
-        # In a real type checker, error_result would be typed as ResultError here
-        assert "error_message" in error_result
-        assert error_result["error_message"] == "test error"
+    assert is_error(error_result)
+    assert not is_success(error_result)
+    assert error_result["error_message"] == "test error"
 
-    # Non-"result" payload key (e.g. Neo4jForADK's "records") should also narrow as success
+    # A non-"result" payload key (e.g. Neo4jForADK's "records") is still a success
     records_result = tool_success("records", ["row"])
-    if is_success(records_result):
-        assert "records" in records_result
-        assert records_result["records"] == ["row"]
-
-    print("✓ Type guards work correctly for type narrowing")
+    assert is_success(records_result)
+    assert records_result["records"] == ["row"]
 
 
 def test_edge_cases():
@@ -326,7 +320,7 @@ if __name__ == "__main__":
     test_get_or_else()
     test_get_or_raise()
     test_chaining_operations()
-    test_type_guards()
+    test_is_success_and_is_error_recognise_results()
     test_edge_cases()
 
     print("=" * 50)
