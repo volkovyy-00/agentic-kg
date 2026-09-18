@@ -943,7 +943,8 @@ def test_both_callers_report_the_same_reachability_problems(stranding_state):
     not the other is exactly what _read_plan_for_approval exists to prevent."""
     refusal = approve_proposed_construction_plan(stranding_state)
     check = get_proposed_construction_plan_with_approval_check(stranding_state)
-    assert refusal["status"] == "error" and check["status"] == "error"
+    assert refusal["status"] == "error"
+    assert check["status"] == "error"
     assert "plot_id" in refusal["error_message"]
     assert "plot_id" in check["error_message"]
 
@@ -1063,5 +1064,6 @@ def test_the_regression_plan_reports_exactly_the_stranded_column(bom_source):
     problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
     assert len(problems) == 1
     assert "assembly_id" in problems[0]
-    assert "assemblies.csv" in problems[0] and "components.csv" in problems[0]
+    assert "assemblies.csv" in problems[0]
+    assert "components.csv" in problems[0]
     assert unverified == []

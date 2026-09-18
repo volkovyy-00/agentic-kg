@@ -980,7 +980,8 @@ def test_several_flagged_properties_join_into_one_warning(fake_db, monkeypatch):
     )
 
     warning = result["rows_loaded"]["warning"]
-    assert "cost" in warning and "days" in warning
+    assert "cost" in warning
+    assert "days" in warning
 
 
 def test_the_gate_runs_on_every_batch_not_only_the_first(fake_db, monkeypatch):

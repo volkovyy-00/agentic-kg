@@ -558,6 +558,8 @@ def test_the_column_readers_are_importable_under_their_public_names(memory_sourc
     """Catches a promotion that renamed only the definition and left call sites (or
     vice versa) — reference_reachability imports these by their public names."""
     values, error = file_tools.collect_column_values("people.csv", "name")
-    assert error is None and values == ["Ada", "Grace"]
+    assert error is None
+    assert values == ["Ada", "Grace"]
     pairs, error = file_tools.collect_column_pairs("people.csv", "id", "name")
-    assert error is None and pairs == [("1", "Ada"), ("2", "Grace")]
+    assert error is None
+    assert pairs == [("1", "Ada"), ("2", "Grace")]

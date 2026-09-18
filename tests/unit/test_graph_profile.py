@@ -305,7 +305,8 @@ def test_value_counts_only_for_small_distinct_counts(fake_profile_db):
     not_counted = [
         q for q in fake_profile_db.queries if "count(*)" in q and "`big`" in q
     ]
-    assert counted and not not_counted
+    assert counted
+    assert not not_counted
 
 
 @pytest.mark.parametrize(

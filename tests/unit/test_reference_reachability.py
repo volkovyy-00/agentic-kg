@@ -52,7 +52,8 @@ def test_only_columns_present_in_two_files_are_considered(survey_source):
     shared = {name for name, files in columns.items() if len(files) >= 2}
     assert shared == {"plot_id", "tally"}
     assert "reading_id" not in shared
-    assert unreadable == [] and notes == []
+    assert unreadable == []
+    assert notes == []
 
 
 def test_a_column_shared_but_unique_in_neither_file_has_no_home(survey_source):
@@ -60,7 +61,8 @@ def test_a_column_shared_but_unique_in_neither_file_has_no_home(survey_source):
     per-row unique in neither, so it is not an identifier at all."""
     homes, complete, notes = rr._home_files("tally", ["plots.csv", "readings.csv"])
     assert homes == []
-    assert complete is True and notes == []
+    assert complete is True
+    assert notes == []
 
 
 def test_the_home_file_is_the_one_where_the_column_is_per_row_unique(survey_source):
@@ -83,7 +85,8 @@ def test_an_unreadable_header_is_noted_and_does_not_raise(survey_source):
     returning an error dict, which would blow up a plan presentation."""
     columns, unreadable, notes = rr._columns_by_file(["plots.csv", "absent.csv"])
     assert unreadable == ["absent.csv"]
-    assert len(notes) == 1 and "absent.csv" in notes[0]
+    assert len(notes) == 1
+    assert "absent.csv" in notes[0]
     assert columns["plot_id"] == ["plots.csv"]
 
 
@@ -93,7 +96,8 @@ def test_an_unreadable_value_read_marks_evidence_incomplete(survey_source):
     homes, complete, notes = rr._home_files("plot_id", ["plots.csv", "absent.csv"])
     assert homes == ["plots.csv"]
     assert complete is False
-    assert len(notes) == 1 and "absent.csv" in notes[0]
+    assert len(notes) == 1
+    assert "absent.csv" in notes[0]
 
 
 def _plot_node(unique_column, properties):
@@ -118,7 +122,8 @@ def test_a_key_that_strands_the_referencing_file_is_reported(survey_source):
         _plot_node("plot_label", ["canopy"]), APPROVED
     )
     assert len(problems) == 1
-    assert "plot_id" in problems[0] and "plots.csv" in problems[0]
+    assert "plot_id" in problems[0]
+    assert "plots.csv" in problems[0]
     assert "readings.csv" in problems[0]
     assert unverified == []
 
@@ -128,7 +133,8 @@ def test_the_key_itself_is_always_reachable(survey_source):
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_id", ["canopy"]), APPROVED
     )
-    assert problems == [] and unverified == []
+    assert problems == []
+    assert unverified == []
 
 
 def test_a_property_that_survives_collapsing_is_reachable(survey_source):
@@ -145,7 +151,8 @@ def test_a_property_that_survives_collapsing_is_reachable(survey_source):
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_slug", ["plot_id"]), APPROVED
     )
-    assert problems == [] and unverified == []
+    assert problems == []
+    assert unverified == []
 
 
 def test_a_property_that_does_not_survive_collapsing_is_reported(survey_source):
@@ -173,7 +180,8 @@ def test_a_property_on_another_files_node_does_not_confer_reachability(survey_so
         "properties": ["plot_id"],
     }
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
-    assert len(problems) == 1 and "plot_id" in problems[0]
+    assert len(problems) == 1
+    assert "plot_id" in problems[0]
 
 
 def test_a_coincidental_key_on_an_unrelated_file_does_not_confer_reachability(
@@ -190,7 +198,8 @@ def test_a_coincidental_key_on_an_unrelated_file_does_not_confer_reachability(
         "properties": [],
     }
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
-    assert len(problems) == 1 and "plot_id" in problems[0]
+    assert len(problems) == 1
+    assert "plot_id" in problems[0]
 
 
 def test_incomplete_evidence_downgrades_a_refusal_to_unverified(survey_source):
@@ -241,7 +250,8 @@ def test_one_unreadable_candidate_does_not_suppress_another(survey_source):
     approved = ["plots.csv", "readings.csv", "sites.csv", "visits.csv"]
     fs.rm("/src/visits.csv")
     problems, unverified = rr.check_reference_columns_are_reachable(plan, approved)
-    assert len(problems) == 1 and "plot_id" in problems[0]
+    assert len(problems) == 1
+    assert "plot_id" in problems[0]
     assert any("visits.csv" in note for note in unverified)
 
 
@@ -275,7 +285,8 @@ def test_the_report_has_no_blank_slot_when_every_file_is_a_home_file(survey_sour
     assert "cannot be built at all" in text
     assert "keying a node built from" in text
     assert "adding a node construction" in text
-    assert ", but " in text and ", but  " not in text
+    assert ", but " in text
+    assert ", but  " not in text
     assert "joining  to" not in text
     assert " to  " not in text
 
@@ -309,14 +320,17 @@ def test_malformed_rule_field_types_do_not_raise_or_substring_match(survey_sourc
     }
     approved = ["plots.csv", "readings.csv", "ghost.csv"]
     problems, unverified = rr.check_reference_columns_are_reachable(plan, approved)
-    assert isinstance(problems, list) and isinstance(unverified, list)
-    assert len(problems) == 1 and "plot_id" in problems[0]
+    assert isinstance(problems, list)
+    assert isinstance(unverified, list)
+    assert len(problems) == 1
+    assert "plot_id" in problems[0]
 
     string_properties_plan = _plot_node("plot_label", "plot_id")
     problems, unverified = rr.check_reference_columns_are_reachable(
         string_properties_plan, APPROVED
     )
-    assert len(problems) == 1 and "plot_id" in problems[0]
+    assert len(problems) == 1
+    assert "plot_id" in problems[0]
 
 
 def test_a_read_failure_elsewhere_does_not_block_a_confirmed_reachable_candidate(
@@ -349,7 +363,8 @@ def test_a_malformed_plan_does_not_raise(survey_source):
     problems, unverified = rr.check_reference_columns_are_reachable(
         {"Plot": "not-a-dict"}, APPROVED
     )
-    assert isinstance(problems, list) and isinstance(unverified, list)
+    assert isinstance(problems, list)
+    assert isinstance(unverified, list)
 
 
 def test_one_file_listed_twice_is_not_two_files(survey_source):
@@ -402,7 +417,8 @@ def test_an_unhashable_property_entry_does_not_raise(survey_source):
     problems, unverified = rr.check_reference_columns_are_reachable(
         plan, ["plots.csv", "readings.csv", "ghost.csv"]
     )
-    assert isinstance(problems, list) and isinstance(unverified, list)
+    assert isinstance(problems, list)
+    assert isinstance(unverified, list)
     # 'ghost.csv' is unreadable and could have been plot_id's home file, so the
     # verdict is withheld rather than refused -- the evidence rule, not a crash.
     assert problems == []
@@ -427,4 +443,5 @@ def test_a_non_iterable_approved_file_list_does_not_raise(survey_source):
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_label", ["canopy"]), 5
     )
-    assert problems == [] and unverified == []
+    assert problems == []
+    assert unverified == []

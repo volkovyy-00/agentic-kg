@@ -276,7 +276,8 @@ def _approval_check_texts():
     ctx.state[construction_plan_tools.PROPOSED_CONSTRUCTION_PLAN] = _plan("assembly_id")
     allowed = read(ctx)
 
-    assert blocked["status"] == "error" and allowed["status"] == "success"
+    assert blocked["status"] == "error"
+    assert allowed["status"] == "success"
     return [blocked["error_message"], allowed["result"]["message"]]
 
 
