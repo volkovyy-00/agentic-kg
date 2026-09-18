@@ -167,6 +167,20 @@ def test_a_property_that_does_not_survive_collapsing_is_reported(survey_source):
     assert unverified == []
 
 
+@pytest.mark.parametrize("unique_column", [None, ["plot_slug"]])
+def test_a_home_rule_without_a_string_key_leaves_the_column_unverified(
+    survey_source, unique_column
+):
+    """Catches a collapse check fed a missing or non-string key: that rule gives
+    no evidence either way, so the column is unverified, never refused, and the
+    note says why instead of 'Column(s) [None] are not in ...'."""
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node(unique_column, ["plot_id"]), APPROVED
+    )
+    assert problems == []
+    assert any("plot_id" in n and "unique_column_name" in n for n in unverified)
+
+
 def test_a_property_on_another_files_node_does_not_confer_reachability(survey_source):
     """Case 8: catches an unrestricted stage 4. Reading is built from readings.csv,
     where plot_id trivially never collapses (one row per reading_id) -- that is a

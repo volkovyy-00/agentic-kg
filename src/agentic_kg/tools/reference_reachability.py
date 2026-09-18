@@ -110,11 +110,14 @@ def _survives_collapse(rule: dict, column: str) -> Tuple[bool, str | None]:
 
     Returns (survives, error_message). An unreadable source returns
     (False, message) -- the caller must treat that as missing evidence, never as
-    proof the column fails to survive.
+    proof the column fails to survive. So does a malformed rule that names no
+    string source file or key: it withholds evidence, it never supplies it.
     """
-    pairs, error = collect_column_pairs(
-        rule.get("source_file"), rule.get("unique_column_name"), column
-    )
+    source_file = rule.get("source_file")
+    key = _rule_unique_column_name(rule)
+    if not isinstance(source_file, str) or key is None:
+        return False, "the rule has no string 'source_file' and 'unique_column_name'"
+    pairs, error = collect_column_pairs(source_file, key, column)
     if error is not None:
         return False, error["error_message"]
     groups = group_values_by_key(pairs)
