@@ -152,7 +152,7 @@ def source_exists(relative_path: str) -> bool:
     return bool(fs.exists(_full_path(root, relative_path)))
 
 
-def open_source(relative_path: str, mode: str = "r", **kwargs: Any):
+def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
     """Open a source file by relative name.
 
     Text mode is the default because clevercsv requires an iterable of str.
