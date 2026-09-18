@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule
+  has a missing, empty or non-string `unique_column_name`, the "not verified" note now says so, instead of
+  reporting that a column named `[None]` or `['']` is missing from the source file. The plan is still left unverified, never refused.
+
 ## [0.6.1] - 2026-09-18
 
 ### Security

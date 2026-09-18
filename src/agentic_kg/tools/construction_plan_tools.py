@@ -134,9 +134,9 @@ def propose_node_constructions(
     proposed = []
     for index, node_construction in enumerate(node_constructions):
         result = propose_node_construction(
-            node_construction.get("approved_file"),
-            node_construction.get("proposed_label"),
-            node_construction.get("unique_column_name"),
+            node_construction.get("approved_file", ""),
+            node_construction.get("proposed_label", ""),
+            node_construction.get("unique_column_name", ""),
             node_construction.get("proposed_properties", []),
             tool_context,
             node_construction.get("proposed_property_types", {}),
@@ -302,12 +302,12 @@ def propose_relationship_constructions(
     proposed = []
     for index, relationship_construction in enumerate(relationship_constructions):
         result = propose_relationship_construction(
-            relationship_construction.get("approved_file"),
-            relationship_construction.get("proposed_relationship_type"),
-            relationship_construction.get("from_node_label"),
-            relationship_construction.get("from_node_column"),
-            relationship_construction.get("to_node_label"),
-            relationship_construction.get("to_node_column"),
+            relationship_construction.get("approved_file", ""),
+            relationship_construction.get("proposed_relationship_type", ""),
+            relationship_construction.get("from_node_label", ""),
+            relationship_construction.get("from_node_column", ""),
+            relationship_construction.get("to_node_label", ""),
+            relationship_construction.get("to_node_column", ""),
             relationship_construction.get("proposed_properties", []),
             tool_context,
             relationship_construction.get("proposed_property_types", {}),

@@ -271,7 +271,7 @@ class Neo4jForADK:
     # unconfirmed until some query proves the connection works.
     _reconnected_unconfirmed = False
 
-    def __init__(self, neo4j_config: Neo4jConfig = None):
+    def __init__(self, neo4j_config: Optional[Neo4jConfig] = None):
         if neo4j_config is None:
             self._neo4j_config = load_neo4j_config_from_settings()
         else:

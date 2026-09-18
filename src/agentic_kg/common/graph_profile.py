@@ -501,6 +501,7 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
     patterns = []
     for index, rel in enumerate(ranked):
         start, rel_type, end = rel["start"], rel["type"], rel["end"]
+        rel_key = display.get((True, rel_type))
         entry = {
             "pattern": f"{start}-[{rel_type}]->{end}",
             "start": start,
@@ -513,7 +514,7 @@ def build_profile(schema: Dict[str, Any]) -> Dict[str, Any]:
             # has no properties at all, which is an empty partition list,
             # not an unknown one.
             "partitioned_by": _partitions(
-                properties.get(display.get((True, rel_type)), []),
+                properties.get(rel_key, []) if rel_key is not None else [],
                 patterns_of_type[rel_type],
             ),
         }

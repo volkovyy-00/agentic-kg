@@ -327,6 +327,7 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
     values, error = collect_column_values(file_path, column)
     if error is not None:
         return error
+    assert values is not None
 
     empty_count = sum(
         1 for value in values if value is None or str(value).strip() == ""
@@ -522,6 +523,7 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
     values, error = collect_column_values(file_path, column)
     if error is not None:
         return error
+    assert values is not None
 
     return tool_success(
         "column_type_hint", _hint_from_values(file_path, column, values)
@@ -566,6 +568,7 @@ def column_type_hints(
     values_by_column, error = _collect_columns_values(file_path, requested)
     if error is not None:
         return error
+    assert values_by_column is not None
 
     return tool_success(
         "column_type_hints",
@@ -677,6 +680,7 @@ def collapse_check(
     pairs, error = collect_column_pairs(file_path, node_key_column, candidate_column)
     if error is not None:
         return error
+    assert pairs is not None
 
     groups = group_values_by_key(pairs)
 
@@ -726,9 +730,11 @@ def join_preview(
     values_a, error = collect_column_values(file_a, column_a)
     if error is not None:
         return error
+    assert values_a is not None
     values_b, error = collect_column_values(file_b, column_b)
     if error is not None:
         return error
+    assert values_b is not None
 
     distinct_a = {str(v) for v in values_a if v is not None and str(v).strip() != ""}
     distinct_b = {str(v) for v in values_b if v is not None and str(v).strip() != ""}

@@ -26,7 +26,7 @@ class agentic_kgSettings(BaseSettings):
     llm_model_reasoning: str = Field(default="openai/gpt-4o")
 
     # Neo4j configuration
-    neo4j_dsn: Optional[Neo4jDsn] = Field(default="bolt://localhost:7687")
+    neo4j_dsn: Neo4jDsn = Field(default="bolt://localhost:7687")
 
     model_config = SettingsConfigDict(
         env_file=".env",
