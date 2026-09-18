@@ -259,18 +259,15 @@ def test_chaining_operations():
 
 
 def test_type_guards():
-    """Test that type guards work correctly for type checking."""
+    """Test that is_success/is_error recognise each kind of result."""
     success_result = tool_success("result", "test")
     error_result = tool_error("test error")
 
-    # Test that type guards narrow types correctly
     if is_success(success_result):
-        # In a real type checker, success_result would be typed as ResultSuccess here
         assert "result" in success_result
         assert success_result["result"] == "test"
 
     if is_error(error_result):
-        # In a real type checker, error_result would be typed as ResultError here
         assert "error_message" in error_result
         assert error_result["error_message"] == "test error"
 

@@ -1,17 +1,9 @@
-from typing import Any, Callable, Literal, Mapping, TypedDict, TypeGuard, Union
+from typing import Any, Callable, Dict, Mapping
 
-
-class ResultSuccess(TypedDict):
-    status: Literal["success"]
-    result: Any
-
-
-class ResultError(TypedDict):
-    status: Literal["error"]
-    error_message: str
-
-
-ToolResult = Union[ResultSuccess, ResultError]
+# A plain dict, not a TypedDict union: tool_success() stores the payload under a
+# caller-chosen key ("records", "files", ...), which no TypedDict can describe, and
+# ADK cannot build a Vertex AI tool declaration from a Union-of-TypedDicts return.
+ToolResult = Dict[str, Any]
 
 
 def tool_success(key: str, result: Any) -> ToolResult:
@@ -43,11 +35,11 @@ def tool_error(message: str) -> ToolResult:
     }
 
 
-def is_success(result: ToolResult) -> TypeGuard[ResultSuccess]:
+def is_success(result: ToolResult) -> bool:
     return result["status"] == "success"
 
 
-def is_error(result: ToolResult) -> TypeGuard[ResultError]:
+def is_error(result: ToolResult) -> bool:
     return result["status"] == "error"
 
 
