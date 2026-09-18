@@ -1,5 +1,6 @@
 import logging
 from enum import Enum
+from typing import Any
 
 import litellm
 from google.adk.models.lite_llm import LiteLlm
@@ -78,7 +79,7 @@ def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
     if kind not in _llm_instances:
         model = _model_name(kind)
         logger.info("Creating LLM for %s: %s", kind.value, model)
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "timeout": _LLM_TIMEOUT_SECONDS,
             "num_retries": _LLM_NUM_RETRIES,
             "max_tokens": _LLM_MAX_TOKENS,
