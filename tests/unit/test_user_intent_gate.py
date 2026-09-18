@@ -459,8 +459,9 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
             ],
         ),
     )
+    turn = _run_one_turn(user_intent_agent, "intent_hard_error_test")
     with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(_run_one_turn(user_intent_agent, "intent_hard_error_test"))
+        asyncio.run(turn)
 
 
 def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch):

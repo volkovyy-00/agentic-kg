@@ -345,10 +345,9 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
             ],
         ),
     )
+    turn = _run_one_turn(graph_construction_agent, "construction_hard_error_test")
     with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(
-            _run_one_turn(graph_construction_agent, "construction_hard_error_test")
-        )
+        asyncio.run(turn)
 
 
 def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):

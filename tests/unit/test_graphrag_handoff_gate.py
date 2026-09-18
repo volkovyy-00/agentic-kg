@@ -365,8 +365,9 @@ def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
             ],
         ),
     )
+    turn = _run_one_turn(graphrag_agent, "graphrag_hard_error_test")
     with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(_run_one_turn(graphrag_agent, "graphrag_hard_error_test"))
+        asyncio.run(turn)
 
 
 def test_an_unstripped_agent_still_receives_it_negative_control():
