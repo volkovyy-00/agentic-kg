@@ -196,33 +196,15 @@ def result_to_adk(result: Result) -> Dict[str, Any]:
 def to_python(value):
     import neo4j.time
     from neo4j import Record
-    from neo4j.graph import Node, Path, Relationship
 
+    # No Node/Relationship/Path branches: both callers pass record.data(), which
+    # has already turned those into dicts, tuples and lists before we see them.
     if isinstance(value, Record):
         return {k: to_python(v) for k, v in value.items()}
     elif isinstance(value, dict):
         return {k: to_python(v) for k, v in value.items()}
     elif isinstance(value, list):
         return [to_python(v) for v in value]
-    elif isinstance(value, Node):
-        return {
-            "id": value.id,
-            "labels": list(value.labels),
-            "properties": to_python(dict(value)),
-        }
-    elif isinstance(value, Relationship):
-        return {
-            "id": value.id,
-            "type": value.type,
-            "start_node": value.start_node.id,
-            "end_node": value.end_node.id,
-            "properties": to_python(dict(value)),
-        }
-    elif isinstance(value, Path):
-        return {
-            "nodes": [to_python(node) for node in value.nodes],
-            "relationships": [to_python(rel) for rel in value.relationships],
-        }
     elif isinstance(value, neo4j.time.DateTime):
         return value.iso_format()
     elif isinstance(value, (neo4j.time.Date, neo4j.time.Time, neo4j.time.Duration)):
