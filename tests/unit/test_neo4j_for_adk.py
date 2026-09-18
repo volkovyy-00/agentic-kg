@@ -457,8 +457,9 @@ def test_a_missing_connection_is_a_named_tool_error(unset_db, send):
 
 @pytest.mark.parametrize("get", ["get_driver", "get_config"])
 def test_a_missing_connection_raises_a_named_error(unset_db, get):
+    accessor = getattr(unset_db, get)
     with pytest.raises(RuntimeError, match="no driver or config"):
-        getattr(unset_db, get)()
+        accessor()
 
 
 def test_get_config_reconnects_after_close(db, monkeypatch):
