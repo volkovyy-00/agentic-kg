@@ -379,6 +379,10 @@ class Neo4jForADK:
         session = None
         try:
             self._ensure_connected()
+            # Never None here: __init__ sets both, a rebuild after close() resets
+            # both, and the fixtures in the class comment set both themselves.
+            assert self._driver is not None
+            assert self._neo4j_config is not None
             session = self._driver.session(database=self._neo4j_config.database)
             result = session.run(cypher_query, parameters or {})
             adk_result = result_to_adk(result)
@@ -418,6 +422,8 @@ class Neo4jForADK:
             self._ensure_connected()
             # Inside the try, for the same reason as send_query: a failure to
             # open the session must return a structured error, not raise.
+            assert self._driver is not None
+            assert self._neo4j_config is not None
             session = self._driver.session(
                 database=self._neo4j_config.database,
                 default_access_mode=READ_ACCESS,
