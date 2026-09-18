@@ -293,7 +293,7 @@ class Neo4jForADK:
         self._ensure_connected()
         return self._driver
 
-    def get_config(self):
+    def get_config(self) -> Neo4jConfig:
         """Return the current config, reconnecting first if close() has run.
 
         Heals for the same reason get_driver does, even though it hands back no
@@ -310,6 +310,8 @@ class Neo4jForADK:
         tool_error.
         """
         self._ensure_connected()
+        # Never None here, for the reason given in send_query.
+        assert self._neo4j_config is not None
         return self._neo4j_config
 
     def close(self):
