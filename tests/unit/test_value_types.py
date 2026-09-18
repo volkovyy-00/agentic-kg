@@ -117,7 +117,9 @@ def test_coerce_rejects_text_for_a_numeric_type():
 
 
 def test_is_blank():
-    assert is_blank(None) and is_blank("") and is_blank("   ")
+    assert is_blank(None)
+    assert is_blank("")
+    assert is_blank("   ")
     assert not is_blank("0")
 
 

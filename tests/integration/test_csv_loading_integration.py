@@ -378,7 +378,8 @@ def test_typed_bom_graph_answers_numeric_questions_without_casting(
     price = neo4j_graph.send_query(
         "MATCH (p:TypedProduct {product_id:'P-1000'}) RETURN p.price AS price"
     )["records"][0]["price"]
-    assert isinstance(price, (int, float)) and price == 246
+    assert isinstance(price, (int, float))
+    assert price == 246
 
     # Range comparison, no cast.
     quick = neo4j_graph.send_query(

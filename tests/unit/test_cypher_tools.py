@@ -104,7 +104,8 @@ def test_get_physical_schema_without_profile_is_unchanged(monkeypatch):
     assert captured.get("is_enhanced") in (None, False), "is_enhanced must stay off"
     assert "profile" not in schema
     prop = schema["node_props"]["A"][0]
-    assert "values" not in prop and "distinct_count" not in prop
+    assert "values" not in prop
+    assert "distinct_count" not in prop
 
 
 def test_get_physical_schema_with_profile_enriches_and_profiles(monkeypatch):
@@ -180,7 +181,8 @@ def test_graphrag_wrapper_is_a_named_function_not_a_partial():
     'partial' with functools' own docstring as its description."""
     fn = cypher_tools.get_graph_schema_with_profile
     assert fn.__name__ == "get_graph_schema_with_profile"
-    assert fn.__doc__ and "partial" not in fn.__doc__.lower()
+    assert fn.__doc__
+    assert "partial" not in fn.__doc__.lower()
 
 
 @pytest.mark.parametrize(
