@@ -309,10 +309,7 @@ class Neo4jForADK:
         cypher_tools._physical_schema, already wraps it in try/except ->
         tool_error.
         """
-        self._ensure_connected()
-        # Never None here, for the reason given in send_query.
-        assert self._neo4j_config is not None
-        return self._neo4j_config
+        return self._connection()[1]
 
     def close(self):
         """Shut the driver. The instance stays usable: the next call to
@@ -365,6 +362,20 @@ class Neo4jForADK:
             "Neo4j driver was closed; rebuilding for %s", self._neo4j_config.uri
         )
 
+    def _connection(self) -> tuple[Driver, Neo4jConfig]:
+        """Reconnect if close() has run, then return the driver and config.
+
+        Both are set on every real path (__init__, or a rebuild after close()),
+        and the fixtures in the class comment set both themselves. The check
+        turns a broken fixture into a clear error instead of an AttributeError.
+        """
+        self._ensure_connected()
+        if self._driver is None or self._neo4j_config is None:
+            raise RuntimeError(
+                "Neo4jForADK has no driver or config; __init__ never ran"
+            )
+        return self._driver, self._neo4j_config
+
     def _confirm_reconnect(self):
         """Report a recovery once, after evidence for it exists."""
         if self._reconnected_unconfirmed:
@@ -380,12 +391,8 @@ class Neo4jForADK:
         # returns, so a write that fails never counts.
         session = None
         try:
-            self._ensure_connected()
-            # Never None here: __init__ sets both, a rebuild after close() resets
-            # both, and the fixtures in the class comment set both themselves.
-            assert self._driver is not None
-            assert self._neo4j_config is not None
-            session = self._driver.session(database=self._neo4j_config.database)
+            driver, config = self._connection()
+            session = driver.session(database=config.database)
             result = session.run(cypher_query, parameters or {})
             adk_result = result_to_adk(result)
             if is_write_query(cypher_query):
@@ -421,13 +428,11 @@ class Neo4jForADK:
         """
         session = None
         try:
-            self._ensure_connected()
             # Inside the try, for the same reason as send_query: a failure to
             # open the session must return a structured error, not raise.
-            assert self._driver is not None
-            assert self._neo4j_config is not None
-            session = self._driver.session(
-                database=self._neo4j_config.database,
+            driver, config = self._connection()
+            session = driver.session(
+                database=config.database,
                 default_access_mode=READ_ACCESS,
             )
             query = Query(cypher_query, timeout=QUERY_TIMEOUT_SECONDS)
