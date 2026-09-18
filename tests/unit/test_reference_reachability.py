@@ -167,18 +167,31 @@ def test_a_property_that_does_not_survive_collapsing_is_reported(survey_source):
     assert unverified == []
 
 
-@pytest.mark.parametrize("unique_column", [None, ["plot_slug"]])
-def test_a_home_rule_without_a_string_key_leaves_the_column_unverified(
+@pytest.mark.parametrize("unique_column", [None, "", ["plot_slug"]])
+def test_a_home_rule_without_a_usable_key_leaves_the_column_unverified(
     survey_source, unique_column
 ):
-    """Catches a collapse check fed a missing or non-string key: that rule gives
-    no evidence either way, so the column is unverified, never refused, and the
-    note says why instead of 'Column(s) [None] are not in ...'."""
+    """Catches a collapse check fed a missing, empty or non-string key: that rule
+    gives no evidence either way, so the column is unverified, never refused, and
+    the note says why instead of 'Column(s) [None] are not in ...'."""
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node(unique_column, ["plot_id"]), APPROVED
     )
     assert problems == []
     assert any("plot_id" in n and "unique_column_name" in n for n in unverified)
+
+
+@pytest.mark.parametrize("source_file", [None, ["plots.csv"]])
+def test_a_rule_without_a_usable_source_file_does_not_survive_collapse(
+    survey_source, source_file
+):
+    """Catches a guard that checks only the key. The caller only passes rules whose
+    source_file is an approved file, so this branch is reachable only directly."""
+    rule = {**_plot_node("plot_slug", ["plot_id"])["Plot"], "source_file": source_file}
+    assert rr._survives_collapse(rule, "plot_id") == (
+        False,
+        "the rule has no usable 'source_file'",
+    )
 
 
 def test_a_property_on_another_files_node_does_not_confer_reachability(survey_source):
