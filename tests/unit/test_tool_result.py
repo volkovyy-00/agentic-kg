@@ -216,13 +216,13 @@ def test_get_or_raise():
 
     # Test with error result (should raise)
     error_result = tool_error("something failed")
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match=r"^something failed$") as exc_info:
         get_or_raise(error_result)
     assert str(exc_info.value) == "something failed"
 
     # Test with different error message
     error_result2 = tool_error("custom error message")
-    with pytest.raises(Exception) as exc_info2:
+    with pytest.raises(Exception, match=r"^custom error message$") as exc_info2:
         get_or_raise(error_result2)
     assert str(exc_info2.value) == "custom error message"
 
