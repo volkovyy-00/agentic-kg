@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI`), because their declared result type was one ADK cannot
   describe there. The Gemini API path was never affected. The corrected type also cleared most of the
   type checker's findings, leaving the ones that point at real problems.
+- **Queries that return relationships (#47)**: a relationship in a query result now gets the same
+  treatment as a node returned directly. Dates and times on its endpoint nodes are converted to text
+  instead of being passed through as driver objects, which could not be turned into a tool response,
+  and oversized lists such as embeddings on those nodes are summarised instead of returned whole.
 
 ## [0.6.0] - 2026-08-17
 

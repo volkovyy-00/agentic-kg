@@ -223,6 +223,24 @@ def test_long_lists_are_summarised_not_returned_whole(db):
     assert "1536" in record["embedding"]
 
 
+def test_relationship_results_are_converted_like_node_results(db):
+    """record.data() turns a relationship into a (start, type, end) tuple. Its
+    endpoint dicts need the same treatment as a node returned directly: temporal
+    values made JSON-safe, oversized lists summarised."""
+    from neo4j.time import DateTime
+
+    endpoint = {"created": DateTime(2026, 9, 18, 12, 0, 0), "embedding": [0.1] * 1536}
+    db._driver = FakeDriver([{"r": (endpoint, "CITES", {})}])
+    payload = db.send_read_query("MATCH ()-[r]->() RETURN r")["query_result"]
+    record = payload["records"][0]
+
+    start, rel_type, _ = record["r"]
+    assert rel_type == "CITES"
+    assert isinstance(start["created"], str)
+    assert isinstance(start["embedding"], str)
+    assert "1536" in start["embedding"]
+
+
 def test_summarised_values_are_declared_not_silently_omitted(db):
     """Would catch: reporting a payload as complete while data was withheld.
 

@@ -199,11 +199,14 @@ def to_python(value):
 
     # No Node/Relationship/Path branches: both callers pass record.data(), which
     # has already turned those into dicts, tuples and lists before we see them.
+    # A relationship arrives as a (start, type, end) tuple, so tuples are
+    # recursed into like lists -- and become lists, which is what JSON makes of
+    # them anyway and what _summarise knows how to shorten.
     if isinstance(value, Record):
         return {k: to_python(v) for k, v in value.items()}
     elif isinstance(value, dict):
         return {k: to_python(v) for k, v in value.items()}
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         return [to_python(v) for v in value]
     elif isinstance(value, neo4j.time.DateTime):
         return value.iso_format()
