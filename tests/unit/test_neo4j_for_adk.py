@@ -423,6 +423,26 @@ def test_a_heal_seen_only_through_get_driver_stays_unconfirmed(db, monkeypatch):
     assert db._reconnected_unconfirmed is False
 
 
+@pytest.fixture
+def unset_db():
+    """An instance whose __init__ never ran and whose fixture forgot to set the
+    driver and config -- the one way either can still be None."""
+    return Neo4jForADK.__new__(Neo4jForADK)
+
+
+@pytest.mark.parametrize("send", ["send_query", "send_read_query"])
+def test_a_missing_connection_is_a_named_tool_error(unset_db, send):
+    result = getattr(unset_db, send)("RETURN 1")
+    assert result["status"] == "error"
+    assert "no driver or config" in result["error_message"]
+
+
+@pytest.mark.parametrize("get", ["get_driver", "get_config"])
+def test_a_missing_connection_raises_a_named_error(unset_db, get):
+    with pytest.raises(RuntimeError, match="no driver or config"):
+        getattr(unset_db, get)()
+
+
 def test_get_config_reconnects_after_close(db, monkeypatch):
     """_ensure_connected re-derives the config, so a caller reading the config
     before anything else healed the connection would otherwise get the

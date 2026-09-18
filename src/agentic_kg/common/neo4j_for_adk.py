@@ -281,7 +281,7 @@ class Neo4jForADK:
         # writes only; writes from elsewhere are caught by the fingerprint.
         self.write_count = 0
 
-    def get_driver(self):
+    def get_driver(self) -> Driver:
         """Return the driver, reconnecting first if close() has run.
 
         RAISES: unlike the pre-KG-1 version, this can raise -- reconnection
@@ -290,8 +290,7 @@ class Neo4jForADK:
         tool_error. Any new caller must do the same: an unhandled exception
         mid-turn is indistinguishable from a hang in `adk web` (see CLAUDE.md).
         """
-        self._ensure_connected()
-        return self._driver
+        return self._connection()[0]
 
     def get_config(self) -> Neo4jConfig:
         """Return the current config, reconnecting first if close() has run.
