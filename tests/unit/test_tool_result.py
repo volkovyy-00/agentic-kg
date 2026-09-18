@@ -3,6 +3,8 @@
 Comprehensive tests for the tool_result module.
 """
 
+import pytest
+
 from agentic_kg.common.tool_result import (
     get_or_else,
     get_or_raise,
@@ -214,19 +216,15 @@ def test_get_or_raise():
 
     # Test with error result (should raise)
     error_result = tool_error("something failed")
-    try:
+    with pytest.raises(Exception) as exc_info:
         get_or_raise(error_result)
-        assert False, "Expected exception to be raised"
-    except Exception as e:
-        assert str(e) == "something failed"
+    assert str(exc_info.value) == "something failed"
 
     # Test with different error message
     error_result2 = tool_error("custom error message")
-    try:
+    with pytest.raises(Exception) as exc_info2:
         get_or_raise(error_result2)
-        assert False, "Expected exception to be raised"
-    except Exception as e:
-        assert str(e) == "custom error message"
+    assert str(exc_info2.value) == "custom error message"
 
     print("✓ get_or_raise returns values on success and raises on error")
 
