@@ -196,33 +196,18 @@ def result_to_adk(result: Result) -> Dict[str, Any]:
 def to_python(value):
     import neo4j.time
     from neo4j import Record
-    from neo4j.graph import Node, Path, Relationship
 
+    # No Node/Relationship/Path branches: both callers pass record.data(), which
+    # has already turned those into dicts, tuples and lists before we see them.
+    # A relationship arrives as a (start, type, end) tuple, so tuples are
+    # recursed into like lists -- and become lists, which is what JSON makes of
+    # them anyway and what _summarise knows how to shorten.
     if isinstance(value, Record):
         return {k: to_python(v) for k, v in value.items()}
     elif isinstance(value, dict):
         return {k: to_python(v) for k, v in value.items()}
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         return [to_python(v) for v in value]
-    elif isinstance(value, Node):
-        return {
-            "id": value.id,
-            "labels": list(value.labels),
-            "properties": to_python(dict(value)),
-        }
-    elif isinstance(value, Relationship):
-        return {
-            "id": value.id,
-            "type": value.type,
-            "start_node": value.start_node.id,
-            "end_node": value.end_node.id,
-            "properties": to_python(dict(value)),
-        }
-    elif isinstance(value, Path):
-        return {
-            "nodes": [to_python(node) for node in value.nodes],
-            "relationships": [to_python(rel) for rel in value.relationships],
-        }
     elif isinstance(value, neo4j.time.DateTime):
         return value.iso_format()
     elif isinstance(value, (neo4j.time.Date, neo4j.time.Time, neo4j.time.Duration)):
@@ -299,7 +284,7 @@ class Neo4jForADK:
         # writes only; writes from elsewhere are caught by the fingerprint.
         self.write_count = 0
 
-    def get_driver(self):
+    def get_driver(self) -> Driver:
         """Return the driver, reconnecting first if close() has run.
 
         RAISES: unlike the pre-KG-1 version, this can raise -- reconnection
@@ -308,10 +293,9 @@ class Neo4jForADK:
         tool_error. Any new caller must do the same: an unhandled exception
         mid-turn is indistinguishable from a hang in `adk web` (see CLAUDE.md).
         """
-        self._ensure_connected()
-        return self._driver
+        return self._connection()[0]
 
-    def get_config(self):
+    def get_config(self) -> Neo4jConfig:
         """Return the current config, reconnecting first if close() has run.
 
         Heals for the same reason get_driver does, even though it hands back no
@@ -327,8 +311,7 @@ class Neo4jForADK:
         cypher_tools._physical_schema, already wraps it in try/except ->
         tool_error.
         """
-        self._ensure_connected()
-        return self._neo4j_config
+        return self._connection()[1]
 
     def close(self):
         """Shut the driver. The instance stays usable: the next call to
@@ -381,6 +364,20 @@ class Neo4jForADK:
             "Neo4j driver was closed; rebuilding for %s", self._neo4j_config.uri
         )
 
+    def _connection(self) -> tuple[Driver, Neo4jConfig]:
+        """Reconnect if close() has run, then return the driver and config.
+
+        Both are set on every real path (__init__, or a rebuild after close()),
+        and the fixtures in the class comment set both themselves. The check
+        turns a broken fixture into a clear error instead of an AttributeError.
+        """
+        self._ensure_connected()
+        if self._driver is None or self._neo4j_config is None:
+            raise RuntimeError(
+                "Neo4jForADK has no driver or config; __init__ never ran"
+            )
+        return self._driver, self._neo4j_config
+
     def _confirm_reconnect(self):
         """Report a recovery once, after evidence for it exists."""
         if self._reconnected_unconfirmed:
@@ -396,8 +393,8 @@ class Neo4jForADK:
         # returns, so a write that fails never counts.
         session = None
         try:
-            self._ensure_connected()
-            session = self._driver.session(database=self._neo4j_config.database)
+            driver, config = self._connection()
+            session = driver.session(database=config.database)
             result = session.run(cypher_query, parameters or {})
             adk_result = result_to_adk(result)
             if is_write_query(cypher_query):
@@ -433,11 +430,11 @@ class Neo4jForADK:
         """
         session = None
         try:
-            self._ensure_connected()
             # Inside the try, for the same reason as send_query: a failure to
             # open the session must return a structured error, not raise.
-            session = self._driver.session(
-                database=self._neo4j_config.database,
+            driver, config = self._connection()
+            session = driver.session(
+                database=config.database,
                 default_access_mode=READ_ACCESS,
             )
             query = Query(cypher_query, timeout=QUERY_TIMEOUT_SECONDS)

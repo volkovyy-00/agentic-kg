@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-18
+
 ### Security
 - **ADK web server remote code execution (#38)**: raised Google ADK to 1.28.1, which fixes CVE-2026-4810 —
   an unauthenticated attacker who could reach the ADK web server could run code on the host. The agents'
@@ -23,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI`), because their declared result type was one ADK cannot
   describe there. The Gemini API path was never affected. The corrected type also cleared most of the
   type checker's findings, leaving the ones that point at real problems.
+- **Queries that return relationships (#47)**: a relationship in a query result now gets the same
+  treatment as a node returned directly. Dates and times on its endpoint nodes are converted to text
+  instead of being passed through as driver objects, which could not be turned into a tool response,
+  and oversized lists such as embeddings on those nodes are summarised instead of returned whole.
 
 ## [0.6.0] - 2026-08-17
 
@@ -206,7 +212,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Documentation of the colima/Testcontainers `DOCKER_HOST` + Ryuk workaround needed to run integration
   tests locally (#1).
 
-[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/volkovyy-00/agentic-kg/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/volkovyy-00/agentic-kg/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/volkovyy-00/agentic-kg/compare/v0.5.2...v0.5.3

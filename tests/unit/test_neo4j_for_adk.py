@@ -223,6 +223,24 @@ def test_long_lists_are_summarised_not_returned_whole(db):
     assert "1536" in record["embedding"]
 
 
+def test_relationship_results_are_converted_like_node_results(db):
+    """record.data() turns a relationship into a (start, type, end) tuple. Its
+    endpoint dicts need the same treatment as a node returned directly: temporal
+    values made JSON-safe, oversized lists summarised."""
+    from neo4j.time import DateTime
+
+    endpoint = {"created": DateTime(2026, 9, 18, 12, 0, 0), "embedding": [0.1] * 1536}
+    db._driver = FakeDriver([{"r": (endpoint, "CITES", {})}])
+    payload = db.send_read_query("MATCH ()-[r]->() RETURN r")["query_result"]
+    record = payload["records"][0]
+
+    start, rel_type, _ = record["r"]
+    assert rel_type == "CITES"
+    assert isinstance(start["created"], str)
+    assert isinstance(start["embedding"], str)
+    assert "1536" in start["embedding"]
+
+
 def test_summarised_values_are_declared_not_silently_omitted(db):
     """Would catch: reporting a payload as complete while data was withheld.
 
@@ -421,6 +439,27 @@ def test_a_heal_seen_only_through_get_driver_stays_unconfirmed(db, monkeypatch):
 
     db.send_query("RETURN 1")
     assert db._reconnected_unconfirmed is False
+
+
+@pytest.fixture
+def unset_db():
+    """An instance whose __init__ never ran and whose fixture forgot to set the
+    driver and config -- the one way either can still be None."""
+    return Neo4jForADK.__new__(Neo4jForADK)
+
+
+@pytest.mark.parametrize("send", ["send_query", "send_read_query"])
+def test_a_missing_connection_is_a_named_tool_error(unset_db, send):
+    result = getattr(unset_db, send)("RETURN 1")
+    assert result["status"] == "error"
+    assert "no driver or config" in result["error_message"]
+
+
+@pytest.mark.parametrize("get", ["get_driver", "get_config"])
+def test_a_missing_connection_raises_a_named_error(unset_db, get):
+    accessor = getattr(unset_db, get)
+    with pytest.raises(RuntimeError, match="no driver or config"):
+        accessor()
 
 
 def test_get_config_reconnects_after_close(db, monkeypatch):
