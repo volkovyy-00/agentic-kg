@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule
   has a missing, empty or non-string `unique_column_name`, the "not verified" note now says so, instead of
   reporting that a column named `[None]` or `['']` is missing from the source file. The plan is still left unverified, never refused.
+- **Reachability judged by values, not by source file (#52)**: approval no longer refuses a construction plan
+  because the node carrying a reference column was built from a different file than the one that
+  identifies rows by it. Keying a node by such a column from a file where it repeats, with the
+  identifying file used only for relationships, was refused as unbuildable even though every join
+  matched. The check now asks whether some node carries every value an identifying file holds,
+  whichever file built it. A node can also carry the column as a property, now from any file, provided
+  each node keeps one value and no two nodes share one; previously only the identifying file's own node
+  counted. When a node holds only some of the values, the refusal says how many it is missing and gives
+  examples, and every refusal names a new node's label as needing to be its own.
 
 ## [0.6.1] - 2026-09-18
 
