@@ -1,18 +1,29 @@
-"""Does a node's key leave another approved file's reference column unreachable?
+"""Does the plan leave an approved file's reference column with nothing to point at?
 
-A column that identifies rows in one approved file and also appears, under the
-same name, in another is how the second file points at the first. If the plan
-keys its node by something else and does not preserve that column, the pointer
-has nothing to point at: no relationship joining the two files can be built at
-all, and the only approvable plan is one with that relationship missing. Nothing
-errors -- the relationship is simply never proposed.
+A column that identifies rows in one approved file (its "home" file: unique per
+row) and also appears, under the same name, in another is how the second file
+points at the first. If no node in the plan carries every value the home file
+holds for that column, the pointer has nothing to point at: no relationship
+joining the two files can be built for the values left out, and the only
+approvable plan is one with that relationship missing. Nothing errors -- the
+relationship is simply never proposed.
 
 This module answers that one question mechanically, because the prose rule that
 used to answer it resolved the same file two different ways on two runs.
 
+What counts is the values a node carries, not which file built it. A node
+carries the column when it is keyed by it, or keeps it as a property that
+survives collapsing, and its values are those of its own source file -- which
+may be a file where the column merely repeats. Each home file needs one node
+that carries all of its values. Files where the column repeats are not required
+to be covered: a value they point at that no home file lists is a data-quality
+matter, which the join preview reports and the schema agent keeps and discloses.
+No choice of key could fix it, so refusing would leave no way out.
+
 It deliberately does NOT decide how a file should be modelled. It reports that a
-choice of key made another file unreachable; keying the node differently and
-adding a second node construction both resolve it, and the caller says so.
+choice of key left a home file's values without a node; keying a node by the
+column from that file and adding a second node construction both resolve it, and
+the caller says so.
 
 Nothing here raises. Every read failure becomes a note, and a note never becomes
 a refusal -- see the evidence rule in check_reference_columns_are_reachable.
@@ -392,7 +403,7 @@ def check_reference_columns_are_reachable(
             continue  # shared, but identifies rows nowhere: not a reference column
 
         # An unreadable file cannot be shown to lack this column, so a node rule
-        # built from it may have supplied the home file that makes this reachable.
+        # built from it may be the node that carries every home file's values.
         # Each blocker is named in this column's OWN notes: the stage 1 note says
         # a file was unreadable, but only this knows which candidate that cost.
         for rule in rules:
