@@ -437,7 +437,9 @@ def check_reference_columns_are_reachable(
                     )
                 else:
                     not_surviving.append(rule)
-        if not short:
+        # With no home file confirmed, nothing is short only vacuously: the file
+        # that failed to read may be the home file, so fall through to the note.
+        if not short and homes:
             continue  # every home file's values are carried by some node
 
         if evidence_complete:

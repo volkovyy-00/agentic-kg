@@ -350,6 +350,29 @@ def test_a_failed_value_read_downgrades_a_shortfall_to_unverified(
     assert any("plot_id" in note and "bad.csv" in note for note in unverified)
 
 
+def test_a_failed_read_of_the_only_possible_identifier_file_is_unverified(
+    survey_source, monkeypatch
+):
+    """Catches treating 'no home file is short' as 'reachable' when no home file
+    could be confirmed at all. plots.csv is where plot_id identifies rows, but its
+    value read fails, so no file is known to be a home file and nothing is known to
+    be covered. The plan keys Plot by plot_label, so the column may be stranded: it
+    must be reported unverified, never passed silently."""
+    real_read = rr.collect_column_values
+
+    def read_or_fail(path, column):
+        if path == "plots.csv":
+            return None, tool_error("simulated read failure")
+        return real_read(path, column)
+
+    monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_label", ["canopy"]), APPROVED
+    )
+    assert problems == []
+    assert any("plot_id" in note and "plots.csv" in note for note in unverified)
+
+
 def test_a_node_rule_with_an_unhashable_source_file_does_not_raise(survey_source):
     """Catches looking a rule's source_file up in a dict without checking its type: a
     list is unhashable and would raise inside a plan presentation. The contract is two
