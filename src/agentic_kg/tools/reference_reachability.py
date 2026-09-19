@@ -231,32 +231,53 @@ def _collapse_detail(column: str, rule: dict) -> str:
     )
 
 
-def _quoted_list(paths: List[str]) -> str:
-    """Comma-separated, single-quoted file names for a message.
+_EXAMPLE_LIMIT = 3
+
+
+def _quoted_list(names: List[str]) -> str:
+    """Comma-separated, single-quoted file names or values for a message.
 
     One spelling, because these lists are read side by side in the same refusal:
-    two ways of quoting the same kind of value diverge the moment a path contains
+    two ways of quoting the same kind of value diverge the moment a name contains
     a quote or a backslash.
     """
-    return ", ".join(f"'{path}'" for path in paths)
+    return ", ".join(f"'{name}'" for name in names)
 
 
-def _report(column: str, homes: List[str], referencing: List[str], detail: str) -> str:
+def _report(
+    column: str,
+    homes: List[str],
+    repeating: List[str],
+    detail: str,
+    short_homes: List[str],
+    consequence: str | None = None,
+) -> str:
     """The refusal. It must offer BOTH routes out, every time.
 
     Re-keying and adding a second node construction both resolve this, and the
     check has no opinion on which is the better model. A message naming only one
     would smuggle in the modelling verdict this check deliberately does not make.
+    The opening fact names every home file; the routes out name only the short
+    ones, because naming a file that is already covered reads as "any of these
+    would work".
 
     It says the relationship cannot be built AT ALL, never that coverage is low:
     the standing rules tell the model to keep a partially-covered relationship and
     report the fraction, so a refusal that reads as a coverage complaint gets a
-    percentage reported and moved past. And it never suggests dropping the
-    relationship, which is the failure this whole check exists to prevent.
+    percentage reported and moved past. That is why a shortfall is stated as counts
+    of values that have no node, never as a fraction, and why the message never
+    points at the join preview. And it never suggests dropping the relationship,
+    which is the failure this whole check exists to prevent.
+
+    "Cannot be built at all" is scoped to the values no node carries, and it stays
+    true because both routes out build from a home file, which by definition holds
+    every one of its own values: whatever a home file is short of, keying a node by
+    the column from that file supplies. That is why a refusal can never dead-end.
     """
     home_list = _quoted_list(homes)
-    if referencing:
-        other_list = _quoted_list(referencing)
+    fix_list = _quoted_list(short_homes)
+    if repeating:
+        other_list = _quoted_list(repeating)
         appears_clause = f" and also appears in {other_list}"
         join_clause = f"joining {other_list} to {home_list}"
     else:
@@ -266,14 +287,77 @@ def _report(column: str, homes: List[str], referencing: List[str], detail: str) 
         # home files still has nothing to join on.
         appears_clause = ""
         join_clause = f"among {home_list}"
+    if consequence is None:
+        consequence = (
+            f"Any relationship {join_clause} therefore has no column to join on "
+            f"and cannot be built at all."
+        )
     return (
         f"'{column}' identifies rows in {home_list}{appears_clause}, but no node "
-        f"in the plan carries it reachably: {detail} Any relationship {join_clause} "
-        f"therefore has no column to join on and cannot be built at all. Fix it "
-        f"either by keying a node built from {home_list} by '{column}', or by "
-        f"adding a node construction from {home_list} keyed by '{column}' "
+        f"in the plan carries it reachably: {detail} {consequence} Fix it "
+        f"either by keying a node built from {fix_list} by '{column}', or by "
+        f"adding a node construction from {fix_list} keyed by '{column}' "
         f"alongside the existing one."
     )
+
+
+def _shortfall_clause(
+    column: str,
+    home: str,
+    witnesses: List[_Witness],
+    value_sets: Dict[str, Set[str]],
+) -> str:
+    """How far the closest witness falls short of one home file's values.
+
+    Closest is the witness holding the most of them. `max` keeps the first of
+    equals, so a tie goes to the earlier rule in the plan.
+    """
+    wanted = value_sets[home]
+    closest = max(witnesses, key=lambda witness: len(wanted & witness.domain))
+    carried = len(wanted & closest.domain)
+    share = f"{carried} of the" if carried else "none of the"
+    missing = _quoted_list(sorted(wanted - closest.domain)[:_EXAMPLE_LIMIT])
+    rule = closest.rule
+    return (
+        f"'{rule.get('label')}' (built from '{rule.get('source_file')}', keyed by "
+        f"'{rule.get('unique_column_name')}') carries {share} {len(wanted)} "
+        f"'{column}' values '{home}' holds (missing e.g. {missing})"
+    )
+
+
+def _refusal(
+    column: str,
+    homes: List[str],
+    repeating: List[str],
+    short: List[str],
+    witnesses: List[_Witness],
+    not_surviving: List[dict],
+    value_sets: Dict[str, Set[str]],
+) -> str:
+    """Choose the wording that is true of this shortfall, and report it.
+
+    A witness that exists but falls short is described by counts. With no witness
+    at all every home file is short, so the fix clause names them all.
+    """
+    if witnesses:
+        ordered = sorted(witnesses, key=lambda witness: witness.position)
+        clauses = [_shortfall_clause(column, h, ordered, value_sets) for h in short]
+        consequence = (
+            "The values no node carries have nothing to join to, so any "
+            "relationship reaching them cannot be built at all."
+        )
+        if len(short) > 1:
+            consequence += (
+                f" Each of {_quoted_list(short)} needs a node carrying all its values."
+            )
+        return _report(
+            column, homes, repeating, "; ".join(clauses) + ".", short, consequence
+        )
+    if not_surviving:
+        detail = _collapse_detail(column, not_surviving[-1])
+    else:
+        detail = f"no node is keyed by '{column}', and none retains it as a property."
+    return _report(column, homes, repeating, detail, homes)
 
 
 def check_reference_columns_are_reachable(
@@ -346,20 +430,18 @@ def check_reference_columns_are_reachable(
             continue  # every home file's values are carried by some node
 
         if evidence_complete:
-            referencing = [path for path in files if path not in homes]
-            if witnesses:
-                detail = (
-                    f"no node carries every '{column}' value that "
-                    f"{_quoted_list(short)} holds."
+            repeating = [path for path in files if path not in homes]
+            problems.append(
+                _refusal(
+                    column,
+                    homes,
+                    repeating,
+                    short,
+                    witnesses,
+                    not_surviving,
+                    value_sets,
                 )
-            elif not_surviving:
-                detail = _collapse_detail(column, not_surviving[-1])
-            else:
-                detail = (
-                    f"no node built from {_quoted_list(homes)} is keyed by "
-                    f"'{column}', and none retains it as a property."
-                )
-            problems.append(_report(column, homes, referencing, detail))
+            )
         else:
             unverified.append(
                 f"reachability of '{column}' was not verified: " + "; ".join(notes)

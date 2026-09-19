@@ -212,10 +212,14 @@ def test_a_rule_without_a_usable_source_file_does_not_survive_collapse(
     )
 
 
-def test_a_property_on_another_files_node_does_not_confer_reachability(survey_source):
-    """Case 8: catches an unrestricted stage 4. Reading is built from readings.csv,
-    where plot_id trivially never collapses (one row per reading_id) -- that is a
-    fact about readings.csv, not evidence that plots.csv preserved its identifier."""
+def test_a_retained_property_covering_only_part_of_the_identifier_file_is_reported(
+    survey_source,
+):
+    """Case 8: the same shortfall as keying by the column, reached through a retained
+    property. Reading keeps plot_id as a property and it survives collapsing (one row
+    per reading_id) -- but only for the 2 ids readings.csv holds, the same 2 of
+    plots.csv's 4 that keying by it carries. Catches a property path that works out
+    its values differently from the key path."""
     plan = _plot_node("plot_label", ["canopy"])
     plan["Reading"] = {
         "construction_type": "node",
@@ -227,13 +231,15 @@ def test_a_property_on_another_files_node_does_not_confer_reachability(survey_so
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
     assert len(problems) == 1
     assert "plot_id" in problems[0]
+    assert "carries 2 of the 4" in problems[0]
 
 
-def test_a_coincidental_key_on_an_unrelated_file_does_not_confer_reachability(
-    survey_source,
-):
-    """Case 10: catches an unrestricted stage 3. Reading is keyed by a column that
-    happens to be spelled plot_id but belongs to a different file."""
+def test_a_key_covering_only_part_of_the_identifier_file_is_reported(survey_source):
+    """Case 10: catches the home-file proxy removed naively, so that any node keyed by
+    the column passes. Reading is keyed by plot_id but built from readings.csv, which
+    holds 2 of the 4 ids plots.csv identifies, so the join can reach half the plots at
+    most. The refusal states that shortfall and keeps the properties every refusal
+    must have."""
     plan = _plot_node("plot_label", ["canopy"])
     plan["Reading"] = {
         "construction_type": "node",
@@ -244,7 +250,13 @@ def test_a_coincidental_key_on_an_unrelated_file_does_not_confer_reachability(
     }
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
     assert len(problems) == 1
-    assert "plot_id" in problems[0]
+    text = problems[0]
+    assert "carries 2 of the 4" in text
+    assert "'PL-2', 'PL-4'" in text
+    assert "cannot be built at all" in text
+    assert "keying a node built from" in text
+    assert "adding a node construction" in text
+    assert "drop" not in text.lower()
 
 
 def _write_detail_with_an_id_plots_lacks(fs):
@@ -282,7 +294,12 @@ def test_a_second_identifier_file_with_extra_values_is_reported_by_name(
         _plot_node("plot_id", ["canopy"]), ["plots.csv", "detail.csv"]
     )
     assert len(problems) == 1
-    assert "plot_id" in problems[0]
+    text = problems[0]
+    assert "carries 3 of the 4" in text
+    assert "'PL-7'" in text
+    fix_clause = text.split("Fix it", 1)[1]
+    assert "'detail.csv'" in fix_clause
+    assert "'plots.csv'" not in fix_clause
     assert unverified == []
 
 
@@ -349,6 +366,87 @@ def test_a_node_rule_with_an_unhashable_source_file_does_not_raise(survey_source
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
     assert len(problems) == 1
     assert isinstance(unverified, list)
+
+
+def _keyed_by_plot_id(label, source_file):
+    return {
+        "construction_type": "node",
+        "source_file": source_file,
+        "label": label,
+        "unique_column_name": "plot_id",
+        "properties": [],
+    }
+
+
+def test_a_key_overlapping_none_of_the_identifier_files_values_says_so(
+    survey_source,
+):
+    """Catches sending a node that carries the column but overlaps none of the values
+    to the 'no node is keyed by it' sentence, which would then be false: Reading IS
+    keyed by plot_id, in a format that matches nothing in plots.csv."""
+    with survey_source.open("/src/readings.csv", "w") as handle:
+        handle.write("reading_id,plot_id,tally\nR-1,X-1,3\nR-2,X-1,3\nR-3,X-2,5\n")
+    plan = _plot_node("plot_label", ["canopy"])
+    plan["Reading"] = _keyed_by_plot_id("Reading", "readings.csv")
+    problems, _ = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert "none of the 4" in problems[0]
+    assert "no node is keyed by" not in problems[0]
+
+
+def test_every_short_identifier_file_gets_its_own_clause(survey_source):
+    """Catches reporting only one short home file, or naming one shared closest node
+    for both. plots.csv (PL-1..PL-4) is closest to Reading; detail.csv (PL-5..PL-8)
+    is closest to Visit. The fix clause must not read as 'either file will do'."""
+    fs = survey_source
+    with fs.open("/src/detail.csv", "w") as handle:
+        handle.write("plot_id,notes\nPL-5,a\nPL-6,b\nPL-7,c\nPL-8,d\n")
+    with fs.open("/src/visits.csv", "w") as handle:
+        handle.write("visit_id,plot_id\nV-1,PL-5\nV-2,PL-5\nV-3,PL-6\nV-4,PL-7\n")
+    plan = {
+        "Reading": _keyed_by_plot_id("Reading", "readings.csv"),
+        "Visit": _keyed_by_plot_id("Visit", "visits.csv"),
+    }
+    approved = ["plots.csv", "readings.csv", "detail.csv", "visits.csv"]
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, approved)
+    assert len(problems) == 1
+    text = problems[0]
+    assert (
+        "'Reading' (built from 'readings.csv', keyed by 'plot_id') "
+        "carries 2 of the 4 'plot_id' values 'plots.csv' holds"
+    ) in text
+    assert (
+        "'Visit' (built from 'visits.csv', keyed by 'plot_id') "
+        "carries 3 of the 4 'plot_id' values 'detail.csv' holds"
+    ) in text
+    assert (
+        "Each of 'plots.csv', 'detail.csv' needs a node carrying all its values" in text
+    )
+
+
+def test_two_witnesses_that_each_hold_part_of_an_identifier_files_values_are_not_combined(
+    survey_source,
+):
+    """Catches judging coverage against the UNION of the nodes' values. Reading holds
+    PL-1..PL-3 and Visit holds PL-4, so together they hold everything plots.csv does --
+    but a relationship joins to one label, and neither node alone carries all four.
+    The split is uneven so the closest node is never a tie."""
+    fs = survey_source
+    with fs.open("/src/readings.csv", "w") as handle:
+        handle.write(
+            "reading_id,plot_id,tally\nR-1,PL-1,3\nR-2,PL-2,3\nR-3,PL-3,5\nR-4,PL-1,5\n"
+        )
+    with fs.open("/src/visits.csv", "w") as handle:
+        handle.write("visit_id,plot_id\nV-1,PL-4\nV-2,PL-4\n")
+    plan = {
+        "Reading": _keyed_by_plot_id("Reading", "readings.csv"),
+        "Visit": _keyed_by_plot_id("Visit", "visits.csv"),
+    }
+    approved = ["plots.csv", "readings.csv", "visits.csv"]
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, approved)
+    assert len(problems) == 1
+    assert "carries 3 of the 4" in problems[0]
+    assert "'PL-4'" in problems[0]
 
 
 def test_incomplete_evidence_downgrades_a_refusal_to_unverified(survey_source):
