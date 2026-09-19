@@ -22,7 +22,4 @@ jobs:
         run: uv sync
 
       - name: Pyright
-        # Codebase has no prior type coverage, so a non-zero exit is expected today --
-        # this is a visibility check, not a required gate (see docs/backlog/pyright-static-type-checking.md).
-        continue-on-error: true
         run: uv run pyright
