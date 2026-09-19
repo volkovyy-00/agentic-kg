@@ -31,7 +31,9 @@ class Neo4jConfig(BaseModel):
     @computed_field
     @property
     def host(self) -> str:
-        return self.dsn.host
+        host = self.dsn.host
+        assert host is not None  # validate_dsn rejects a DSN without a host
+        return host
 
     @computed_field
     @property
