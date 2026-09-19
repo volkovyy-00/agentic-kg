@@ -43,7 +43,7 @@ uv run pytest -q                 # unit tests — fast, no external deps; also r
 uv run pytest -q -m integration  # integration tests — need Docker (Testcontainers); skip cleanly without it
 uv run ruff check .               # lint — run before every PR
 uv run ruff format --check .      # formatting check — run before every PR; drop --check to fix locally
-uv run pyright                    # static type check — run before every PR; not yet required to be clean
+uv run pyright                    # static type check — run before every PR; must report 0 errors, CI fails otherwise
 ```
 
 A PR that changes retrieval, construction, or Neo4j access code should include or update unit tests; skip
