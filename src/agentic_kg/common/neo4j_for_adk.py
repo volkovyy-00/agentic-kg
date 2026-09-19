@@ -347,9 +347,10 @@ class Neo4jForADK:
         the config was overridden.
 
         Two concurrent tool calls can both observe _closed and both build a
-        driver; one wins and the other is garbage-collected. Harmless, and left
-        unguarded on purpose: a lock here would be connection-health policy,
-        which KG-1 puts out of scope.
+        driver; one wins and the other is dropped without being closed (since
+        neo4j 6.0, Driver.__del__ only warns about that). A small leak, and
+        left unguarded on purpose: a lock here would be connection-health
+        policy, which KG-1 puts out of scope.
         """
         if not self._closed:
             return

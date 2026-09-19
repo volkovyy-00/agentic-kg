@@ -280,11 +280,11 @@ All Cypher execution goes through the `Neo4jForADK` singleton (`common/neo4j_for
 the driver and returns `ToolResult`s via `result_to_adk`. The singleton's identity is permanent — the five
 `graphdb = get_graphdb()` bindings taken at import time (one per module) stay valid forever, including across a
 `close_graphdb()` or a transient outage, because `_ensure_connected()` transparently rebuilds the driver on next
-use rather than requiring callers to re-fetch the singleton. Gotcha this depends on: `neo4j` 5.x's `Driver` does
-*not* raise on use of a closed driver (`Driver._check_state` only emits a `DeprecationWarning`, with a literal
-`# TODO: 6.0 - raise the error`) — verified for both `bolt://` and Aura `neo4j://`. A use-after-close bug is
-therefore invisible to ordinary assertions; `tests/integration/test_connection_recovery.py` asserts the *absence*
-of that warning, and this class of bug becomes a hard error at the deferred neo4j 5→6 bump. Config comes from `Neo4jDsn`/`Neo4jConfig`
+use rather than requiring callers to re-fetch the singleton. Since `neo4j` 6.x, using a closed `Driver` raises
+`DriverError("Driver closed")` (5.x only warned), so a call site that skips the heal fails every tool call through
+it. `tests/integration/test_connection_recovery.py` closes the client before each tool path so that every path is
+the first to meet a closed driver — a path that only ever runs after another has healed is not covered, so a new
+entry point needs its own close-then-call step there. Config comes from `Neo4jDsn`/`Neo4jConfig`
 (`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var (local `bolt://` and Aura `neo4j+s://` DSNs both
 work — see `.env.example` for the full list of allowed schemes). `tools/cypher_tools.py` builds on this for
 higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no
