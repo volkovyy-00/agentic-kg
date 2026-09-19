@@ -14,7 +14,7 @@ workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate 
 
 A multi-agent system that turns a folder of source files into a Neo4j knowledge graph, then answers
 questions over it. It is built on Google ADK (`google-adk>=1.28.1,<2`) with LiteLLM routing every model
-call through OpenRouter, and it talks to Neo4j (`neo4j>=5.28.2,<6`, plus `neo4j-graphrag`) over Bolt —
+call through OpenRouter, and it talks to Neo4j (`neo4j>=6.3.1,<7`, plus `neo4j-graphrag`) over Bolt —
 local or Aura. Python 3.12, dependencies via `uv`.
 
 The user does not write Cypher. They state a goal in conversation; a chain of agents interviews them,

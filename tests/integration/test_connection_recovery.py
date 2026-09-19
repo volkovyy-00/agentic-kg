@@ -87,19 +87,29 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
     graph_profile.reset_cache()
 
     # Each step below starts with a break -- exactly what neo4j_is_ready does on
-    # a transient failure -- so that each production path is the first to meet
-    # a closed driver (see the comment on RECONNECT_LOGGER). Coverage is per
-    # path exercised here: a new entry point that heals needs its own
-    # close-then-call step, or a lost heal there goes unnoticed.
+    # a transient failure -- so that the tool called next is the first to meet a
+    # closed driver (see the comment on RECONNECT_LOGGER). Coverage is per path
+    # exercised here: a new entry point that heals needs its own close-then-call
+    # step, or a lost heal there goes unnoticed.
+    #
+    # What that does NOT reach is a heal that never runs first within its own
+    # step. get_config() is the case: _physical_schema calls get_driver() one
+    # line earlier, which clears _closed, so dropping get_config's heal passes
+    # every test here. tests/unit/test_neo4j_for_adk.py covers it instead --
+    # and it needs covering, since a stale config returns success-shaped data
+    # rather than failing (see get_config's docstring).
     with caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
-        # 1. Schema read -- the get_driver()/get_config() path.
+        # 1. Schema read -- the get_driver() path.
         neo4j_for_adk.close_graphdb()
         schema = cypher_tools.get_physical_schema()
         assert schema["status"] == "success", schema.get("error_message")
         assert "Supplier" in schema["schema"]["node_props"]
 
-        # 2. Profiled schema -- graph_profile's own binding plus cache
-        #    invalidation. Real data, not merely absence of error.
+        # 2. Profiled schema -- the profiling path end to end, including
+        #    graph_profile's own binding and cache invalidation. Real data, not
+        #    merely absence of error. (get_driver() heals first here too, so
+        #    what this pins on graph_profile's binding is that it still works,
+        #    not that it heals by itself.)
         neo4j_for_adk.close_graphdb()
         profiled = cypher_tools.get_graph_schema_with_profile()
         assert profiled["status"] == "success", profiled.get("error_message")
