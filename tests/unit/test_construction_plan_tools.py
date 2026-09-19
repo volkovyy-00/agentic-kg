@@ -1067,3 +1067,59 @@ def test_the_regression_plan_reports_exactly_the_stranded_column(bom_source):
     assert "assemblies.csv" in problems[0]
     assert "components.csv" in problems[0]
     assert unverified == []
+
+
+def _bom_relationship(
+    source_file, relationship_type, from_label, from_column, to_label, to_column
+):
+    return {
+        "construction_type": "relationship",
+        "source_file": source_file,
+        "relationship_type": relationship_type,
+        "from_node_label": from_label,
+        "from_node_column": from_column,
+        "to_node_label": to_label,
+        "to_node_column": to_column,
+        "properties": [],
+    }
+
+
+def test_a_node_keyed_from_the_repeating_file_is_reachable(bom_source):
+    """KG-13, observed 2026-08-14. Part is keyed by part_id and built from the mapping
+    file, where part_id repeats; components.csv, where it is unique per row, is used
+    only as a relationship table. Every part_id in components.csv is in the mapping
+    file, so every join matches -- the plan is approvable. Catches deciding
+    reachability by which file the node was built from."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_id", ["product_name"]),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv", "Assembly", "assembly_id", ["quantity"]
+        ),
+        "Part": _bom_node(
+            "part_supplier_mapping.csv", "Part", "part_id", ["part_name"]
+        ),
+        "ASSEMBLY_OF": _bom_relationship(
+            "assemblies.csv",
+            "ASSEMBLY_OF",
+            "Assembly",
+            "assembly_id",
+            "Product",
+            "product_id",
+        ),
+        "CONTAINS": _bom_relationship(
+            "components.csv", "CONTAINS", "Assembly", "assembly_id", "Part", "part_id"
+        ),
+        "SUPPLIED_BY": _bom_relationship(
+            "part_supplier_mapping.csv",
+            "SUPPLIED_BY",
+            "Part",
+            "part_id",
+            "Supplier",
+            "supplier_id",
+        ),
+    }
+    assert check_construction_plan_consistency(plan) == []
+    problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
+    assert problems == []
+    assert unverified == []
