@@ -18,7 +18,7 @@ Nothing here raises. Every read failure becomes a note, and a note never becomes
 a refusal -- see the evidence rule in check_reference_columns_are_reachable.
 """
 
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, NamedTuple, Set, Tuple
 
 from agentic_kg.common.csv_reader import read_csv_header
 
@@ -168,6 +168,69 @@ def _rule_unique_column_name(rule: dict) -> str | None:
     return name if isinstance(name, str) else None
 
 
+class _Witness(NamedTuple):
+    """A node rule that carries the column, and the values it carries."""
+
+    position: int
+    rule: dict
+    domain: Set[str]
+
+
+def _carrying_rules(
+    rules: List[dict], column: str, value_sets: Dict[str, Set[str]]
+) -> Tuple[List[_Witness], List[Tuple[int, dict]]]:
+    """Node rules that carry the column, split by how they carry it.
+
+    A rule keyed by the column is a witness outright: MERGE makes one node per
+    distinct key, so the node keys ARE the file's values. A rule that merely
+    retains the column as a property is returned unjudged, because it is a
+    witness only if the property survives collapsing and that costs a read.
+
+    Only a rule built from a file whose values were read qualifies. A source_file
+    that is not a string cannot be looked up (a list is unhashable), so it
+    qualifies as nothing rather than raising.
+    """
+    keyed: List[_Witness] = []
+    retaining: List[Tuple[int, dict]] = []
+    for position, rule in enumerate(rules):
+        source_file = rule.get("source_file")
+        if not isinstance(source_file, str) or source_file not in value_sets:
+            continue
+        if _rule_unique_column_name(rule) == column:
+            keyed.append(_Witness(position, rule, value_sets[source_file]))
+        elif column in _rule_properties(rule):
+            retaining.append((position, rule))
+    return keyed, retaining
+
+
+def _uncovered_homes(
+    homes: List[str], value_sets: Dict[str, Set[str]], witnesses: List[_Witness]
+) -> List[str]:
+    """The home files whose values no single witness carries in full.
+
+    `any` over the witnesses, deliberately not a union of their domains: a
+    relationship joins to one label, so two nodes that each hold half of a home
+    file's values leave that file short.
+    """
+    return [
+        home
+        for home in homes
+        if not any(value_sets[home] <= witness.domain for witness in witnesses)
+    ]
+
+
+def _collapse_detail(column: str, rule: dict) -> str:
+    """Why a retained property does not carry the column: its groups disagree."""
+    return (
+        f"'{rule.get('label')}' (built from '{rule.get('source_file')}', "
+        f"keyed by '{rule.get('unique_column_name')}') retains "
+        f"'{column}' as a property, but it does not survive collapsing: "
+        f"nodes sharing a key disagree about it, so each keeps one "
+        f"arbitrary value and a relationship joining on it would match "
+        f"almost nothing, with no error at build time."
+    )
+
+
 def _quoted_list(paths: List[str]) -> str:
     """Comma-separated, single-quoted file names for a message.
 
@@ -240,7 +303,7 @@ def check_reference_columns_are_reachable(
         if len(files) < 2:
             continue
 
-        homes, evidence_complete, notes, _ = _home_files(column, files)
+        homes, evidence_complete, notes, value_sets = _home_files(column, files)
         if not homes and evidence_complete:
             continue  # shared, but identifies rows nowhere: not a reference column
 
@@ -259,41 +322,43 @@ def check_reference_columns_are_reachable(
                     f"'{rule.get('label')}' is built from it"
                 )
 
-        home_rules = [rule for rule in rules if rule.get("source_file") in homes]
-        if any(rule.get("unique_column_name") == column for rule in home_rules):
-            continue  # stage 3: keyed by it, on a file that owns it
-
-        detail = (
-            f"no node built from {_quoted_list(homes)} is keyed by "
-            f"'{column}', and none retains it as a property."
-        )
-        for rule in home_rules:
-            if column not in _rule_properties(rule):
-                continue
-            survives, error_message = _survives_collapse(rule, column)
-            if survives:
-                detail = None
-                break
-            if error_message is not None:
-                evidence_complete = False
-                notes.append(
-                    f"'{column}' could not be checked against "
-                    f"'{rule.get('label')}' ({error_message})"
-                )
-            else:
-                detail = (
-                    f"'{rule.get('label')}' (built from '{rule.get('source_file')}', "
-                    f"keyed by '{rule.get('unique_column_name')}') retains "
-                    f"'{column}' as a property, but it does not survive collapsing: "
-                    f"nodes sharing a key disagree about it, so each keeps one "
-                    f"arbitrary value and a relationship joining on it would match "
-                    f"almost nothing, with no error at build time."
-                )
-        if detail is None:
-            continue  # stage 4: a home-file node preserves it
+        witnesses, retaining = _carrying_rules(rules, column, value_sets)
+        short = _uncovered_homes(homes, value_sets, witnesses)
+        not_surviving: List[dict] = []
+        if short:
+            for position, rule in retaining:
+                survives, error_message = _survives_collapse(rule, column)
+                if survives:
+                    domain = value_sets[rule["source_file"]]
+                    witnesses.append(_Witness(position, rule, domain))
+                    short = _uncovered_homes(homes, value_sets, witnesses)
+                    if not short:
+                        break
+                elif error_message is not None:
+                    evidence_complete = False
+                    notes.append(
+                        f"'{column}' could not be checked against "
+                        f"'{rule.get('label')}' ({error_message})"
+                    )
+                else:
+                    not_surviving.append(rule)
+        if not short:
+            continue  # every home file's values are carried by some node
 
         if evidence_complete:
             referencing = [path for path in files if path not in homes]
+            if witnesses:
+                detail = (
+                    f"no node carries every '{column}' value that "
+                    f"{_quoted_list(short)} holds."
+                )
+            elif not_surviving:
+                detail = _collapse_detail(column, not_surviving[-1])
+            else:
+                detail = (
+                    f"no node built from {_quoted_list(homes)} is keyed by "
+                    f"'{column}', and none retains it as a property."
+                )
             problems.append(_report(column, homes, referencing, detail))
         else:
             unverified.append(

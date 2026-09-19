@@ -14,6 +14,7 @@ import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
+from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools import reference_reachability as rr
 
 
@@ -244,6 +245,110 @@ def test_a_coincidental_key_on_an_unrelated_file_does_not_confer_reachability(
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
     assert len(problems) == 1
     assert "plot_id" in problems[0]
+
+
+def _write_detail_with_an_id_plots_lacks(fs):
+    """detail.csv identifies rows by plot_id too, but lists PL-7, which plots.csv does
+    not: two home files whose values diverge."""
+    with fs.open("/src/detail.csv", "w") as handle:
+        handle.write("plot_id,notes\nPL-1,a\nPL-2,b\nPL-3,c\nPL-7,z\n")
+
+
+def test_an_id_the_identifier_file_never_lists_does_not_block_approval(
+    survey_source,
+):
+    """Catches requiring coverage of the files where the column merely repeats. A
+    reading points at PL-9, which plots.csv never lists. Neither route out in the
+    refusal could conjure that plot -- both build from plots.csv -- so refusing would
+    leave the model no move except dropping the relationship."""
+    with survey_source.open("/src/readings.csv", "w") as handle:
+        handle.write("reading_id,plot_id,tally\nR-1,PL-1,3\nR-2,PL-1,3\nR-3,PL-9,5\n")
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_id", ["canopy"]), APPROVED
+    )
+    assert problems == []
+    assert unverified == []
+
+
+def test_a_second_identifier_file_with_extra_values_is_reported_by_name(
+    survey_source,
+):
+    """Catches judging only one home file, and a fix clause that names files already
+    covered. detail.csv also identifies rows by plot_id and lists PL-7, which the node
+    built from plots.csv does not carry, so a join from detail.csv would silently miss
+    that row. Only detail.csv needs a node."""
+    _write_detail_with_an_id_plots_lacks(survey_source)
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_id", ["canopy"]), ["plots.csv", "detail.csv"]
+    )
+    assert len(problems) == 1
+    assert "plot_id" in problems[0]
+    assert unverified == []
+
+
+def test_adding_a_node_from_the_short_identifier_file_clears_the_refusal(
+    survey_source,
+):
+    """Catches a rule that needs one node to cover every home file: the second route
+    out in the refusal (add a node built from the short file) has to actually satisfy
+    the check, or the advice is a dead end."""
+    _write_detail_with_an_id_plots_lacks(survey_source)
+    plan = _plot_node("plot_id", ["canopy"])
+    plan["Detail"] = {
+        "construction_type": "node",
+        "source_file": "detail.csv",
+        "label": "Detail",
+        "unique_column_name": "plot_id",
+        "properties": ["notes"],
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        plan, ["plots.csv", "detail.csv"]
+    )
+    assert problems == []
+    assert unverified == []
+
+
+def test_a_failed_value_read_downgrades_a_shortfall_to_unverified(
+    survey_source, monkeypatch
+):
+    """Catches a per-home-file loop that drops the evidence flag. detail.csv is a
+    genuine shortfall, but bad.csv carries the column with a readable header and a
+    value read that fails -- it could have been the node source that closes the gap,
+    so the refusal is withheld and the column is reported unverified instead."""
+    _write_detail_with_an_id_plots_lacks(survey_source)
+    with survey_source.open("/src/bad.csv", "w") as handle:
+        handle.write("plot_id,x\nPL-1,a\n")
+    real_read = rr.collect_column_values
+
+    def read_or_fail(path, column):
+        if path == "bad.csv":
+            return None, tool_error("simulated read failure")
+        return real_read(path, column)
+
+    monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_id", ["canopy"]), ["plots.csv", "detail.csv", "bad.csv"]
+    )
+    assert problems == []
+    assert any("plot_id" in note and "bad.csv" in note for note in unverified)
+
+
+def test_a_node_rule_with_an_unhashable_source_file_does_not_raise(survey_source):
+    """Catches looking a rule's source_file up in a dict without checking its type: a
+    list is unhashable and would raise inside a plan presentation. The contract is two
+    lists for any input, and nothing carries the column here, so it is still refused."""
+    plan = {
+        "Ghost": {
+            "construction_type": "node",
+            "source_file": ["plots.csv"],
+            "label": "Ghost",
+            "unique_column_name": "plot_id",
+            "properties": [],
+        }
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert isinstance(unverified, list)
 
 
 def test_incomplete_evidence_downgrades_a_refusal_to_unverified(survey_source):
