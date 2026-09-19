@@ -12,18 +12,19 @@ This module answers that one question mechanically, because the prose rule that
 used to answer it resolved the same file two different ways on two runs.
 
 What counts is the values a node carries, not which file built it. A node
-carries the column when it is keyed by it, or keeps it as a property that
-survives collapsing, and its values are those of its own source file -- which
-may be a file where the column merely repeats. Each home file needs one node
-that carries all of its values. Files where the column repeats are not required
-to be covered: a value they point at that no home file lists is a data-quality
-matter, which the join preview reports and the schema agent keeps and discloses.
-No choice of key could fix it, so refusing would leave no way out.
+carries the column when it is keyed by it, or keeps it as a property with one
+value per node and one node per value, and its values are those of its own
+source file -- which may be a file where the column merely repeats. Some home
+file needs one node that carries all of its values. Other files need not be
+covered, whether the column repeats there or is unique there too: a value they
+point at that no node has is a data-quality matter, which the join preview
+reports and the schema agent keeps and discloses. Requiring it would refuse any
+two files that merely share a unique column name.
 
 It deliberately does NOT decide how a file should be modelled. It reports that a
-choice of key left a home file's values without a node; keying a node by the
-column from that file and adding a second node construction both resolve it, and
-the caller says so.
+choice of key left no home file's values with a node; keying a node by the
+column from a home file and adding a second node construction both resolve it,
+and the caller says so.
 
 Nothing here raises. Every read failure becomes a note, and a note never becomes
 a refusal -- see the evidence rule in check_reference_columns_are_reachable.
@@ -127,25 +128,40 @@ def _node_rules(construction_plan: dict) -> List[dict]:
     ]
 
 
-def _survives_collapse(rule: dict, column: str) -> Tuple[bool, str | None]:
-    """Stage 4 for one node rule: does the column keep one value per node?
+def _property_failure(rule: dict, column: str) -> Tuple[str | None, str | None]:
+    """Why a retained property cannot be joined on, or (None, None) if it can.
 
-    Returns (survives, error_message). An unreadable source returns
-    (False, message) -- the caller must treat that as missing evidence, never as
-    proof the column fails to survive. So does a malformed rule that names no
-    source file or no key: it withholds evidence, it never supplies it.
+    A retained column is a join target only when each node keeps one value of it
+    (it survives collapsing) AND each value sits on one node. Surviving alone is
+    not enough: a node keyed per row of a file where the column repeats keeps its
+    one value, but several nodes share it, so a relationship joining on it lands
+    on all of them instead of on the one entity the value names.
+
+    Returns (failure, error_message). An unreadable source returns (None, message)
+    -- the caller must treat that as missing evidence, never as proof the property
+    fails. So does a malformed rule that names no source file or no key: it
+    withholds evidence, it never supplies it.
     """
     source_file = rule.get("source_file")
     if not isinstance(source_file, str):
-        return False, "the rule has no usable 'source_file'"
+        return None, "the rule has no usable 'source_file'"
     key = _rule_unique_column_name(rule)
     if not key:
-        return False, "the rule has no usable 'unique_column_name'"
+        return None, "the rule has no usable 'unique_column_name'"
     pairs, error = collect_column_pairs(source_file, key, column)
     if error is not None:
-        return False, error["error_message"]
-    groups = group_values_by_key(pairs)
-    return all(len(values) == 1 for values in groups.values()), None
+        return None, error["error_message"]
+    assert pairs is not None  # collect_column_pairs: error is None => pairs set
+    if any(len(values) != 1 for values in group_values_by_key(pairs).values()):
+        return _collapse_detail(column, rule), None
+    nodes_by_value = group_values_by_key(
+        (value, node_key)
+        for node_key, value in pairs
+        if value is not None and str(value).strip() != ""
+    )
+    if any(len(node_keys) != 1 for node_keys in nodes_by_value.values()):
+        return _shared_detail(column, rule), None
+    return None, None
 
 
 def _rule_properties(rule: dict) -> List[str]:
@@ -179,8 +195,8 @@ def _rule_unique_column_name(rule: dict) -> str | None:
     return name if isinstance(name, str) else None
 
 
-class _Witness(NamedTuple):
-    """A node rule that carries the column, and the values it carries."""
+class _Carrier(NamedTuple):
+    """A node rule that carries some of the column's values, and which ones."""
 
     position: int
     rule: dict
@@ -189,64 +205,85 @@ class _Witness(NamedTuple):
 
 def _carrying_rules(
     rules: List[dict], column: str, value_sets: Dict[str, Set[str]]
-) -> Tuple[List[_Witness], List[Tuple[int, dict]]]:
+) -> Tuple[List[_Carrier], List[Tuple[int, dict]]]:
     """Node rules that carry the column, split by how they carry it.
 
-    A rule keyed by the column is a witness outright: MERGE makes one node per
-    distinct key, so the node keys ARE the file's values. A rule that merely
-    retains the column as a property is returned unjudged, because it is a
-    witness only if the property survives collapsing and that costs a read.
+    A rule keyed by the column carries it outright: MERGE makes one node per
+    distinct key, so the node keys ARE the file's values, one node each. A rule
+    that merely retains the column as a property is returned unjudged, because it
+    carries the column only if each node keeps one value and each value sits on
+    one node, and finding that out costs a read.
 
     Only a rule built from a file whose values were read qualifies. A source_file
     that is not a string cannot be looked up (a list is unhashable), so it
     qualifies as nothing rather than raising.
     """
-    keyed: List[_Witness] = []
+    keyed: List[_Carrier] = []
     retaining: List[Tuple[int, dict]] = []
     for position, rule in enumerate(rules):
         source_file = rule.get("source_file")
         if not isinstance(source_file, str) or source_file not in value_sets:
             continue
         if _rule_unique_column_name(rule) == column:
-            keyed.append(_Witness(position, rule, value_sets[source_file]))
+            keyed.append(_Carrier(position, rule, value_sets[source_file]))
         elif column in _rule_properties(rule):
             retaining.append((position, rule))
     return keyed, retaining
 
 
-def _uncovered_homes(
-    homes: List[str], value_sets: Dict[str, Set[str]], witnesses: List[_Witness]
-) -> List[str]:
-    """The home files whose values no single witness carries in full.
+def _covers_a_home(
+    homes: List[str], value_sets: Dict[str, Set[str]], carriers: List[_Carrier]
+) -> bool:
+    """Whether some single carrier holds every value of some home file.
 
-    `any` over the witnesses, deliberately not a union of their domains: a
+    One home file is enough. A second file that also identifies rows by the
+    column, listing values the first lacks, is treated like a repeating file
+    pointing at an id no node has: a data-quality matter, not a stranded column.
+    Requiring it too would refuse any two files that merely share a unique column
+    name.
+
+    `any` over single carriers, deliberately not a union of their domains: a
     relationship joins to one label, so two nodes that each hold half of a home
-    file's values leave that file short.
+    file's values leave it uncovered.
     """
-    return [
-        home
-        for home in homes
-        if not any(value_sets[home] <= witness.domain for witness in witnesses)
-    ]
+    return any(
+        value_sets[home] <= carrier.domain for home in homes for carrier in carriers
+    )
+
+
+def _node_description(rule: dict) -> str:
+    return (
+        f"'{rule.get('label')}' (built from '{rule.get('source_file')}', "
+        f"keyed by '{rule.get('unique_column_name')}')"
+    )
 
 
 def _collapse_detail(column: str, rule: dict) -> str:
     """Why a retained property does not carry the column: its groups disagree."""
     return (
-        f"'{rule.get('label')}' (built from '{rule.get('source_file')}', "
-        f"keyed by '{rule.get('unique_column_name')}') retains "
-        f"'{column}' as a property, but it does not survive collapsing: "
-        f"nodes sharing a key disagree about it, so each keeps one "
-        f"arbitrary value and a relationship joining on it would match "
+        f"{_node_description(rule)} retains '{column}' as a property, but it does "
+        f"not survive collapsing: nodes sharing a key disagree about it, so each "
+        f"keeps one arbitrary value and a relationship joining on it would match "
         f"almost nothing, with no error at build time."
     )
 
 
+def _shared_detail(column: str, rule: dict) -> str:
+    """Why a retained property does not carry the column: its values repeat."""
+    return (
+        f"{_node_description(rule)} retains '{column}' as a property, but more "
+        f"than one node holds the same value, so a relationship joining on it "
+        f"would attach to all of them instead of to the one row the value "
+        f"identifies."
+    )
+
+
 _EXAMPLE_LIMIT = 3
+_VALUE_LIMIT = 40
 
 
 def _quoted_list(names: List[str]) -> str:
-    """Comma-separated, single-quoted file names or values for a message.
+    """Comma-separated, single-quoted file names for a message.
 
     One spelling, because these lists are read side by side in the same refusal:
     two ways of quoting the same kind of value diverge the moment a name contains
@@ -255,12 +292,22 @@ def _quoted_list(names: List[str]) -> str:
     return ", ".join(f"'{name}'" for name in names)
 
 
+def _quoted_value(value: str) -> str:
+    """One cell value for a message, which the model reads one problem per line.
+
+    repr() so that a quote or a newline in the cell cannot break that layout, and
+    cut short so that one enormous cell cannot swamp the message.
+    """
+    if len(value) > _VALUE_LIMIT:
+        value = value[:_VALUE_LIMIT] + "..."
+    return repr(value)
+
+
 def _report(
     column: str,
     homes: List[str],
     repeating: List[str],
     detail: str,
-    short_homes: List[str],
     consequence: str | None = None,
 ) -> str:
     """The refusal. It must offer BOTH routes out, every time.
@@ -268,9 +315,8 @@ def _report(
     Re-keying and adding a second node construction both resolve this, and the
     check has no opinion on which is the better model. A message naming only one
     would smuggle in the modelling verdict this check deliberately does not make.
-    The opening fact names every home file; the routes out name only the short
-    ones, because naming a file that is already covered reads as "any of these
-    would work".
+    The new node needs a label of its own: proposing it under an existing label
+    replaces that node instead of adding one.
 
     It says the relationship cannot be built AT ALL, never that coverage is low:
     the standing rules tell the model to keep a partially-covered relationship and
@@ -282,20 +328,20 @@ def _report(
 
     "Cannot be built at all" is scoped to the values no node carries, and it stays
     true because both routes out build from a home file, which by definition holds
-    every one of its own values: whatever a home file is short of, keying a node by
-    the column from that file supplies. That is why a refusal can never dead-end.
+    every one of its own values: keying a node by the column from that file
+    supplies all of them. That is why a refusal can never dead-end.
     """
     home_list = _quoted_list(homes)
-    fix_list = _quoted_list(short_homes)
+    holder = "that file holds" if len(homes) == 1 else "any one of those files holds"
     if repeating:
         other_list = _quoted_list(repeating)
         appears_clause = f" and also appears in {other_list}"
         join_clause = f"joining {other_list} to {home_list}"
     else:
         # Every file sharing the column identifies rows by it -- there is no
-        # "other" file left to name, but the column is still stranded: no home
-        # file's node carries it reachably, so any relationship between those
-        # home files still has nothing to join on.
+        # "other" file left to name, but the column is still stranded: no node
+        # carries a home file's values, so any relationship between those home
+        # files still has nothing to join on.
         appears_clause = ""
         join_clause = f"among {home_list}"
     if consequence is None:
@@ -305,33 +351,32 @@ def _report(
         )
     return (
         f"'{column}' identifies rows in {home_list}{appears_clause}, but no node "
-        f"in the plan carries it reachably: {detail} {consequence} Fix it "
-        f"either by keying a node built from {fix_list} by '{column}', or by "
-        f"adding a node construction from {fix_list} keyed by '{column}' "
-        f"alongside the existing one."
+        f"in the plan carries every value {holder}: {detail} {consequence} Fix it "
+        f"either by keying a node built from {home_list} by '{column}', or by "
+        f"adding a node construction from {home_list} keyed by '{column}', under a "
+        f"label of its own, alongside the existing one."
     )
 
 
 def _shortfall_clause(
     column: str,
     home: str,
-    witnesses: List[_Witness],
+    carriers: List[_Carrier],
     value_sets: Dict[str, Set[str]],
 ) -> str:
-    """How far the closest witness falls short of one home file's values.
+    """How far the closest carrier falls short of one home file's values.
 
-    Closest is the witness holding the most of them. `max` keeps the first of
+    Closest is the carrier holding the most of them. `max` keeps the first of
     equals, so a tie goes to the earlier rule in the plan.
     """
     wanted = value_sets[home]
-    closest = max(witnesses, key=lambda witness: len(wanted & witness.domain))
+    closest = max(carriers, key=lambda carrier: len(wanted & carrier.domain))
     carried = len(wanted & closest.domain)
     share = f"{carried} of the" if carried else "none of the"
-    missing = _quoted_list(sorted(wanted - closest.domain)[:_EXAMPLE_LIMIT])
-    rule = closest.rule
+    examples = sorted(wanted - closest.domain)[:_EXAMPLE_LIMIT]
+    missing = ", ".join(_quoted_value(value) for value in examples)
     return (
-        f"'{rule.get('label')}' (built from '{rule.get('source_file')}', keyed by "
-        f"'{rule.get('unique_column_name')}') carries {share} {len(wanted)} "
+        f"{_node_description(closest.rule)} carries {share} {len(wanted)} "
         f"'{column}' values '{home}' holds (missing e.g. {missing})"
     )
 
@@ -340,35 +385,34 @@ def _refusal(
     column: str,
     homes: List[str],
     repeating: List[str],
-    short: List[str],
-    witnesses: List[_Witness],
-    not_surviving: List[dict],
+    carriers: List[_Carrier],
+    failures: List[str],
     value_sets: Dict[str, Set[str]],
 ) -> str:
     """Choose the wording that is true of this shortfall, and report it.
 
-    A witness that exists but falls short is described by counts. With no witness
-    at all every home file is short, so the fix clause names them all.
+    Every reason is stated: a retained property that fails, and how far the
+    closest carrier falls short of each home file, since covering any one of them
+    would do. Only with neither does the message say no node carries the column,
+    and then it names the files it looked at, because a rule built from any other
+    path carries nothing the check can see.
     """
-    if witnesses:
-        ordered = sorted(witnesses, key=lambda witness: witness.position)
-        clauses = [_shortfall_clause(column, h, ordered, value_sets) for h in short]
+    details = list(failures)
+    consequence = None
+    if carriers:
+        ordered = sorted(carriers, key=lambda carrier: carrier.position)
+        clauses = [_shortfall_clause(column, h, ordered, value_sets) for h in homes]
+        details.append("; ".join(clauses) + ".")
         consequence = (
             "The values no node carries have nothing to join to, so any "
             "relationship reaching them cannot be built at all."
         )
-        if len(short) > 1:
-            consequence += (
-                f" Each of {_quoted_list(short)} needs a node carrying all its values."
-            )
-        return _report(
-            column, homes, repeating, "; ".join(clauses) + ".", short, consequence
+    elif not failures:
+        details.append(
+            f"no node built from {_quoted_list(list(value_sets))} is keyed by "
+            f"'{column}', and none retains it as a property."
         )
-    if not_surviving:
-        detail = _collapse_detail(column, not_surviving[-1])
-    else:
-        detail = f"no node is keyed by '{column}', and none retains it as a property."
-    return _report(column, homes, repeating, detail, homes)
+    return _report(column, homes, repeating, " ".join(details), consequence)
 
 
 def check_reference_columns_are_reachable(
@@ -403,7 +447,7 @@ def check_reference_columns_are_reachable(
             continue  # shared, but identifies rows nowhere: not a reference column
 
         # An unreadable file cannot be shown to lack this column, so a node rule
-        # built from it may be the node that carries every home file's values.
+        # built from it may be the node that carries a home file's values.
         # Each blocker is named in this column's OWN notes: the stage 1 note says
         # a file was unreadable, but only this knows which candidate that cost.
         for rule in rules:
@@ -417,43 +461,37 @@ def check_reference_columns_are_reachable(
                     f"'{rule.get('label')}' is built from it"
                 )
 
-        witnesses, retaining = _carrying_rules(rules, column, value_sets)
-        short = _uncovered_homes(homes, value_sets, witnesses)
-        not_surviving: List[dict] = []
-        if short:
+        carriers, retaining = _carrying_rules(rules, column, value_sets)
+        covered = _covers_a_home(homes, value_sets, carriers)
+        failures: List[str] = []
+        if not covered:
             for position, rule in retaining:
-                survives, error_message = _survives_collapse(rule, column)
-                if survives:
-                    domain = value_sets[rule["source_file"]]
-                    witnesses.append(_Witness(position, rule, domain))
-                    short = _uncovered_homes(homes, value_sets, witnesses)
-                    if not short:
-                        break
-                elif error_message is not None:
+                domain = value_sets[rule["source_file"]]
+                if not any(value_sets[home] <= domain for home in homes):
+                    # Nothing a read could show would let this rule cover a home
+                    # file, so it is not read: a failed read here would withhold
+                    # a refusal the values already prove.
+                    carriers.append(_Carrier(position, rule, domain))
+                    continue
+                failure, error_message = _property_failure(rule, column)
+                if error_message is not None:
                     evidence_complete = False
                     notes.append(
                         f"'{column}' could not be checked against "
                         f"'{rule.get('label')}' ({error_message})"
                     )
+                elif failure is not None:
+                    failures.append(failure)
                 else:
-                    not_surviving.append(rule)
-        # With no home file confirmed, nothing is short only vacuously: the file
-        # that failed to read may be the home file, so fall through to the note.
-        if not short and homes:
-            continue  # every home file's values are carried by some node
+                    covered = True
+                    break
+        if covered:
+            continue  # some node carries every value a home file holds
 
         if evidence_complete:
             repeating = [path for path in files if path not in homes]
             problems.append(
-                _refusal(
-                    column,
-                    homes,
-                    repeating,
-                    short,
-                    witnesses,
-                    not_surviving,
-                    value_sets,
-                )
+                _refusal(column, homes, repeating, carriers, failures, value_sets)
             )
         else:
             unverified.append(

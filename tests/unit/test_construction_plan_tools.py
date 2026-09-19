@@ -1123,3 +1123,27 @@ def test_a_node_keyed_from_the_repeating_file_is_reachable(bom_source):
     problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
     assert problems == []
     assert unverified == []
+
+
+def test_a_retained_id_on_a_node_per_row_of_a_repeating_file_is_not_reachable(
+    bom_source,
+):
+    """PR #52 review. Product is keyed by its name, and Assembly keeps product_id as a
+    property. That survives collapsing -- each assembly has one product -- but every
+    product sits on several Assembly nodes, so nothing is a join target for one
+    product. Catches accepting any collapse-surviving property as carrying the ids."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_name", []),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv",
+            "Assembly",
+            "assembly_id",
+            ["component_name", "quantity", "product_id"],
+        ),
+        "Part": _bom_node("components.csv", "Part", "part_id", ["part_name"]),
+    }
+    problems, unverified = check_reference_columns_are_reachable(plan, BOM_FILES)
+    assert len(problems) == 1
+    assert "product_id" in problems[0]
+    assert unverified == []

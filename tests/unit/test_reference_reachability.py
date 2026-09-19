@@ -147,7 +147,7 @@ def test_a_key_that_strands_the_referencing_file_is_reported(survey_source):
 
 
 def test_the_key_itself_is_always_reachable(survey_source):
-    """Catches a stage 3 that ignores the node key and goes straight to properties."""
+    """Catches a check that ignores the node key and goes straight to properties."""
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_id", ["canopy"]), APPROVED
     )
@@ -200,14 +200,14 @@ def test_a_home_rule_without_a_usable_key_leaves_the_column_unverified(
 
 
 @pytest.mark.parametrize("source_file", [None, ["plots.csv"]])
-def test_a_rule_without_a_usable_source_file_does_not_survive_collapse(
+def test_a_rule_without_a_usable_source_file_gives_no_evidence(
     survey_source, source_file
 ):
     """Catches a guard that checks only the key. The caller only passes rules whose
     source_file is an approved file, so this branch is reachable only directly."""
     rule = {**_plot_node("plot_slug", ["plot_id"])["Plot"], "source_file": source_file}
-    assert rr._survives_collapse(rule, "plot_id") == (
-        False,
+    assert rr._property_failure(rule, "plot_id") == (
+        None,
         "the rule has no usable 'source_file'",
     )
 
@@ -282,57 +282,140 @@ def test_an_id_the_identifier_file_never_lists_does_not_block_approval(
     assert unverified == []
 
 
-def test_a_second_identifier_file_with_extra_values_is_reported_by_name(
+def test_a_second_identifier_file_with_extra_values_does_not_block_approval(
     survey_source,
 ):
-    """Catches judging only one home file, and a fix clause that names files already
-    covered. detail.csv also identifies rows by plot_id and lists PL-7, which the node
-    built from plots.csv does not carry, so a join from detail.csv would silently miss
-    that row. Only detail.csv needs a node."""
+    """Catches requiring every home file to be covered. detail.csv also identifies
+    rows by plot_id and lists PL-7, which the node built from plots.csv does not
+    carry. That is the same dangling id a repeating file may hold, and it is treated
+    the same way: two files that each happen to have a unique column of the same
+    name must not block a plan whose node covers one of them."""
     _write_detail_with_an_id_plots_lacks(survey_source)
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_id", ["canopy"]), ["plots.csv", "detail.csv"]
-    )
-    assert len(problems) == 1
-    text = problems[0]
-    assert "carries 3 of the 4" in text
-    assert "'PL-7'" in text
-    fix_clause = text.split("Fix it", 1)[1]
-    assert "'detail.csv'" in fix_clause
-    assert "'plots.csv'" not in fix_clause
-    assert unverified == []
-
-
-def test_adding_a_node_from_the_short_identifier_file_clears_the_refusal(
-    survey_source,
-):
-    """Catches a rule that needs one node to cover every home file: the second route
-    out in the refusal (add a node built from the short file) has to actually satisfy
-    the check, or the advice is a dead end."""
-    _write_detail_with_an_id_plots_lacks(survey_source)
-    plan = _plot_node("plot_id", ["canopy"])
-    plan["Detail"] = {
-        "construction_type": "node",
-        "source_file": "detail.csv",
-        "label": "Detail",
-        "unique_column_name": "plot_id",
-        "properties": ["notes"],
-    }
-    problems, unverified = rr.check_reference_columns_are_reachable(
-        plan, ["plots.csv", "detail.csv"]
     )
     assert problems == []
     assert unverified == []
 
 
+def test_a_retained_property_that_several_nodes_share_does_not_carry_the_column(
+    survey_source,
+):
+    """Catches accepting a retained property because it survives collapsing. Reading
+    is keyed per reading and keeps plot_id, and readings.csv holds all four ids --
+    but PL-1 sits on two Reading nodes, so a relationship joining on it lands on
+    readings, not on one plot."""
+    with survey_source.open("/src/readings.csv", "w") as handle:
+        handle.write(
+            "reading_id,plot_id\nR-1,PL-1\nR-2,PL-1\nR-3,PL-2\nR-4,PL-3\nR-5,PL-4\n"
+        )
+    plan = _plot_node("plot_label", ["canopy"])
+    plan["Reading"] = {
+        "construction_type": "node",
+        "source_file": "readings.csv",
+        "label": "Reading",
+        "unique_column_name": "reading_id",
+        "properties": ["plot_id"],
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert "more than one node" in problems[0]
+    assert unverified == []
+
+
+def test_a_retained_property_on_one_node_per_value_carries_the_column(
+    survey_source,
+):
+    """Catches rejecting every retained property from a file where the column
+    repeats. Here it repeats only because R-1 is listed twice: each plot_id still
+    sits on exactly one Reading node, so that node is a join target for all four."""
+    with survey_source.open("/src/readings.csv", "w") as handle:
+        handle.write(
+            "reading_id,plot_id\nR-1,PL-1\nR-1,PL-1\nR-2,PL-2\nR-3,PL-3\nR-4,PL-4\n"
+        )
+    plan = _plot_node("plot_label", ["canopy"])
+    plan["Reading"] = {
+        "construction_type": "node",
+        "source_file": "readings.csv",
+        "label": "Reading",
+        "unique_column_name": "reading_id",
+        "properties": ["plot_id"],
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert problems == []
+    assert unverified == []
+
+
+def test_a_retaining_rule_that_could_not_close_the_gap_is_not_read(survey_source):
+    """Catches a failed read on a rule that could never change the verdict turning a
+    provable refusal into 'unverified'. Reading's key is misspelt, so its pairs
+    cannot be read -- but readings.csv holds only 2 of plots.csv's 4 ids, so no
+    answer from that read could make Reading carry them all."""
+    plan = _plot_node("plot_label", ["canopy"])
+    plan["Reading"] = {
+        "construction_type": "node",
+        "source_file": "readings.csv",
+        "label": "Reading",
+        "unique_column_name": "READING_ID",
+        "properties": ["plot_id"],
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert unverified == []
+
+
+def test_a_failed_retention_is_explained_alongside_a_shortfall(survey_source):
+    """Catches dropping one explanation when there are two. Plot keeps plot_id but it
+    does not survive collapsing onto plot_label, and Reading is keyed by plot_id but
+    holds only 2 of the 4 ids: the refusal must say both."""
+    plan = _plot_node("plot_label", ["plot_id"])
+    plan["Reading"] = _keyed_by_plot_id("Reading", "readings.csv")
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert "does not survive collapsing" in problems[0]
+    assert "carries 2 of the 4" in problems[0]
+
+
+def test_the_no_carrier_sentence_names_the_files_it_looked_at(survey_source):
+    """Catches a blanket 'no node is keyed by it' that the plan contradicts. Ghost
+    IS keyed by plot_id, but built from './plots.csv', which is not an approved file,
+    so it carries nothing the check can see; the sentence must say where it looked."""
+    plan = {"Ghost": _keyed_by_plot_id("Ghost", "./plots.csv")}
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert (
+        "no node built from 'plots.csv', 'readings.csv' is keyed by 'plot_id'"
+        in problems[0]
+    )
+    assert "no node is keyed by" not in problems[0]
+
+
+def test_a_value_quoted_in_the_refusal_cannot_break_its_layout(survey_source):
+    """Catches pasting raw cell text into a message the model reads as a list of
+    problems, one per line. A cell holding a quote, a newline and '- ' would forge
+    a second bullet; a very long cell would be copied whole."""
+    long_value = "x" * 300
+    with survey_source.open("/src/plots.csv", "w") as handle:
+        handle.write(
+            "plot_label,plot_id\n"
+            "ridge,PL-1\n"
+            'ridge,"PL-2\'\n- forged problem"\n'
+            f"hollow,PL-3\nhollow,{long_value}\n"
+        )
+    plan = {"Reading": _keyed_by_plot_id("Reading", "readings.csv")}
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
+    assert len(problems) == 1
+    assert "\n" not in problems[0]
+    assert long_value not in problems[0]
+
+
 def test_a_failed_value_read_downgrades_a_shortfall_to_unverified(
     survey_source, monkeypatch
 ):
-    """Catches a per-home-file loop that drops the evidence flag. detail.csv is a
-    genuine shortfall, but bad.csv carries the column with a readable header and a
-    value read that fails -- it could have been the node source that closes the gap,
-    so the refusal is withheld and the column is reported unverified instead."""
-    _write_detail_with_an_id_plots_lacks(survey_source)
+    """Catches a coverage loop that drops the evidence flag. No node carries plot_id,
+    but bad.csv carries the column with a readable header and a value read that
+    fails -- it could have been a home file a node covers, so the refusal is withheld
+    and the column is reported unverified instead."""
     with survey_source.open("/src/bad.csv", "w") as handle:
         handle.write("plot_id,x\nPL-1,a\n")
     real_read = rr.collect_column_values
@@ -344,7 +427,7 @@ def test_a_failed_value_read_downgrades_a_shortfall_to_unverified(
 
     monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
     problems, unverified = rr.check_reference_columns_are_reachable(
-        _plot_node("plot_id", ["canopy"]), ["plots.csv", "detail.csv", "bad.csv"]
+        _plot_node("plot_label", ["canopy"]), ["plots.csv", "readings.csv", "bad.csv"]
     )
     assert problems == []
     assert any("plot_id" in note and "bad.csv" in note for note in unverified)
@@ -417,10 +500,10 @@ def test_a_key_overlapping_none_of_the_identifier_files_values_says_so(
     assert "no node is keyed by" not in problems[0]
 
 
-def test_every_short_identifier_file_gets_its_own_clause(survey_source):
-    """Catches reporting only one short home file, or naming one shared closest node
-    for both. plots.csv (PL-1..PL-4) is closest to Reading; detail.csv (PL-5..PL-8)
-    is closest to Visit. The fix clause must not read as 'either file will do'."""
+def test_every_identifier_file_gets_its_own_clause(survey_source):
+    """Catches reporting only one home file, or naming one shared closest node for
+    both. plots.csv (PL-1..PL-4) is closest to Reading; detail.csv (PL-5..PL-8) is
+    closest to Visit. Covering either would do, so the fix clause names both."""
     fs = survey_source
     with fs.open("/src/detail.csv", "w") as handle:
         handle.write("plot_id,notes\nPL-5,a\nPL-6,b\nPL-7,c\nPL-8,d\n")
@@ -442,9 +525,7 @@ def test_every_short_identifier_file_gets_its_own_clause(survey_source):
         "'Visit' (built from 'visits.csv', keyed by 'plot_id') "
         "carries 3 of the 4 'plot_id' values 'detail.csv' holds"
     ) in text
-    assert (
-        "Each of 'plots.csv', 'detail.csv' needs a node carrying all its values" in text
-    )
+    assert "'plots.csv', 'detail.csv'" in text.split("Fix it", 1)[1]
 
 
 def test_two_witnesses_that_each_hold_part_of_an_identifier_files_values_are_not_combined(
@@ -536,12 +617,13 @@ def test_the_report_names_both_routes_out(survey_source):
     assert "cannot be built at all" in text
     assert "keying a node built from" in text
     assert "adding a node construction" in text
+    assert "a label of its own" in text
     assert "drop" not in text.lower()
 
 
 def test_the_report_has_no_blank_slot_when_every_file_is_a_home_file(survey_source):
     """Catches _report leaving blank slots ('appears in ' / 'joining  to') when the
-    column is per-row unique in every file that shares it, so referencing is empty --
+    column is per-row unique in every file that shares it, so repeating is empty --
     a legitimate 1:1 split with no 'other' file left to name."""
     fs = survey_source
     with fs.open("/src/detail.csv", "w") as handle:

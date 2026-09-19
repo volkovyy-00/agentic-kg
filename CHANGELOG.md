@@ -15,12 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   because the node carrying a reference column was built from a different file than the one that
   identifies rows by it. Keying a node by such a column from a file where it repeats, with the
   identifying file used only for relationships, was refused as unbuildable even though every join
-  matched. The check now asks whether some node carries every value each identifying file holds,
-  whichever file built it, and a refusal says how many values a node is missing and gives examples.
-  One case is stricter: when the same column identifies rows in more than one file and the plan's nodes
-  carry only some of those files' values, approval is now refused for the files left out; previously a
-  node from any one of them was enough. Ids that a file merely repeating the column points at, but no
-  identifying file lists, are still not refused.
+  matched. The check now asks whether some node carries every value an identifying file holds,
+  whichever file built it. A node can also carry the column as a property, now from any file, provided
+  each node keeps one value and no two nodes share one; previously only the identifying file's own node
+  counted. When a node holds only some of the values, the refusal says how many it is missing and gives
+  examples, and every refusal names a new node's label as needing to be its own.
 
 ## [0.6.1] - 2026-09-18
 
