@@ -88,6 +88,7 @@ def _home_files(column: str, files: List[str]) -> Tuple[List[str], bool, List[st
                 f"'{column}' could not be read in '{path}' ({error['error_message']})"
             )
             continue
+        assert values is not None  # collect_column_values: error is None => values set
         non_empty = [v for v in values if v is not None and str(v).strip() != ""]
         if values and len(non_empty) == len(values) == len(set(non_empty)):
             homes.append(path)
