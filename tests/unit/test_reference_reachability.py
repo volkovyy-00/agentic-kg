@@ -219,7 +219,8 @@ def test_a_retained_property_covering_only_part_of_the_identifier_file_is_report
     property. Reading keeps plot_id as a property and it survives collapsing (one row
     per reading_id) -- but only for the 2 ids readings.csv holds, the same 2 of
     plots.csv's 4 that keying by it carries. Catches a property path that works out
-    its values differently from the key path."""
+    its values differently from the key path, and a clause claiming the property
+    carries values: it is never read, so all the message can say is 'at most'."""
     plan = _plot_node("plot_label", ["canopy"])
     plan["Reading"] = {
         "construction_type": "node",
@@ -231,7 +232,8 @@ def test_a_retained_property_covering_only_part_of_the_identifier_file_is_report
     problems, unverified = rr.check_reference_columns_are_reachable(plan, APPROVED)
     assert len(problems) == 1
     assert "plot_id" in problems[0]
-    assert "carries 2 of the 4" in problems[0]
+    assert "retains 'plot_id', so could carry at most 2 of the 4" in problems[0]
+    assert "carries 2 of the 4" not in problems[0]
 
 
 def test_a_key_covering_only_part_of_the_identifier_file_is_reported(survey_source):

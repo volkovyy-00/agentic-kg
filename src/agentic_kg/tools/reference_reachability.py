@@ -368,15 +368,25 @@ def _shortfall_clause(
 
     Closest is the carrier holding the most of them. `max` keeps the first of
     equals, so a tie goes to the earlier rule in the plan.
+
+    A keyed carrier carries its values outright. One that only retains the column
+    is here because its file cannot cover the home file, so it was never read and
+    whether the property survives is unknown: all that is known is an upper bound.
     """
     wanted = value_sets[home]
     closest = max(carriers, key=lambda carrier: len(wanted & carrier.domain))
     carried = len(wanted & closest.domain)
-    share = f"{carried} of the" if carried else "none of the"
+    count = f"{carried} of the" if carried else "none of the"
+    if _rule_unique_column_name(closest.rule) == column:
+        share = f"carries {count}"
+    elif carried:
+        share = f"retains '{column}', so could carry at most {count}"
+    else:
+        share = f"retains '{column}' but could carry {count}"
     examples = sorted(wanted - closest.domain)[:_EXAMPLE_LIMIT]
     missing = ", ".join(_quoted_value(value) for value in examples)
     return (
-        f"{_node_description(closest.rule)} carries {share} {len(wanted)} "
+        f"{_node_description(closest.rule)} {share} {len(wanted)} "
         f"'{column}' values '{home}' holds (missing e.g. {missing})"
     )
 
