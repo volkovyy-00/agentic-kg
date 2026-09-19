@@ -59,7 +59,7 @@ def test_only_columns_present_in_two_files_are_considered(survey_source):
 def test_a_column_shared_but_unique_in_neither_file_has_no_home(survey_source):
     """Case 2: catches dropping the candidacy test. 'tally' is in both files and
     per-row unique in neither, so it is not an identifier at all."""
-    homes, complete, notes = rr._home_files("tally", ["plots.csv", "readings.csv"])
+    homes, complete, notes, _ = rr._home_files("tally", ["plots.csv", "readings.csv"])
     assert homes == []
     assert complete is True
     assert notes == []
@@ -68,7 +68,7 @@ def test_a_column_shared_but_unique_in_neither_file_has_no_home(survey_source):
 def test_the_home_file_is_the_one_where_the_column_is_per_row_unique(survey_source):
     """Catches treating any file containing the column as a home file: plot_id is
     unique in plots.csv and repeats in readings.csv."""
-    homes, complete, notes = rr._home_files("plot_id", ["plots.csv", "readings.csv"])
+    homes, complete, notes, _ = rr._home_files("plot_id", ["plots.csv", "readings.csv"])
     assert homes == ["plots.csv"]
     assert complete is True
 
@@ -90,10 +90,27 @@ def test_an_unreadable_header_is_noted_and_does_not_raise(survey_source):
     assert columns["plot_id"] == ["plots.csv"]
 
 
+def test_home_files_returns_the_values_of_every_readable_file_without_blanks(
+    survey_source,
+):
+    """Catches a value set that keeps a blank, or that covers only the home files: a
+    witness built from a file where the column repeats needs that file's own values,
+    and an unreadable file has none to give."""
+    with survey_source.open("/src/readings.csv", "w") as handle:
+        handle.write("reading_id,plot_id,tally\nR-1,PL-1,3\nR-2,,3\nR-3,PL-3,5\n")
+    _, _, _, value_sets = rr._home_files(
+        "plot_id", ["plots.csv", "readings.csv", "absent.csv"]
+    )
+    assert value_sets == {
+        "plots.csv": {"PL-1", "PL-2", "PL-3", "PL-4"},
+        "readings.csv": {"PL-1", "PL-3"},
+    }
+
+
 def test_an_unreadable_value_read_marks_evidence_incomplete(survey_source):
     """Catches an implementation that silently treats an unreadable file as 'not a
     home file'. The flag is what later stops a refusal being built on a failed read."""
-    homes, complete, notes = rr._home_files("plot_id", ["plots.csv", "absent.csv"])
+    homes, complete, notes, _ = rr._home_files("plot_id", ["plots.csv", "absent.csv"])
     assert homes == ["plots.csv"]
     assert complete is False
     assert len(notes) == 1

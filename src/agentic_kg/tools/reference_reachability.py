@@ -18,7 +18,7 @@ Nothing here raises. Every read failure becomes a note, and a note never becomes
 a refusal -- see the evidence rule in check_reference_columns_are_reachable.
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 from agentic_kg.common.csv_reader import read_csv_header
 
@@ -67,8 +67,10 @@ def _columns_by_file(
     return columns, unreadable, notes
 
 
-def _home_files(column: str, files: List[str]) -> Tuple[List[str], bool, List[str]]:
-    """Stage 2: the files in which this column identifies rows.
+def _home_files(
+    column: str, files: List[str]
+) -> Tuple[List[str], bool, List[str], Dict[str, Set[str]]]:
+    """Stage 2: the files in which this column identifies rows, and every value read.
 
     Per-row unique means no empty values and every value distinct -- the same
     condition column_stats reports as 'is_unique'. A column unique nowhere is not
@@ -76,10 +78,17 @@ def _home_files(column: str, files: List[str]) -> Tuple[List[str], bool, List[st
 
     Returns evidence_complete=False when any file's values could not be read, so
     a later refusal can be downgraded rather than built on missing evidence.
+
+    The fourth element maps every file that WAS read -- home or not -- to its
+    distinct non-blank values. A node built from a file where the column repeats
+    can still carry every value a home file holds, so that file's values are
+    needed too. The blank filter here is the only one: later comparisons read
+    these sets rather than filtering again.
     """
     homes: List[str] = []
     evidence_complete = True
     notes: List[str] = []
+    value_sets: Dict[str, Set[str]] = {}
     for path in files:
         values, error = collect_column_values(path, column)
         if error is not None:
@@ -90,9 +99,10 @@ def _home_files(column: str, files: List[str]) -> Tuple[List[str], bool, List[st
             continue
         assert values is not None  # collect_column_values: error is None => values set
         non_empty = [v for v in values if v is not None and str(v).strip() != ""]
+        value_sets[path] = {str(v) for v in non_empty}
         if values and len(non_empty) == len(values) == len(set(non_empty)):
             homes.append(path)
-    return homes, evidence_complete, notes
+    return homes, evidence_complete, notes, value_sets
 
 
 def _node_rules(construction_plan: dict) -> List[dict]:
@@ -230,7 +240,7 @@ def check_reference_columns_are_reachable(
         if len(files) < 2:
             continue
 
-        homes, evidence_complete, notes = _home_files(column, files)
+        homes, evidence_complete, notes, _ = _home_files(column, files)
         if not homes and evidence_complete:
             continue  # shared, but identifies rows nowhere: not a reference column
 
