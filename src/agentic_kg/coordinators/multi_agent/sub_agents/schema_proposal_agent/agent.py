@@ -1,3 +1,4 @@
+import logging
 from typing import AsyncGenerator, Optional
 
 from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
@@ -16,6 +17,95 @@ from agentic_kg.tools.construction_plan_tools import (
 )
 
 finished = make_finished(MULTI_AGENT_COORDINATOR)
+
+logger = logging.getLogger(__name__)
+
+# The loop's own wording. It carries neither "approv" nor "ready" in any form:
+# the critic and proposal steps read this text on the next iteration, and PR #20
+# settled that approval framing has no business in their context ("not ready for
+# approval" is a readiness verdict even without the word "approval").
+#
+# It is also the marker that identifies this text later -- see _is_loop_authored
+# -- so tests build their fixtures from the constant rather than copying it.
+PLAN_PROBLEM_HEADER = "retry: checks on the plan found problems that must be fixed:"
+CRITIC_PREAMBLE = "The critic also said:"
+
+EMPTY_VERDICT_SUMMARY = (
+    "retry: the critic produced no verdict. Call "
+    "'get_proposed_construction_plan_with_approval_check' and judge the "
+    "plan yourself rather than running the loop again on no feedback."
+)
+
+
+def _normalized(text: str) -> str:
+    """One token or one line, reduced to the form comparisons are made in.
+
+    The escalate router compares the verdict's first *token*; the composer
+    compares its first *line*. Same rule, two granularities -- one helper, so
+    rewording either cannot silently diverge from the other.
+    """
+    return text.strip().strip(":.,").lower()
+
+
+def _is_loop_authored(verdict: str) -> bool:
+    """Whether the feedback slot holds this loop's own composite, not a verdict.
+
+    ADK writes an agent's output_key only when its final response carries a text
+    part, so a critic that ends an iteration without text leaves the PREVIOUS
+    iteration's composite sitting in 'feedback'. Two things follow, and the
+    second is the reason this exists:
+
+    - composing on top of it would nest a second header; and
+    - if the plan has since been repaired, passing it through would hand the
+      coordinator 'retry: checks on the plan found problems...' for a plan with
+      nothing wrong. A stale opinion is the status quo; a stale assertion of
+      mechanical fact is worse.
+
+    Treating it as "no verdict this round" costs round 1's critic objections
+    when round 2's critic is silent, and keeps every mechanical problem. A
+    critic that parrots the header is treated the same way, which is safe.
+    """
+    return verdict.strip().startswith(PLAN_PROBLEM_HEADER)
+
+
+def _without_bare_valid(verdict: str) -> str:
+    """The verdict minus a first line that says nothing but 'valid'.
+
+    Only the first line, and only when it is bare: the critic appends a
+    'Warnings:' section to a valid verdict for data-quality issues no schema
+    change can fix, and those notes are for the user. Dropping the bare word
+    alone avoids a 'valid' sitting under a 'retry' header.
+    """
+    text = verdict.strip()
+    if not text:
+        return ""
+    first_line, _, rest = text.partition("\n")
+    if _normalized(first_line) == "valid":
+        return rest.strip()
+    return text
+
+
+def _compose_feedback(verdict: str, problems: list[str]) -> str:
+    """The loop's verdict when a mechanical check found problems.
+
+    'retry' is written here, never inherited: the coordinator routes on the
+    result BEGINNING with it, and a critic verdict that routes as a retry
+    ("Validation failed: ...") does not begin with it.
+
+    Problem strings are reproduced verbatim, one bullet each, exactly as
+    approval renders them -- that is what makes the two paths name the same
+    problems by construction.
+
+    The critic's own text is kept alongside rather than replaced, because on a
+    second retry the coordinator must still show its remaining objections.
+    """
+    bullets = "\n".join(f"- {problem}" for problem in problems)
+    composite = f"{PLAN_PROBLEM_HEADER}\n{bullets}"
+    remainder = _without_bare_valid(verdict)
+    if remainder:
+        composite += f"\n\n{CRITIC_PREAMBLE}\n{remainder}"
+    return composite
+
 
 from .variants import variants
 
