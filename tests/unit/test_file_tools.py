@@ -624,3 +624,50 @@ def test_a_zero_byte_file_has_no_header_row_in_every_file_tool(edge_source):
     ):
         assert result["status"] == "error"
         assert "no header row" in result["error_message"]
+
+
+@pytest.fixture
+def ragged_source(memory_source):
+    """A short row, a blank line, and values that differ only by whitespace."""
+    fs = memory_source
+    with fs.open("/src/ragged.csv", "w") as handle:
+        handle.write("key,value\nk1,x\nk2\n\nk3, x\nk4,   \n")
+    return fs
+
+
+def test_column_stats_counts_a_ragged_row_and_a_blank_line_as_rows(ragged_source):
+    """'k2' is too short to reach 'value' (absent key, None); the blank line is a
+    row whose every cell is absent; 'k4' holds whitespace only. All three are
+    empty, none is distinct, and all count toward row_count."""
+    result = file_tools.column_stats("ragged.csv", "value", FakeToolContext())
+    stats = result["column_stats"]
+    assert stats["row_count"] == 5
+    assert stats["empty_count"] == 3
+    assert stats["distinct_count"] == 2
+    assert stats["is_unique"] is False
+
+
+def test_column_stats_keeps_a_leading_space_distinct(ragged_source):
+    """' x' is blank-trimmed only for the emptiness test, never for identity:
+    ' x' and 'x' are two values, and a rewrite that strips before comparing
+    would silently merge two source rows."""
+    result = file_tools.column_stats("ragged.csv", "value", FakeToolContext())
+    assert result["column_stats"]["distinct_count"] == 2
+
+
+def test_collapse_check_folds_an_absent_key_in_with_a_blank_one(ragged_source):
+    """An absent key groups with a genuinely blank one, which is how the loader
+    treats them. Today that fold happens in collect_column_pairs, whose
+    row.get(column, "") supplies the default; group_values_by_key's own None
+    handling never sees a None from that path. After this change one summariser
+    does both."""
+    result = file_tools.collapse_check("ragged.csv", "value", "key", FakeToolContext())
+    check = result["collapse_check"]
+    assert check["row_count"] == 5
+    # Grouped by 'value': 'x', '' (the short row and the blank line together),
+    # ' x' and '   ' -- whitespace is trimmed to decide emptiness, never identity.
+    assert check["group_count"] == 4
+    assert check["groups_with_conflicts"] == 1
+    assert check["example_conflicts"] == [
+        {"node_key": "", "values": ["", "k2"]},
+    ]
