@@ -282,10 +282,8 @@ the driver and returns `ToolResult`s via `result_to_adk`. The singleton's identi
 `close_graphdb()` or a transient outage, because `_ensure_connected()` transparently rebuilds the driver on next
 use rather than requiring callers to re-fetch the singleton. Since `neo4j` 6.x, using a closed `Driver` raises
 `DriverError("Driver closed")` (5.x only warned), so a call site that skips the heal fails every tool call through
-it. `tests/integration/test_connection_recovery.py` closes the client before each tool path, so the tool called
-next is the first to meet a closed driver — but a heal that never runs first even then is still uncovered there
-(`get_config`, which `_physical_schema` calls one line after `get_driver`; unit-tested instead). A new entry point
-needs its own close-then-call step. Config comes from `Neo4jDsn`/`Neo4jConfig`
+it — so every entry point that hands out or uses the driver must go through the heal, and a new one needs its own
+step in `tests/integration/test_connection_recovery.py`, which documents how it covers them. Config comes from `Neo4jDsn`/`Neo4jConfig`
 (`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var (local `bolt://` and Aura `neo4j+s://` DSNs both
 work — see `.env.example` for the full list of allowed schemes). `tools/cypher_tools.py` builds on this for
 higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no

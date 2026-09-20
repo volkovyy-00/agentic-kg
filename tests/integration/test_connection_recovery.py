@@ -19,7 +19,8 @@ pytestmark = pytest.mark.integration
 # close(), and every graph tool turns that into a `status: error` result. So a
 # call site that lost its heal fails its tool's success assertion -- but only
 # if it is the FIRST call after a close; once any path heals, the rest run on
-# the new driver. Hence the close before every step below.
+# the new driver. Hence the close before every step below, and hence a new
+# entry point needing its own close-then-call step to be covered at all.
 #
 # The logger _ensure_connected writes its rebuild line to. The rebuild count
 # pins that each heal actually ran, as opposed to the step succeeding some
@@ -86,18 +87,15 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
     # entry from an earlier test could mask a broken profiling path.
     graph_profile.reset_cache()
 
-    # Each step below starts with a break -- exactly what neo4j_is_ready does on
-    # a transient failure -- so that the tool called next is the first to meet a
-    # closed driver (see the comment on RECONNECT_LOGGER). Coverage is per path
-    # exercised here: a new entry point that heals needs its own close-then-call
-    # step, or a lost heal there goes unnoticed.
+    # Each step below opens with a break -- exactly what neo4j_is_ready does on
+    # a transient failure. See RECONNECT_LOGGER for why every step needs its own.
     #
-    # What that does NOT reach is a heal that never runs first within its own
-    # step. get_config() is the case: _physical_schema calls get_driver() one
-    # line earlier, which clears _closed, so dropping get_config's heal passes
-    # every test here. tests/unit/test_neo4j_for_adk.py covers it instead --
-    # and it needs covering, since a stale config returns success-shaped data
-    # rather than failing (see get_config's docstring).
+    # The exception is a heal that still does not run first within its own step.
+    # get_config() is the case: _physical_schema calls get_driver() one line
+    # earlier, which clears _closed, so dropping get_config's heal passes every
+    # test here. tests/unit/test_neo4j_for_adk.py covers it instead -- and it
+    # needs covering, since a stale config returns success-shaped data rather
+    # than failing (see get_config's docstring).
     with caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
         # 1. Schema read -- the get_driver() path.
         neo4j_for_adk.close_graphdb()
@@ -107,9 +105,7 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
 
         # 2. Profiled schema -- the profiling path end to end, including
         #    graph_profile's own binding and cache invalidation. Real data, not
-        #    merely absence of error. (get_driver() heals first here too, so
-        #    what this pins on graph_profile's binding is that it still works,
-        #    not that it heals by itself.)
+        #    merely absence of error.
         neo4j_for_adk.close_graphdb()
         profiled = cypher_tools.get_graph_schema_with_profile()
         assert profiled["status"] == "success", profiled.get("error_message")
@@ -122,8 +118,9 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
         assert rows["status"] == "success", rows.get("error_message")
         assert rows["query_result"]["records"][0]["c"] == 88
 
-        # 4. Both loaders -- the send_query path; each opens with a write
-        #    (create_uniqueness_constraint, then the UNWIND batches).
+        # 4. Both loaders -- the send_query path. import_nodes opens with
+        #    create_uniqueness_constraint, import_relationships with its first
+        #    UNWIND batch; either way a write is the first call after the break.
         neo4j_for_adk.close_graphdb()
         assert kg.import_nodes(SUPPLIER_RULE)["status"] == "success"
         neo4j_for_adk.close_graphdb()
