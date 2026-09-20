@@ -40,7 +40,9 @@ _VALIDATION_RULES = """
               how many distinct values a column actually holds. Do not judge uniqueness with
               'search_file': it is a substring scan over raw lines and cannot distinguish a repeated
               value from a coincidental match elsewhere in a row. Composite identifiers are not
-              acceptable.
+              acceptable. Check 'row_count' as well: a file holding a header and no data rows
+              reports 'is_unique' true over zero distinct values, which is vacuous rather than
+              evidence that the column identifies anything.
             - A per-row identifier being unique is not enough: it can still be the wrong node
               identifier. A file can have one row per *pairing* of two entities (e.g. one row per
               item that belongs to a group), where every row gets its own unique ID even though the
@@ -66,7 +68,9 @@ _VALIDATION_RULES = """
             - Call 'collapse_check' with the node's source file, the node's declared unique
               identifier as 'node_key_column', and the candidate join column as 'candidate_column'.
               The join key is safe only if 'survives_collapse' is true (that is,
-              'groups_with_conflicts' is 0). Any conflicting group listed in 'example_conflicts' is
+              'groups_with_conflicts' is 0) AND 'row_count' is above 0. A file holding a header and
+              no data rows reports 'survives_collapse' true because nothing collapsed -- that is
+              vacuous, not clearance. Any conflicting group listed in 'example_conflicts' is
               a node whose join value would be silently overwritten.
             - Do not substitute 'column_stats' or 'join_preview' for this check. 'column_stats' only
               reports how unique a column is on its own, which answers "could this be a node

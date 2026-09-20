@@ -420,14 +420,14 @@ def test_a_failed_value_read_downgrades_a_shortfall_to_unverified(
     and the column is reported unverified instead."""
     with survey_source.open("/src/bad.csv", "w") as handle:
         handle.write("plot_id,x\nPL-1,a\n")
-    real_read = rr.collect_column_values
+    real_read = rr.summarize_column
 
     def read_or_fail(path, column):
         if path == "bad.csv":
             return None, tool_error("simulated read failure")
         return real_read(path, column)
 
-    monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
+    monkeypatch.setattr(rr, "summarize_column", read_or_fail)
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_label", ["canopy"]), ["plots.csv", "readings.csv", "bad.csv"]
     )
@@ -443,14 +443,14 @@ def test_a_failed_read_of_the_only_possible_identifier_file_is_unverified(
     value read fails, so no file is known to be a home file and nothing is known to
     be covered. The plan keys Plot by plot_label, so the column may be stranded: it
     must be reported unverified, never passed silently."""
-    real_read = rr.collect_column_values
+    real_read = rr.summarize_column
 
     def read_or_fail(path, column):
         if path == "plots.csv":
             return None, tool_error("simulated read failure")
         return real_read(path, column)
 
-    monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
+    monkeypatch.setattr(rr, "summarize_column", read_or_fail)
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_label", ["canopy"]), APPROVED
     )
@@ -799,3 +799,94 @@ def test_a_non_iterable_approved_file_list_does_not_raise(survey_source):
     )
     assert problems == []
     assert unverified == []
+
+
+def test_a_header_only_file_is_not_an_identifier_home(survey_source):
+    """Zero rows is not a home: _home_files' at-least-one-row condition is the
+    one place uniqueness and identity differ, and it must survive the rewrite.
+
+    Keep this file's vocabulary neutral -- tests/unit/test_generality.py asserts
+    the bundled dataset's column names are absent from this module."""
+    fs = survey_source
+    with fs.open("/src/header_only.csv", "w") as handle:
+        handle.write("plot_label,canopy\n")
+    homes, evidence_complete, notes, value_sets = rr._home_files(
+        "plot_label", ["header_only.csv"]
+    )
+    assert homes == []
+    assert evidence_complete is True
+    assert notes == []
+    assert value_sets == {"header_only.csv": set()}
+
+
+def test_a_zero_row_source_withholds_evidence_instead_of_supplying_it(survey_source):
+    """A zero-row source has no conflicting group and no value under two keys
+    because it has no rows, so both of _property_failure's checks pass
+    vacuously and the caller would read (None, None) as 'covered'. It must
+    return a message instead, exactly as an unreadable source does -- the
+    docstring's rule is that it withholds evidence, never supplies it.
+
+    _property_failure cannot be reached this way through
+    check_reference_columns_are_reachable, because _home_files admits a home
+    only when row_count is non-zero and no non-empty home set is a subset of
+    this file's empty one. That makes this the only place the contract can be
+    pinned, and the reason to pin it: the guard must not silently depend on a
+    condition living in another function."""
+    fs = survey_source
+    with fs.open("/src/empty_export.csv", "w") as handle:
+        handle.write("plot_label,canopy\n")
+    rule = {
+        "construction_type": "node",
+        "source_file": "empty_export.csv",
+        "label": "Plot",
+        "unique_column_name": "plot_label",
+        "properties": ["plot_label", "canopy"],
+    }
+    failure, error_message = rr._property_failure(rule, "canopy")
+    assert failure is None
+    assert error_message == "the source has no data rows"
+
+
+def test_a_zero_byte_file_passes_the_reachability_check_in_silence(survey_source):
+    """Deliberate asymmetry with the file tools, and pre-existing: _columns_by_file
+    reads headers through read_csv_header, which returns [] for a zero-byte file
+    WITHOUT raising, so the file contributes no column names and never reaches
+    _home_files. Pinned so the rewrite does not 'fix' it into a new answer."""
+    fs = survey_source
+    with fs.open("/src/empty.csv", "w") as handle:
+        handle.write("")
+    plan = {
+        "r1": {
+            "construction_type": "node",
+            "source_file": "empty.csv",
+            "label": "Thing",
+            "unique_column_name": "plot_label",
+            "properties": ["plot_label"],
+        }
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, ["empty.csv"])
+    assert problems == []
+    assert unverified == []
+
+
+def test_a_failure_part_way_through_a_read_becomes_a_note_not_a_raise(
+    survey_source, monkeypatch
+):
+    """reference_reachability promises that nothing in it raises. A mid-read
+    failure must arrive as evidence_complete=False plus a note.
+
+    Patched by dotted path rather than through an imported module object, so this
+    needs no new import in either the test module or the production one."""
+
+    def failing_batches(path, *args, **kwargs):
+        yield ["plot_label"], [{"plot_label": "ridge"}]
+        raise OSError("source went away")
+
+    monkeypatch.setattr("agentic_kg.tools.file_tools.read_csv_batches", failing_batches)
+    homes, evidence_complete, notes, value_sets = rr._home_files(
+        "plot_label", ["plots.csv"]
+    )
+    assert homes == []
+    assert evidence_complete is False
+    assert len(notes) == 1
+    assert "plots.csv" in notes[0]

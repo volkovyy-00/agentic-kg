@@ -538,28 +538,343 @@ def test_the_hint_docstring_documents_every_key_it_returns(bom_source):
         assert f"'{key}'" in file_tools.column_type_hint.__doc__, key
 
 
-def test_group_values_by_key_returns_every_group_not_only_conflicts():
-    """Catches an extraction that returns the filtered conflict list: collapse_check
-    needs group_count, which is len(groups) BEFORE filtering."""
-    groups = file_tools.group_values_by_key([("k1", "a"), ("k1", "b"), ("k2", "c")])
-    assert set(groups) == {"k1", "k2"}
-    assert groups["k1"] == {"a", "b"}
-    assert groups["k2"] == {"c"}
+def test_the_group_summary_counts_every_key_not_only_the_conflicting_ones(
+    conflict_source,
+):
+    """Catches a summariser that counts only what it reports: collapse_check needs
+    group_count, which is every distinct key, alongside groups_with_conflicts."""
+    summary, error = file_tools.summarize_key_groups(
+        "late_conflict.csv", "key", "value", keep_examples=5
+    )
+    assert error is None
+    assert summary is not None
+    assert summary.group_count == 3
+    assert summary.conflict_count == 2
 
 
-def test_group_values_by_key_normalises_none_to_empty_string():
-    """Catches an extraction that drops collapse_check's None handling, which would
-    make a ragged row's absent key crash on set membership."""
-    groups = file_tools.group_values_by_key([(None, None)])
-    assert groups == {"": {""}}
+def test_the_group_summary_folds_an_absent_key_in_with_a_blank_one(ragged_source):
+    """Catches a summariser that drops the None handling, which would make a
+    ragged row's absent key a separate group from a genuinely blank one."""
+    summary, error = file_tools.summarize_key_groups(
+        "ragged.csv", "value", "key", keep_examples=5
+    )
+    assert error is None
+    assert summary is not None
+    assert summary.group_count == 4
 
 
 def test_the_column_readers_are_importable_under_their_public_names(memory_source):
-    """Catches a promotion that renamed only the definition and left call sites (or
-    vice versa) — reference_reachability imports these by their public names."""
+    """Catches a rename that touched the definition and not the call sites (or
+    the reverse) -- reference_reachability imports the summarisers by name, and
+    column_type_hint still imports the per-row collector."""
+    summary, error = file_tools.summarize_column("people.csv", "name")
+    assert error is None
+    assert summary is not None
+    assert summary.distinct == {"Ada", "Grace"}
+    assert summary.is_unique is True
+
+    groups, error = file_tools.summarize_key_groups("people.csv", "id", "name")
+    assert error is None
+    assert groups is not None
+    assert groups.group_count == 2
+
     values, error = file_tools.collect_column_values("people.csv", "name")
     assert error is None
     assert values == ["Ada", "Grace"]
-    pairs, error = file_tools.collect_column_pairs("people.csv", "id", "name")
+
+
+@pytest.fixture
+def edge_source(memory_source):
+    """A header-only export and a zero-byte file, next to an ordinary CSV."""
+    fs = memory_source
+    with fs.open("/src/header_only.csv", "w") as handle:
+        handle.write("id,name\n")
+    with fs.open("/src/empty.csv", "w") as handle:
+        handle.write("")
+    return fs
+
+
+def test_column_stats_calls_a_header_only_column_vacuously_unique(edge_source):
+    """A header-only file is a valid empty export. Zero rows means no empties and
+    zero distinct values, so the is_unique arithmetic returns True. Pinned so the
+    streaming rewrite cannot change it by accident."""
+    result = file_tools.column_stats("header_only.csv", "id", FakeToolContext())
+    assert result["status"] == "success"
+    stats = result["column_stats"]
+    assert stats["row_count"] == 0
+    assert stats["distinct_count"] == 0
+    assert stats["empty_count"] == 0
+    assert stats["is_unique"] is True
+
+
+def test_join_preview_of_a_header_only_file_reports_zero_coverage(edge_source):
+    result = file_tools.join_preview(
+        "header_only.csv", "id", "people.csv", "id", FakeToolContext()
+    )
+    assert result["status"] == "success"
+    preview = result["join_preview"]
+    assert preview["file_a_total"] == 0
+    assert preview["file_a_matched"] == 0
+    assert preview["file_a_match_fraction"] == 0.0
+    assert preview["file_b_total"] == 2
+
+
+def test_collapse_check_reads_a_header_only_file_as_zero_rows(edge_source):
+    """Was an error before this change: collect_column_pairs had no header
+    fallback, so a valid empty export looked like a broken file. Zero rows
+    trivially survive collapsing -- see the docstring note on why that True is
+    vacuous."""
+    result = file_tools.collapse_check(
+        "header_only.csv", "id", "name", FakeToolContext()
+    )
+    assert result["status"] == "success"
+    check = result["collapse_check"]
+    assert check["row_count"] == 0
+    assert check["group_count"] == 0
+    assert check["groups_with_conflicts"] == 0
+    assert check["survives_collapse"] is True
+    assert check["example_conflicts"] == []
+
+
+def test_collapse_check_still_names_a_missing_column_in_a_header_only_file(
+    edge_source,
+):
+    """The zero-row path must not swallow a misspelled column."""
+    result = file_tools.collapse_check(
+        "header_only.csv", "id", "nope", FakeToolContext()
+    )
+    assert result["status"] == "error"
+    assert "nope" in result["error_message"]
+
+
+def test_a_zero_byte_file_has_no_header_row_in_every_file_tool(edge_source):
+    """A file with no header cannot even say whether a column is misspelled. All
+    three file tools agree; the reachability check does not (see
+    test_a_zero_byte_file_passes_the_reachability_check_in_silence)."""
+    context = FakeToolContext()
+    for result in (
+        file_tools.column_stats("empty.csv", "id", context),
+        file_tools.collapse_check("empty.csv", "id", "name", context),
+        file_tools.join_preview("empty.csv", "id", "people.csv", "id", context),
+    ):
+        assert result["status"] == "error"
+        assert "no header row" in result["error_message"]
+
+
+@pytest.fixture
+def ragged_source(memory_source):
+    """A short row, a blank line, and values that differ only by whitespace."""
+    fs = memory_source
+    with fs.open("/src/ragged.csv", "w") as handle:
+        handle.write("key,value\nk1,x\nk2\n\nk3, x\nk4,   \n")
+    return fs
+
+
+def test_column_stats_counts_a_ragged_row_and_a_blank_line_as_rows(ragged_source):
+    """'k2' is too short to reach 'value' (absent key, None); the blank line is a
+    row whose every cell is absent; 'k4' holds whitespace only. All three are
+    empty, none is distinct, and all count toward row_count."""
+    result = file_tools.column_stats("ragged.csv", "value", FakeToolContext())
+    stats = result["column_stats"]
+    assert stats["row_count"] == 5
+    assert stats["empty_count"] == 3
+    assert stats["distinct_count"] == 2
+    assert stats["is_unique"] is False
+
+
+def test_column_stats_keeps_a_leading_space_distinct(ragged_source):
+    """' x' is blank-trimmed only for the emptiness test, never for identity:
+    ' x' and 'x' are two values, and a rewrite that strips before comparing
+    would silently merge two source rows."""
+    result = file_tools.column_stats("ragged.csv", "value", FakeToolContext())
+    assert result["column_stats"]["distinct_count"] == 2
+
+
+def test_collapse_check_folds_an_absent_key_in_with_a_blank_one(ragged_source):
+    """An absent key groups with a genuinely blank one, which is how the loader
+    treats them. That fold used to happen in the pair collector, whose
+    row.get(column, "") default meant the grouper's own None handling never saw a
+    None from that path. One summariser now does both."""
+    result = file_tools.collapse_check("ragged.csv", "value", "key", FakeToolContext())
+    check = result["collapse_check"]
+    assert check["row_count"] == 5
+    # Grouped by 'value': 'x', '' (the short row and the blank line together),
+    # ' x' and '   ' -- whitespace is trimmed to decide emptiness, never identity.
+    assert check["group_count"] == 4
+    assert check["groups_with_conflicts"] == 1
+    assert check["example_conflicts"] == [
+        {"node_key": "", "values": ["", "k2"]},
+    ]
+
+
+@pytest.fixture
+def conflict_source(memory_source):
+    """Shapes that distinguish first-appearance order from detection order."""
+    fs = memory_source
+    # 'a' appears first but only disagrees on its last row; 'b' appears second
+    # and disagrees immediately. Today's answer lists a before b.
+    with fs.open("/src/late_conflict.csv", "w") as handle:
+        handle.write("key,value\na,1\nb,1\nb,2\nc,1\na,2\n")
+    # Seven conflicting keys, so the five reported are chosen, not merely all.
+    with fs.open("/src/many_conflicts.csv", "w") as handle:
+        rows = "".join(f"k{i},1\nk{i},2\n" for i in range(7))
+        handle.write("key,value\n" + rows)
+    # 'z' is seen first but sorts last: the ten reported values are the ten
+    # SMALLEST of all distinct values, so the first-seen value can fall outside.
+    with fs.open("/src/wide_conflict.csv", "w") as handle:
+        values = ["z"] + [f"v{i:02d}" for i in range(12)]
+        handle.write("key,value\n" + "".join(f"k,{v}\n" for v in values))
+    # A blank and a non-blank under one key: a conflict forward, and the
+    # reverse direction drops the blank.
+    with fs.open("/src/blank_conflict.csv", "w") as handle:
+        handle.write("key,value\nk,\nk,x\n")
+    # Seven keys appear in order k0..k6, then conflict in REVERSE order. The
+    # five reported must end up k0..k4, which means k6 and k5 are admitted first
+    # and then displaced by earlier-appearing keys.
+    with fs.open("/src/reverse_conflicts.csv", "w") as handle:
+        first_pass = "".join(f"k{i},1\n" for i in range(7))
+        second_pass = "".join(f"k{i},2\n" for i in range(6, -1, -1))
+        handle.write("key,value\n" + first_pass + second_pass)
+    return fs
+
+
+def test_collapse_check_reports_conflicts_in_first_appearance_order(conflict_source):
+    """'b' starts disagreeing on row 3 and 'a' only on row 5, yet 'a' is reported
+    first, because grouping is by first appearance and not by detection. A
+    streaming rewrite that reports conflicts as it notices them fails here."""
+    result = file_tools.collapse_check(
+        "late_conflict.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["group_count"] == 3
+    assert check["groups_with_conflicts"] == 2
+    assert [entry["node_key"] for entry in check["example_conflicts"]] == ["a", "b"]
+
+
+def test_collapse_check_reports_the_five_earliest_of_seven_conflicts(conflict_source):
+    """Seven keys conflict; the five named are the five that appear earliest in
+    the file, and 'groups_with_conflicts' still counts all seven."""
+    result = file_tools.collapse_check(
+        "many_conflicts.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["group_count"] == 7
+    assert check["groups_with_conflicts"] == 7
+    assert [entry["node_key"] for entry in check["example_conflicts"]] == [
+        "k0",
+        "k1",
+        "k2",
+        "k3",
+        "k4",
+    ]
+
+
+def test_collapse_check_reports_the_ten_smallest_values_not_the_first_ten(
+    conflict_source,
+):
+    """'z' is the first value seen and is not among the ten reported, because the
+    report is sorted(values)[:10]. A rewrite keeping 'the first ten seen' fails."""
+    result = file_tools.collapse_check(
+        "wide_conflict.csv", "key", "value", FakeToolContext()
+    )
+    values = result["collapse_check"]["example_conflicts"][0]["values"]
+    assert values == [f"v{i:02d}" for i in range(10)]
+    assert "z" not in values
+
+
+def test_collapse_check_displaces_a_late_conflict_with_an_earlier_key(
+    conflict_source,
+):
+    """Every key appears before any of them conflicts, and they then conflict in
+    reverse order -- so k6 and k5 are the first to earn a place and must be
+    displaced by k1 and k0. A streaming implementation that keeps the first five
+    it notices reports k6..k2 here. The variant that always admits a
+    newly-conflicting key instead of making it compete survives this shape --
+    test_collapse_check_reports_the_five_earliest_of_seven_conflicts is what
+    catches that one. Deterministic on purpose: the randomized differential
+    catches this too, but only on some seeds, and a seed is not a regression
+    test."""
+    result = file_tools.collapse_check(
+        "reverse_conflicts.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["group_count"] == 7
+    assert check["groups_with_conflicts"] == 7
+    assert [entry["node_key"] for entry in check["example_conflicts"]] == [
+        "k0",
+        "k1",
+        "k2",
+        "k3",
+        "k4",
+    ]
+
+
+def test_collapse_check_counts_a_blank_against_a_value_as_a_conflict(conflict_source):
+    """Forward grouping keeps the blank, so {'', 'x'} is two distinct values under
+    one key. The reverse direction, which only _property_failure uses, drops it."""
+    result = file_tools.collapse_check(
+        "blank_conflict.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["groups_with_conflicts"] == 1
+    assert check["example_conflicts"] == [{"node_key": "k", "values": ["", "x"]}]
+
+    summary, error = file_tools.summarize_key_groups(
+        "blank_conflict.csv", "key", "value", track_value_owners=True
+    )
     assert error is None
-    assert pairs == [("1", "Ada"), ("2", "Grace")]
+    assert summary is not None
+    assert summary.values_on_one_key is True
+
+
+def test_a_failure_part_way_through_a_read_returns_an_error_not_a_raise(
+    memory_source, monkeypatch
+):
+    """A source can fail after the header and some rows have been read. Today the
+    collectors catch it around the batch loop and return a tool_error; the
+    summarisers must keep owning that, because handing callers a lazy iterator
+    would move the failure into find_plan_problems, which does not catch."""
+
+    def failing_batches(path, *args, **kwargs):
+        yield ["id", "name"], [{"id": "1", "name": "Ada"}]
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(file_tools, "read_csv_batches", failing_batches)
+    result = file_tools.column_stats("people.csv", "id", FakeToolContext())
+    assert result["status"] == "error"
+    assert "people.csv" in result["error_message"]
+
+    result = file_tools.collapse_check("people.csv", "id", "name", FakeToolContext())
+    assert result["status"] == "error"
+
+
+def test_the_row_reader_validates_columns_before_yielding_a_header_only_file(
+    edge_source,
+):
+    """The loader's _batches_and_header exists because read_csv_batches yields
+    nothing for a header-only file, so a column check inside the batch loop never
+    runs for one. The row reader must not repeat that: a misspelled column in a
+    valid empty export is still a misspelled column."""
+    rows, error = file_tools._column_rows("header_only.csv", ["nope"])
+    assert error is not None
+    assert "nope" in error["error_message"]
+    assert list(rows) == []
+
+    rows, error = file_tools._column_rows("header_only.csv", ["id", "name"])
+    assert error is None
+    assert list(rows) == []
+
+
+def test_the_row_reader_yields_absent_and_blank_cells_apart(ragged_source):
+    """None means the row was too short to reach the column; "" means the cell was
+    present and empty. The loader treats them differently, so the reader must not
+    fold them together -- that is each summariser's own decision."""
+    rows, error = file_tools._column_rows("ragged.csv", ["key", "value"])
+    assert error is None
+    assert list(rows) == [
+        ("k1", "x"),
+        ("k2", None),
+        (None, None),
+        ("k3", " x"),
+        ("k4", "   "),
+    ]

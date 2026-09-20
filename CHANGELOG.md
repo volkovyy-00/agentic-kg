@@ -25,6 +25,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   introduced by the second round's revision still waits for approval, since the loop runs at most two
   iterations. Approval-time behaviour is unchanged, and remains what guarantees a broken plan cannot be
   approved.
+- **Column checks stream their source instead of holding every row (#62)**: `column_stats`,
+  `join_preview`, `collapse_check` and the construction plan's reference-column reachability
+  check now read a source column as a stream. Peak memory follows the column's distinct values,
+  or the node key's distinct keys, rather than the file's row count: over a million-row source,
+  `collapse_check` on a per-row-unique candidate falls from 202 MB to about 1 MB, and
+  `column_stats` on a ten-value column from 60 MB to about 1 MB. A column that really is unique
+  per row still costs its distinct values, as it must. Every answer is unchanged but one: a file
+  holding a header and no data rows is a valid empty export, so `collapse_check` now reads it as
+  zero rows and answers with zero counts instead of reporting "no header row" — and, for the same
+  reason, a header-only file naming a column it does not have now reports that missing column
+  rather than "no header row". A file holding no header at all still reports that error. Reading
+  one column costs roughly 30% more time in exchange, measured over 300,000 rows; see the PR for
+  both measurements. Two consequences of that vacuous-but-valid empty export are handled alongside
+  it: the schema-proposal agent is now told to check `row_count` before reading either
+  `survives_collapse` or `is_unique` as clearance, since a header-only file satisfies both for want
+  of any rows to contradict them; and `_property_failure` withholds evidence on a zero-row source
+  instead of reporting the property sound, restoring the contract that an unreadable source has
+  always had there.
 
 ### Fixed
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule

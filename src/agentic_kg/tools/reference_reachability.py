@@ -34,7 +34,7 @@ from typing import Dict, List, NamedTuple, Set, Tuple
 
 from agentic_kg.common.csv_reader import read_csv_header
 
-from .file_tools import collect_column_pairs, collect_column_values, group_values_by_key
+from .file_tools import summarize_column, summarize_key_groups
 
 
 def _columns_by_file(
@@ -84,9 +84,13 @@ def _home_files(
 ) -> Tuple[List[str], bool, List[str], Dict[str, Set[str]]]:
     """Stage 2: the files in which this column identifies rows, and every value read.
 
-    Per-row unique means no empty values and every value distinct -- the same
-    condition column_stats reports as 'is_unique'. A column unique nowhere is not
-    an identifier and gets no verdict at all.
+    Per-row unique means no empty values and every value distinct --
+    ColumnSummary.is_unique decides that, and column_stats reports the same
+    property from the same place. The at-least-one-row condition is this
+    function's own: a zero-row column is vacuously unique but is nobody's
+    identifier home.
+
+    A column unique nowhere is not an identifier and gets no verdict at all.
 
     Returns evidence_complete=False when any file's values could not be read, so
     a later refusal can be downgraded rather than built on missing evidence.
@@ -102,17 +106,16 @@ def _home_files(
     notes: List[str] = []
     value_sets: Dict[str, Set[str]] = {}
     for path in files:
-        values, error = collect_column_values(path, column)
+        summary, error = summarize_column(path, column)
         if error is not None:
             evidence_complete = False
             notes.append(
                 f"'{column}' could not be read in '{path}' ({error['error_message']})"
             )
             continue
-        assert values is not None  # collect_column_values: error is None => values set
-        non_empty = [v for v in values if v is not None and str(v).strip() != ""]
-        value_sets[path] = {str(v) for v in non_empty}
-        if values and len(non_empty) == len(values) == len(set(non_empty)):
+        assert summary is not None  # summarize_column: error is None => summary set
+        value_sets[path] = summary.distinct
+        if summary.row_count and summary.is_unique:
             homes.append(path)
     return homes, evidence_complete, notes, value_sets
 
@@ -148,18 +151,27 @@ def _property_failure(rule: dict, column: str) -> Tuple[str | None, str | None]:
     key = _rule_unique_column_name(rule)
     if not key:
         return None, "the rule has no usable 'unique_column_name'"
-    pairs, error = collect_column_pairs(source_file, key, column)
+    summary, error = summarize_key_groups(
+        source_file, key, column, track_value_owners=True
+    )
     if error is not None:
         return None, error["error_message"]
-    assert pairs is not None  # collect_column_pairs: error is None => pairs set
-    if any(len(values) != 1 for values in group_values_by_key(pairs).values()):
+    assert summary is not None  # summarize_key_groups: error is None => summary set
+    if not summary.row_count:
+        # Vacuous agreement is not evidence. A zero-row source has no conflicting
+        # group and no value under two keys because it has no rows at all, so both
+        # checks below would pass and the caller would read that as "covered".
+        # Withhold instead, as an unreadable source does: before these reads
+        # streamed, a header-only file failed here and became a 'not verified'
+        # note. Unreachable today -- _home_files admits a home only when
+        # row_count is non-zero, so no non-empty home set is a subset of this
+        # file's empty one -- but it is the one direction the fail-open rule
+        # exists to prevent, and it should not depend on a condition in another
+        # function staying where it is.
+        return None, "the source has no data rows"
+    if summary.conflict_count:
         return _collapse_detail(column, rule), None
-    nodes_by_value = group_values_by_key(
-        (value, node_key)
-        for node_key, value in pairs
-        if value is not None and str(value).strip() != ""
-    )
-    if any(len(node_keys) != 1 for node_keys in nodes_by_value.values()):
+    if not summary.values_on_one_key:
         return _shared_detail(column, rule), None
     return None, None
 
