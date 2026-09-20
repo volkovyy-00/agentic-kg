@@ -420,14 +420,14 @@ def test_a_failed_value_read_downgrades_a_shortfall_to_unverified(
     and the column is reported unverified instead."""
     with survey_source.open("/src/bad.csv", "w") as handle:
         handle.write("plot_id,x\nPL-1,a\n")
-    real_read = rr.collect_column_values
+    real_read = rr.summarize_column
 
     def read_or_fail(path, column):
         if path == "bad.csv":
             return None, tool_error("simulated read failure")
         return real_read(path, column)
 
-    monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
+    monkeypatch.setattr(rr, "summarize_column", read_or_fail)
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_label", ["canopy"]), ["plots.csv", "readings.csv", "bad.csv"]
     )
@@ -443,14 +443,14 @@ def test_a_failed_read_of_the_only_possible_identifier_file_is_unverified(
     value read fails, so no file is known to be a home file and nothing is known to
     be covered. The plan keys Plot by plot_label, so the column may be stranded: it
     must be reported unverified, never passed silently."""
-    real_read = rr.collect_column_values
+    real_read = rr.summarize_column
 
     def read_or_fail(path, column):
         if path == "plots.csv":
             return None, tool_error("simulated read failure")
         return real_read(path, column)
 
-    monkeypatch.setattr(rr, "collect_column_values", read_or_fail)
+    monkeypatch.setattr(rr, "summarize_column", read_or_fail)
     problems, unverified = rr.check_reference_columns_are_reachable(
         _plot_node("plot_label", ["canopy"]), APPROVED
     )

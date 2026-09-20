@@ -576,28 +576,20 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
               key with 'path', 'column', 'row_count', 'distinct_count',
               'empty_count' and 'is_unique'.
     """
-    values, error = collect_column_values(file_path, column)
+    summary, error = summarize_column(file_path, column)
     if error is not None:
         return error
-    assert values is not None
-
-    empty_count = sum(
-        1 for value in values if value is None or str(value).strip() == ""
-    )
-    non_empty = [
-        value for value in values if value is not None and str(value).strip() != ""
-    ]
-    distinct_count = len(set(non_empty))
+    assert summary is not None
 
     return tool_success(
         "column_stats",
         {
             "path": file_path,
             "column": column,
-            "row_count": len(values),
-            "distinct_count": distinct_count,
-            "empty_count": empty_count,
-            "is_unique": empty_count == 0 and distinct_count == len(values),
+            "row_count": summary.row_count,
+            "distinct_count": len(summary.distinct),
+            "empty_count": summary.empty_count,
+            "is_unique": summary.is_unique,
         },
     )
 
@@ -914,6 +906,11 @@ def collapse_check(
     survive collapsing. 'join_preview' cannot answer it either, because it
     compares raw CSV values before any collapsing happens.
 
+    A file holding a header and no data rows is read as zero rows, and answers
+    with zero counts and 'survives_collapse' True. That True is vacuous: nothing
+    collapsed because there was nothing to collapse. Check 'row_count' before
+    treating it as evidence the column is safe.
+
     Args:
       file_path: Path to the node file's CSV, relative to the source location.
       node_key_column: The column the nodes will be MERGEd on.
@@ -929,18 +926,12 @@ def collapse_check(
               conflicts) and 'example_conflicts' (up to 5 entries of
               {'node_key', 'values'}).
     """
-    pairs, error = collect_column_pairs(file_path, node_key_column, candidate_column)
+    summary, error = summarize_key_groups(
+        file_path, node_key_column, candidate_column, keep_examples=5
+    )
     if error is not None:
         return error
-    assert pairs is not None
-
-    groups = group_values_by_key(pairs)
-
-    conflicts = [(key, values) for key, values in groups.items() if len(values) > 1]
-    example_conflicts = [
-        {"node_key": key, "values": sorted(values)[:10]}
-        for key, values in conflicts[:5]
-    ]
+    assert summary is not None
 
     return tool_success(
         "collapse_check",
@@ -948,11 +939,11 @@ def collapse_check(
             "path": file_path,
             "node_key_column": node_key_column,
             "candidate_column": candidate_column,
-            "row_count": len(pairs),
-            "group_count": len(groups),
-            "groups_with_conflicts": len(conflicts),
-            "survives_collapse": len(conflicts) == 0,
-            "example_conflicts": example_conflicts,
+            "row_count": summary.row_count,
+            "group_count": summary.group_count,
+            "groups_with_conflicts": summary.conflict_count,
+            "survives_collapse": summary.conflict_count == 0,
+            "example_conflicts": summary.examples,
         },
     )
 
@@ -979,18 +970,16 @@ def join_preview(
               of them have a match on the other side, and the matched fraction
               (0.0 when a side has no usable values).
     """
-    values_a, error = collect_column_values(file_a, column_a)
+    summary_a, error = summarize_column(file_a, column_a)
     if error is not None:
         return error
-    assert values_a is not None
-    values_b, error = collect_column_values(file_b, column_b)
+    assert summary_a is not None
+    summary_b, error = summarize_column(file_b, column_b)
     if error is not None:
         return error
-    assert values_b is not None
+    assert summary_b is not None
 
-    distinct_a = {str(v) for v in values_a if v is not None and str(v).strip() != ""}
-    distinct_b = {str(v) for v in values_b if v is not None and str(v).strip() != ""}
-    overlap = distinct_a & distinct_b
+    overlap = summary_a.distinct & summary_b.distinct
 
     def fraction(matched: int, total: int) -> float:
         return round(matched / total, 4) if total else 0.0
@@ -1002,12 +991,12 @@ def join_preview(
             "column_a": column_a,
             "file_b": file_b,
             "column_b": column_b,
-            "file_a_total": len(distinct_a),
+            "file_a_total": len(summary_a.distinct),
             "file_a_matched": len(overlap),
-            "file_a_match_fraction": fraction(len(overlap), len(distinct_a)),
-            "file_b_total": len(distinct_b),
+            "file_a_match_fraction": fraction(len(overlap), len(summary_a.distinct)),
+            "file_b_total": len(summary_b.distinct),
             "file_b_matched": len(overlap),
-            "file_b_match_fraction": fraction(len(overlap), len(distinct_b)),
+            "file_b_match_fraction": fraction(len(overlap), len(summary_b.distinct)),
         },
     )
 

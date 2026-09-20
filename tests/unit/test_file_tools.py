@@ -601,15 +601,32 @@ def test_join_preview_of_a_header_only_file_reports_zero_coverage(edge_source):
     assert preview["file_b_total"] == 2
 
 
-def test_collapse_check_of_a_header_only_file_errors_today(edge_source):
-    """THIS IS THE ONE CHARACTERIZATION THAT FLIPS. collect_column_pairs has no
-    header fallback, so a valid empty export is reported as a broken file. Task 10
-    replaces this assertion with zero counts."""
+def test_collapse_check_reads_a_header_only_file_as_zero_rows(edge_source):
+    """Was an error before this change: collect_column_pairs had no header
+    fallback, so a valid empty export looked like a broken file. Zero rows
+    trivially survive collapsing -- see the docstring note on why that True is
+    vacuous."""
     result = file_tools.collapse_check(
         "header_only.csv", "id", "name", FakeToolContext()
     )
+    assert result["status"] == "success"
+    check = result["collapse_check"]
+    assert check["row_count"] == 0
+    assert check["group_count"] == 0
+    assert check["groups_with_conflicts"] == 0
+    assert check["survives_collapse"] is True
+    assert check["example_conflicts"] == []
+
+
+def test_collapse_check_still_names_a_missing_column_in_a_header_only_file(
+    edge_source,
+):
+    """The zero-row path must not swallow a misspelled column."""
+    result = file_tools.collapse_check(
+        "header_only.csv", "id", "nope", FakeToolContext()
+    )
     assert result["status"] == "error"
-    assert "no header row" in result["error_message"]
+    assert "nope" in result["error_message"]
 
 
 def test_a_zero_byte_file_has_no_header_row_in_every_file_tool(edge_source):
