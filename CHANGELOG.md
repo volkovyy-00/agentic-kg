@@ -25,6 +25,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   introduced by the second round's revision still waits for approval, since the loop runs at most two
   iterations. Approval-time behaviour is unchanged, and remains what guarantees a broken plan cannot be
   approved.
+- **Column checks stream their source instead of holding every row (#NN)**: `column_stats`,
+  `join_preview`, `collapse_check` and the construction plan's reference-column reachability
+  check now read a source column as a stream. Peak memory follows the column's distinct
+  values, or the node key's distinct keys, rather than the file's row count — on a
+  million-row source with ten distinct values it is the cost of ten. Every answer is
+  unchanged but one: a file holding a header and no data rows is a valid empty export, so
+  `collapse_check` now reads it as zero rows and answers with zero counts instead of
+  reporting "no header row". A file holding no header at all still reports that error.
+  Reading one column is modestly slower in exchange — see the PR for the measurement.
 
 ### Fixed
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule
