@@ -193,18 +193,18 @@ plan — accepting remaining critic objections stays the user's call. Reachabili
 fails open: a file it cannot read yields a `not_verified` note, never a refusal.
 
 Since KG-14 both of those checks — `check_construction_plan_consistency` and
-`check_reference_columns_are_reachable` — also run **inside** `schema_refinement_loop`, in its
-`StopChecker`, through the shared `find_plan_problems(state)`. A plan carrying either kind of problem is sent
-back for another iteration (the stop-check writes a `retry` composite to `feedback` via `state_delta`, never
-by mutating state — `AgentTool` forwards only the delta out of the loop's child session) instead of waiting
-for approval to refuse it a turn later. **Only while an iteration remains:** the loop runs at most two, so a
-problem the *second* round's revision introduces still surfaces at approval time and still costs a turn. Approval-time enforcement is unchanged and is still the thing that
-guarantees correctness: the loop's copy is fail-open behind one guard, while approval keeps propagating a
-crashed check so it fails closed. A *critic-side tool* was rejected rather than merely not chosen — a tool
-the critic may call depends on the model choosing to call it, and this check is mechanical precisely because
-the prose rule that used to answer the same question resolved the same file two different ways on two runs;
-a fact-only tool would put the guarantee back on untestable critic behaviour, and PR #20's rule keeps
-approval framing out of the critic's context anyway.
+`check_reference_columns_are_reachable` — also run **inside** `schema_refinement_loop`, in its `StopChecker`,
+through the shared `find_plan_problems(state)`. A plan carrying either kind of problem is sent back for another
+iteration (the stop-check writes a `retry` composite to `feedback` via `state_delta`, never by mutating state —
+`AgentTool` forwards only the delta out of the loop's child session) instead of waiting for approval to refuse it
+a turn later. **Only while an iteration remains:** the loop runs at most two, so a problem the *second* round's
+revision introduces still surfaces at approval time and still costs a turn. Approval-time enforcement is
+unchanged and is still the thing that guarantees correctness: the loop's copy is fail-open behind one guard,
+while approval keeps propagating a crashed check so it fails closed. A *critic-side tool* was rejected rather
+than merely not chosen — a tool the critic may call depends on the model choosing to call it, and this check is
+mechanical precisely because the prose rule that used to answer the same question resolved the same file two
+different ways on two runs; a fact-only tool would put the guarantee back on untestable critic behaviour, and PR
+#20's rule keeps approval framing out of the critic's context anyway.
 
 ### Handoff confirmation gates
 

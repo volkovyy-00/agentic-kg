@@ -22,6 +22,10 @@ from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent 
     _is_loop_authored,
     _normalized,
 )
+from agentic_kg.tools.construction_plan_tools import check_construction_plan_consistency
+from agentic_kg.tools.reference_reachability import (
+    check_reference_columns_are_reachable,
+)
 
 PROBLEM = "Plot: to node label 'Site' has no node construction in the plan."
 OTHER_PROBLEM = "'plot_id' identifies rows in 'plots.csv' but no node carries it."
@@ -112,6 +116,10 @@ def test_one_normalisation_serves_the_router_and_the_drop_rule():
     assert _normalized("retry,") == "retry"
 
 
+# Deliberately a second copy of this fixture (the others are in
+# test_construction_plan_tools.py and test_schema_refinement_loop_repair_round.py,
+# which explains the triplication) -- this one yields a plain dict, not a
+# FakeToolContext or a Runner session state.
 @pytest.fixture
 def stranding_plan_state(monkeypatch):
     """A plan whose node key leaves readings.csv's plot_id reference
@@ -184,8 +192,10 @@ def test_problems_do_not_escalate_whatever_the_verdict(stranding_plan_state):
 
 
 def test_a_clean_plan_passes_the_verdict_through_untouched(stranding_plan_state):
-    """Nothing found must change nothing -- including emitting no delta, so an
-    empty verdict still leaves the slot as it was."""
+    """Nothing found must change nothing -- including emitting no delta. Pinned
+    against both a non-empty verdict (a 'valid' plus a Warnings block survives
+    verbatim) and an empty one (which still yields no delta, and surfaces
+    EMPTY_VERDICT_SUMMARY rather than the empty string itself)."""
     stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
         "plot_id"
     )
@@ -193,6 +203,13 @@ def test_a_clean_plan_passes_the_verdict_through_untouched(stranding_plan_state)
     events = _run(stranding_plan_state)
 
     assert _text(events[0]) == "valid\nWarnings:\n- partial join coverage"
+    assert events[0].actions.escalate is True
+    assert not events[0].actions.state_delta
+
+    stranding_plan_state["feedback"] = ""
+    events = _run(stranding_plan_state)
+
+    assert _text(events[0]) == EMPTY_VERDICT_SUMMARY
     assert events[0].actions.escalate is True
     assert not events[0].actions.state_delta
 
@@ -239,7 +256,9 @@ def test_a_repaired_plan_clears_the_stale_composite(stranding_plan_state):
     round 1's composite already reached the PARENT session via its own delta,
     so emitting nothing here would leave it for prepare_refinement_loop_invocation
     to quote in its 'stopped:' message -- stale mechanical problems for a plan
-    that no longer has them."""
+    that no longer has them. Pins the emitted delta itself; see
+    test_the_cleared_slot_is_not_quoted_by_the_second_loop_call below for the
+    downstream consumer reading it after the delta is applied."""
     stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
         "plot_id"
     )
@@ -297,7 +316,9 @@ def test_the_cleared_slot_is_not_quoted_by_the_second_loop_call(stranding_plan_s
     then run the turn-cap callback that short-circuits a second loop call in
     the same turn. Its 'stopped:' message quotes whatever is in the slot, so a
     slot left holding the old composite would hand the coordinator mechanical
-    problems for a plan that has since been repaired."""
+    problems for a plan that has since been repaired. See
+    test_a_repaired_plan_clears_the_stale_composite above for the delta this
+    consumes, pinned on its own."""
     from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
         prepare_refinement_loop_invocation,
     )
@@ -321,3 +342,38 @@ def test_the_cleared_slot_is_not_quoted_by_the_second_loop_call(stranding_plan_s
     assert message.startswith("stopped:")
     assert PLAN_PROBLEM_HEADER not in message
     assert "an earlier problem" not in message
+
+
+def test_the_check_authored_wording_carries_no_approval_framing(stranding_plan_state):
+    """The design spec's 8.5 no-approval-wording rule, applied to the OTHER
+    half it requires: problem strings as the two checks themselves author
+    them, not as the loop's composite wraps them (that half is pinned by
+    test_the_loop_authored_wording_carries_no_approval_framing above). Neutral
+    fixtures again -- label, column and file names that do not themselves
+    contain "approv" or "ready" -- for the same reason: a column legitimately
+    named 'approved_by' would otherwise fail this test for no good reason."""
+    plan = stranding_plan_state["proposed_construction_plan"]
+    # A relationship whose endpoint has no matching node construction, so
+    # check_construction_plan_consistency has a structural problem to report
+    # alongside the reachability problem the fixture's own plan/files already
+    # produce (Plot is keyed by 'plot_label', leaving 'plot_id' stranded).
+    plan["Takes"] = {
+        "construction_type": "relationship",
+        "from_node_label": "Reading",
+        "from_node_column": "reading_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_id",
+    }
+
+    structural = check_construction_plan_consistency(plan)
+    reachability, _ = check_reference_columns_are_reachable(
+        plan, stranding_plan_state["approved_file_list"]
+    )
+    # Sanity: both checks must actually have found something, or the assertion
+    # below would pass on an empty list for the wrong reason.
+    assert structural
+    assert reachability
+
+    for problem in [*structural, *reachability]:
+        assert "approv" not in problem.lower()
+        assert "ready" not in problem.lower()
