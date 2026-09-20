@@ -66,6 +66,16 @@ and a gate on the user-intent phase so it cannot be left before the user's goal 
 recorded (PR #12 — same subsection; it is the one gate that holds no per-turn flag). None of these
 touch sub-projects 2/3, which remain unstarted.
 
+`main` has kept moving well past PR #12 — it's at #59 now, with `CHANGELOG.md` as the entry-by-entry
+record — through further schema/construction-plan hardening (PRs #19–#24), a September CI/quality wave
+(SonarCloud, pyright, pytest-in-CI, Dependabot in #25–#28, pyright later made to fail CI on any type
+error in #51 once its backlog was cleared), and dependency movement including `google-adk` 1.10.0 →
+1.28.1 (#38, fixing CVE-2026-4810) and the Neo4j driver to 6.x (#53) — see *Commands* above for the
+pinned floor versus what `uv.lock` actually resolves. Most recently, reachability is now judged by the
+values a node actually carries rather than by which file built it (#52, 2026-09-19) — the change this
+branch's work builds on. Released since as `0.6.0` (2026-08-17) and `0.6.1` (2026-09-18); sub-projects
+2/3 remain unstarted.
+
 ## Commands
 
 ```bash
@@ -83,7 +93,7 @@ uv run pytest tests/unit/test_pydantic_neo4j.py -v   # single file
 uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # single test
 uv run pytest --cov --cov-report=term-missing   # with coverage (CI sends coverage.xml to SonarCloud)
 
-# Integration tests (require Docker; spins up Neo4j via Testcontainers; ~4 min, function-scoped containers)
+# Integration tests (require Docker; spins up Neo4j via Testcontainers; ~12 min, function-scoped containers)
 uv run pytest -q -m integration
 ```
 
@@ -99,9 +109,10 @@ uv run pytest -q -m integration
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - Ruff lints and formats (`ruff check`, `ruff format`); config is `pyproject.toml`'s `[tool.ruff]`.
-- Only one remote is configured (`origin`). GitHub still shows this repo as forked from
-  `neo4j-contrib/agentic-kg`, but there's no local `upstream` remote to resolve against, so `gh` no longer
-  needs an explicit `--repo` flag.
+- Two remotes are configured: `origin` (`volkovyy-00/agentic-kg`) and `upstream`
+  (`neo4j-contrib/agentic-kg`, the repo this was forked from). No `gh` default repo is set
+  (`gh repo set-default --view` reports none), so an unqualified `gh` command can resolve against
+  either — always pass `--repo volkovyy-00/agentic-kg` explicitly to keep it targeting this fork.
 - Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
   nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
   has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with
@@ -191,6 +202,20 @@ approval isn't possible; its success branch is explicit that it only checked joi
 columns, and whether every approved file's reference columns can still be reached, not whether it's the *right*
 plan — accepting remaining critic objections stays the user's call. Reachability reads the approved sources and
 fails open: a file it cannot read yields a `not_verified` note, never a refusal.
+
+Since KG-14 (PR #60) both of those checks — `check_construction_plan_consistency` and
+`check_reference_columns_are_reachable` — also run **inside** `schema_refinement_loop`, in its `StopChecker`,
+through the shared `find_plan_problems(state)`. A plan carrying either kind of problem is sent back for another
+iteration (the stop-check writes a `retry` composite to `feedback` via `state_delta`, never by mutating state —
+`AgentTool` forwards only the delta out of the loop's child session) instead of waiting for approval to refuse it
+a turn later. **Only while an iteration remains:** the loop runs at most two, so a problem the *second* round's
+revision introduces still surfaces at approval time and still costs a turn. Approval-time enforcement is
+unchanged and is still the thing that guarantees correctness: the loop's copy is fail-open behind one guard,
+while approval keeps propagating a crashed check so it fails closed. A *critic-side tool* was rejected rather
+than merely not chosen — a tool the critic may call depends on the model choosing to call it, and this check is
+mechanical precisely because the prose rule that used to answer the same question resolved the same file two
+different ways on two runs; a fact-only tool would put the guarantee back on untestable critic behaviour, and PR
+#20's rule keeps approval framing out of the critic's context anyway.
 
 ### Handoff confirmation gates
 

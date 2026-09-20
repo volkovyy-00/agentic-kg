@@ -7,8 +7,10 @@ call returned "" to the coordinator; observed in a live session, the
 coordinator model read that as "the tool returned no results", told the user
 the column statistics "could not be retrieved" (they had in fact succeeded
 inside the loop), and fell back to a worse schema. The event must therefore
-always carry the critic's verdict as text, and its escalate flag must still
-route on the first word of the feedback exactly as before.
+always carry the critic's verdict as text, and its escalate flag must route on
+the first word of the feedback when no mechanical plan problem was found --
+see tests/unit/test_schema_refinement_loop_plan_checks.py for the case where
+one was.
 """
 
 import asyncio
@@ -47,7 +49,13 @@ def _event_text(event):
         ("Validation failed: bad join key", False),
     ],
 )
-def test_escalate_routes_on_first_word_only(feedback, should_escalate):
+def test_escalate_routes_on_the_verdicts_first_word_when_no_problems_are_found(
+    feedback, should_escalate
+):
+    """The verdict's first word decides the route only when the mechanical
+    checks found nothing. A plan problem overrides it -- see
+    tests/unit/test_schema_refinement_loop_plan_checks.py. These cases carry no
+    plan in state, so the checks return nothing and this is the pure router."""
     events = _run(feedback)
     assert len(events) == 1
     assert events[0].actions.escalate is should_escalate

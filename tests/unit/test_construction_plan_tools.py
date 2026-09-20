@@ -938,15 +938,42 @@ def stranding_state(monkeypatch):
     fs.pseudo_dirs.clear()
 
 
-def test_both_callers_report_the_same_reachability_problems(stranding_state):
-    """The PR #20 anti-drift pin, extended: a precondition added to one path and
-    not the other is exactly what _read_plan_for_approval exists to prevent."""
+def test_every_path_reports_the_same_plan_problems(stranding_state):
+    """The PR #20 anti-drift pin, extended to the refinement loop: a check added
+    to one path and not another is exactly what the shared reader exists to
+    prevent. All three read the same plan through find_plan_problems, so every
+    problem approval names must appear verbatim in the loop's composite."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+        _compose_feedback,
+    )
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    stranding_state.state[PROPOSED_CONSTRUCTION_PLAN]["MEASURED_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "MEASURED_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Reading",
+        "from_node_column": "reading_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_id",
+    }
+
     refusal = approve_proposed_construction_plan(stranding_state)
     check = get_proposed_construction_plan_with_approval_check(stranding_state)
+    problems, _ = find_plan_problems(stranding_state.state)
+    composite = _compose_feedback("valid", problems)
+
     assert refusal["status"] == "error"
     assert check["status"] == "error"
-    assert "plot_id" in refusal["error_message"]
-    assert "plot_id" in check["error_message"]
+    for problem in problems:
+        assert problem in refusal["error_message"]
+        assert problem in check["error_message"]
+        assert problem in composite
+
+    # Note the seam this does NOT cover: it composes directly rather than
+    # running the stop-check, so it pins the wording, not the wiring. That the
+    # stop-check actually calls find_plan_problems is pinned separately, in
+    # tests/unit/test_schema_refinement_loop_plan_checks.py.
 
 
 def test_approval_refuses_a_plan_that_strands_a_reference_column(stranding_state):
@@ -1147,3 +1174,90 @@ def test_a_retained_id_on_a_node_per_row_of_a_repeating_file_is_not_reachable(
     assert len(problems) == 1
     assert "product_id" in problems[0]
     assert unverified == []
+
+
+def test_find_plan_problems_returns_nothing_for_a_falsy_plan(stranding_state):
+    """An empty plan makes the reachability check report every shared unique
+    column as stranded. A caller that lost its own guard would then loop on
+    nothing, so the guard lives here instead of in each caller."""
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    # The approved files must be present and genuinely stranding, or the test
+    # passes with the emptiness guard deleted -- reachability reports nothing
+    # when there are no files to compare either.
+    state = dict(stranding_state.state)
+    for empty in (None, {}, []):
+        state[PROPOSED_CONSTRUCTION_PLAN] = empty
+        assert find_plan_problems(state) == ([], [])
+    del state[PROPOSED_CONSTRUCTION_PLAN]
+    assert find_plan_problems(state) == ([], [])
+
+
+def test_find_plan_problems_orders_structural_problems_first(stranding_state):
+    """Both callers render these as a flat bullet list, so the order is part of
+    what the reader sees. Structural problems are cheap and name a construction
+    rule; reachability problems are long and name files."""
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    stranding_state.state[PROPOSED_CONSTRUCTION_PLAN]["MEASURED_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "MEASURED_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Reading",
+        "from_node_column": "reading_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_id",
+    }
+    problems, _ = find_plan_problems(stranding_state.state)
+
+    structural = [p for p in problems if p.startswith("MEASURED_AT:")]
+    reachability = [
+        p for p in problems if "plot_id" in p and not p.startswith("MEASURED_AT:")
+    ]
+    assert structural, "expected the missing-endpoint-label problem"
+    assert reachability, "expected the stranded-column problem"
+    assert problems.index(structural[-1]) < problems.index(reachability[0])
+
+
+def test_find_plan_problems_has_no_guard_of_its_own(monkeypatch, stranding_state):
+    """Load-bearing: a guard here would make approve_proposed_construction_plan
+    swallow a crashed check and write an approved plan whose checks never ran.
+    The loop guards its own call instead."""
+    import agentic_kg.tools.construction_plan_tools as module
+
+    def boom(*args, **kwargs):
+        raise PermissionError("source unreadable")
+
+    monkeypatch.setattr(module, "check_reference_columns_are_reachable", boom)
+    with pytest.raises(PermissionError):
+        module.find_plan_problems(stranding_state.state)
+
+
+def test_approval_fails_closed_when_the_structural_check_raises(
+    monkeypatch, stranding_state
+):
+    """The exception must reach the caller with no approved plan written."""
+    import agentic_kg.tools.construction_plan_tools as module
+
+    def boom(*args, **kwargs):
+        raise TypeError("unhashable type: 'dict'")
+
+    monkeypatch.setattr(module, "check_construction_plan_consistency", boom)
+    with pytest.raises(TypeError):
+        module.approve_proposed_construction_plan(stranding_state)
+    assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
+
+
+def test_approval_fails_closed_when_the_reachability_check_raises(
+    monkeypatch, stranding_state
+):
+    """Same guarantee for the other check: neither may be swallowed."""
+    import agentic_kg.tools.construction_plan_tools as module
+
+    def boom(*args, **kwargs):
+        raise PermissionError("source unreadable")
+
+    monkeypatch.setattr(module, "check_reference_columns_are_reachable", boom)
+    with pytest.raises(PermissionError):
+        module.approve_proposed_construction_plan(stranding_state)
+    assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state

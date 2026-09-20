@@ -211,6 +211,36 @@ def _empty_verdict_text():
     return events[-1].content.parts[0].text
 
 
+def _plan_problem_composite_text():
+    """The text CheckStatusAndEscalate yields when a mechanical plan check
+    found problems. Driven through the real stop-check, like the helpers above,
+    so a change in how the composite is produced is caught here too."""
+    checker = CheckStatusAndEscalate(name="StopChecker")
+    ctx = _FakeInvocationContext(
+        {
+            "feedback": "valid",
+            "proposed_construction_plan": {
+                "REFERS_TO": {
+                    "construction_type": "relationship",
+                    "relationship_type": "REFERS_TO",
+                    "source_file": "a.csv",
+                    "from_node_label": "Missing",
+                    "from_node_column": "a_id",
+                    "to_node_label": "AlsoMissing",
+                    "to_node_column": "b_id",
+                }
+            },
+            "approved_file_list": [],
+        }
+    )
+
+    async def collect():
+        return [event async for event in checker._run_async_impl(ctx)]
+
+    events = asyncio.run(collect())
+    return events[-1].content.parts[0].text
+
+
 def _plan(join_column):
     """A minimal two-node plan whose relationship joins on `join_column`.
     'assembly_name' is not a column Assembly carries, so that spelling drives
@@ -320,6 +350,7 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
         root_agent.instruction,
         _stopped_verdict_text(),
         _empty_verdict_text(),
+        _plan_problem_composite_text(),
         _refusal_message_text(),
         *_approval_check_texts(),
     ]

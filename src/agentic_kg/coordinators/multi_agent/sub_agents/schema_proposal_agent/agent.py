@@ -1,3 +1,4 @@
+import logging
 from typing import AsyncGenerator, Optional
 
 from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
@@ -11,11 +12,103 @@ from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_plan_tools import (
+    StateLike,
     approve_proposed_construction_plan,
+    find_plan_problems,
+    format_problem_bullets,
     get_proposed_construction_plan_with_approval_check,
 )
 
 finished = make_finished(MULTI_AGENT_COORDINATOR)
+
+logger = logging.getLogger(__name__)
+
+# The loop's own wording. It carries neither "approv" nor "ready" in any form:
+# the critic and proposal steps read this text on the next iteration, and PR #20
+# settled that approval framing has no business in their context ("not ready for
+# approval" is a readiness verdict even without the word "approval").
+#
+# It is also the marker that identifies this text later -- see _is_loop_authored
+# -- so tests build their fixtures from the constant rather than copying it.
+PLAN_PROBLEM_HEADER = "retry: checks on the plan found problems that must be fixed:"
+CRITIC_PREAMBLE = "The critic also said:"
+
+EMPTY_VERDICT_SUMMARY = (
+    "retry: the critic produced no verdict. Call "
+    "'get_proposed_construction_plan_with_approval_check' and judge the "
+    "plan yourself rather than running the loop again on no feedback."
+)
+
+
+def _normalized(text: str) -> str:
+    """One token or one line, reduced to the form comparisons are made in.
+
+    The escalate router compares the verdict's first *token*; the composer
+    compares its first *line*. Same rule, two granularities -- one helper, so
+    rewording either cannot silently diverge from the other.
+    """
+    return text.strip().strip(":.,").lower()
+
+
+def _is_loop_authored(verdict: str) -> bool:
+    """Whether the feedback slot holds this loop's own composite, not a verdict.
+
+    ADK writes an agent's output_key only when its final response carries a text
+    part, so a critic that ends an iteration without text leaves the PREVIOUS
+    iteration's composite sitting in 'feedback'. Two things follow, and the
+    second is the reason this exists:
+
+    - composing on top of it would nest a second header; and
+    - if the plan has since been repaired, passing it through would hand the
+      coordinator 'retry: checks on the plan found problems...' for a plan with
+      nothing wrong. A stale opinion is the status quo; a stale assertion of
+      mechanical fact is worse.
+
+    Treating it as "no verdict this round" costs round 1's critic objections
+    when round 2's critic is silent, and keeps every mechanical problem. A
+    critic that parrots the header is treated the same way, which is safe.
+    """
+    return verdict.strip().startswith(PLAN_PROBLEM_HEADER)
+
+
+def _without_bare_valid(verdict: str) -> str:
+    """The verdict minus a first line that says nothing but 'valid'.
+
+    Only the first line, and only when it is bare: the critic appends a
+    'Warnings:' section to a valid verdict for data-quality issues no schema
+    change can fix, and those notes are for the user. Dropping the bare word
+    alone avoids a 'valid' sitting under a 'retry' header.
+    """
+    text = verdict.strip()
+    if not text:
+        return ""
+    first_line, _, rest = text.partition("\n")
+    if _normalized(first_line) == "valid":
+        return rest.strip()
+    return text
+
+
+def _compose_feedback(verdict: str, problems: list[str]) -> str:
+    """The loop's verdict when a mechanical check found problems.
+
+    'retry' is written here, never inherited: the coordinator routes on the
+    result BEGINNING with it, and a critic verdict that routes as a retry
+    ("Validation failed: ...") does not begin with it.
+
+    Problem strings are reproduced verbatim, one bullet each, exactly as
+    approval renders them -- that is what makes the two paths name the same
+    problems by construction.
+
+    The critic's own text is kept alongside rather than replaced, because on a
+    second retry the coordinator must still show its remaining objections.
+    """
+    bullets = format_problem_bullets(problems)
+    composite = f"{PLAN_PROBLEM_HEADER}\n{bullets}"
+    remainder = _without_bare_valid(verdict)
+    if remainder:
+        composite += f"\n\n{CRITIC_PREAMBLE}\n{remainder}"
+    return composite
+
 
 from .variants import variants
 
@@ -95,20 +188,66 @@ schema_critic_agent = LlmAgent(
 )
 
 
+def _plan_problems(state: StateLike) -> list[str]:
+    """The mechanical problems in the proposed plan, or none if a check crashed.
+
+    ONE guard for both checks, not one each. Per-check independence would need
+    either a guard inside find_plan_problems -- which approval inherits, and
+    which would let approval write an approved plan whose checks never ran --
+    or a catch-and-report shape whose fail-closed depends on a re-raise line
+    inside the enforcement path. The cost of one guard is that a raise in
+    either check drops the other's early catch FOR THAT ITERATION, IN THE LOOP
+    ONLY; approval still refuses the plan.
+
+    exc_info because the adk web server's own stdout is the only place these
+    surface -- a bare message there is near-useless.
+    """
+    try:
+        return find_plan_problems(state)[0]
+    except Exception:  # noqa: BLE001 - a crashed check must not kill the turn
+        logger.warning(
+            "plan checks raised inside schema_refinement_loop; leaving the "
+            "critic's verdict unchanged (approval still refuses the plan)",
+            exc_info=True,
+        )
+        return []
+
+
 class CheckStatusAndEscalate(BaseAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
-        feedback = ctx.session.state.get("feedback", "valid")
+        state = ctx.session.state
+        raw = str(state.get("feedback", "valid")).strip()
+        # A slot still holding this loop's own composite is not a verdict --
+        # see _is_loop_authored. Discarding it here, before anything routes on
+        # it or composes with it, is what makes nesting impossible and keeps a
+        # repaired plan from being reported with the problems it no longer has.
+        stale = _is_loop_authored(raw)
+        text = "" if stale else raw
+
+        problems = _plan_problems(state)
+        if problems:
+            summary = _compose_feedback(text, problems)
+            # escalate=False unconditionally: if an iteration remains it runs,
+            # and if none does LoopAgent ends anyway with this event last, so
+            # AgentTool returns this same text to the coordinator either way.
+            yield Event(
+                author=self.name,
+                content=types.Content(role="model", parts=[types.Part(text=summary)]),
+                actions=EventActions(escalate=False, state_delta={"feedback": summary}),
+            )
+            return
+
         # Only the leading *word* decides the route: the critic may append a
         # "Warnings:" section to a 'valid' verdict for data-quality issues that
         # no schema change can fix, and that must not restart the loop. A prefix
-        # match is not enough — "Validation failed: ..." and "Valid identifiers
+        # match is not enough -- "Validation failed: ..." and "Valid identifiers
         # are missing on Part" both start with "valid" but mean retry, so the
         # first whitespace-delimited token is compared exactly (minus trailing
-        # punctuation).
-        text = str(feedback).strip()
-        first_token = text.split(maxsplit=1)[0].strip(":.,").lower() if text else ""
+        # punctuation). Reached only when no mechanical problem was found; a
+        # problem overrides the verdict above whatever its first word.
+        first_token = _normalized(text.split(maxsplit=1)[0]) if text else ""
         # An empty verdict must stop the loop too, not just a 'valid' one: the
         # summary below already tells the coordinator to inspect the plan
         # itself rather than wait on the critic, so letting the loop spend
@@ -128,19 +267,18 @@ class CheckStatusAndEscalate(BaseAgent):
         # false for every result the loop can return. An absent verdict means
         # the critic did not answer, not that it found problems, so point the
         # coordinator at the plan rather than at another blind re-run.
-        summary = (
-            text
-            if text
-            else (
-                "retry: the critic produced no verdict. Call "
-                "'get_proposed_construction_plan_with_approval_check' and judge the "
-                "plan yourself rather than running the loop again on no feedback."
-            )
-        )
+        summary = text if text else EMPTY_VERDICT_SUMMARY
+        actions = EventActions(escalate=should_stop)
+        if stale:
+            # The only pass-through that writes state. Round 1's composite
+            # already reached the PARENT session through its own state_delta,
+            # so leaving it would let prepare_refinement_loop_invocation quote
+            # problems this plan no longer has in its 'stopped:' message.
+            actions.state_delta = {"feedback": ""}
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=summary)]),
-            actions=EventActions(escalate=should_stop),
+            actions=actions,
         )
 
 

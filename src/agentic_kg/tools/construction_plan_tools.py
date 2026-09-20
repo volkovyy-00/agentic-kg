@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Any, Optional, Protocol
 
 from google.adk.tools import ToolContext
 
@@ -526,6 +526,71 @@ def _format_unverified_notes(unverified: list[str]) -> str:
     return "\n\nNot verified:\n- " + "\n- ".join(unverified)
 
 
+def format_problem_bullets(problems: list[str]) -> str:
+    """Render find_plan_problems' output as the bullet list every caller shows.
+
+    Same argument as _format_unverified_notes above, one list over: approval,
+    its dry run, and the refinement loop's retry composite all render the same
+    problem strings, so a third spelling of the format would drift the moment
+    one is reworded -- and the loop's text would stop matching what approval
+    shows the user for the identical problem.
+
+    Public, unlike its sibling, because the composer lives in the schema
+    proposal agent's module rather than here.
+    """
+    return "\n".join(f"- {problem}" for problem in problems)
+
+
+class StateLike(Protocol):
+    """Anything the plan checks can read session state from.
+
+    ADK's State is a plain class exposing .get(key, default=None) -- not a
+    Mapping -- while the refinement loop's stop-check holds a plain dict. The
+    parameters are positional-only (`, /`) so that dict's own overloaded .get
+    satisfies this protocol: without the slash, pyright rejects
+    dict[str, Any] with "No overloaded function matches type
+    (key: str, default: Any = None) -> Any" and the CI gate fails at the
+    stop-check's call site.
+    """
+
+    def get(self, key: str, default: Any = None, /) -> Any: ...
+
+
+def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
+    """Everything that would make approval refuse the proposed plan.
+
+    Returns (problems, unverified). Structural problems come first, then
+    reachability's; `unverified` holds the reachability check's notes about
+    sources it could not read.
+
+    Both the approval path and the refinement loop's stop-check call this, so
+    what the loop catches cannot drift from what approval refuses. Copying the
+    two calls into each caller instead would make that equivalence hold only by
+    convention -- the drift _read_plan_for_approval was created to prevent.
+
+    A falsy plan returns nothing at all. The reachability check reports every
+    shared unique column as stranded when there are no node rules to carry
+    them, so a caller that lost its own emptiness guard would otherwise loop on
+    a plan that does not exist yet.
+
+    IT DELIBERATELY DOES NOT CATCH. A guard here would be inherited by
+    approve_proposed_construction_plan, which today fails closed because an
+    exception propagates before the approved plan is written -- a swallowed
+    raise would approve a plan whose checks never ran. The loop, which only
+    needs this as an optimisation approval already backstops, guards its own
+    call instead.
+    """
+    construction_plan = state.get(PROPOSED_CONSTRUCTION_PLAN)
+    if not construction_plan:
+        return [], []
+
+    problems = check_construction_plan_consistency(construction_plan)
+    reachability_problems, unverified = check_reference_columns_are_reachable(
+        construction_plan, state.get(APPROVED_FILES) or []
+    )
+    return problems + reachability_problems, unverified
+
+
 def _read_plan_for_approval(
     tool_context: ToolContext,
 ) -> tuple[dict | None, list[str], list[str]]:
@@ -542,6 +607,11 @@ def _read_plan_for_approval(
     It fails open: a source it cannot read produces a note in the third return
     value, never a problem, so an unreachable disk cannot make a plan unshowable.
 
+    The checks themselves live in find_plan_problems, which the refinement
+    loop's stop-check also calls. The plan is still read here as well, because
+    only this path distinguishes "no plan at all" (NO_PROPOSED_PLAN_MESSAGE)
+    from a plan with nothing wrong.
+
     Callers phrase their own refusals -- only the facts are shared. Returns
     (None, [], []) when there is no plan to read.
     """
@@ -549,11 +619,8 @@ def _read_plan_for_approval(
     if not construction_plan:
         return None, [], []
 
-    problems = check_construction_plan_consistency(construction_plan)
-    reachability_problems, unverified = check_reference_columns_are_reachable(
-        construction_plan, tool_context.state.get(APPROVED_FILES) or []
-    )
-    return construction_plan, problems + reachability_problems, unverified
+    problems, unverified = find_plan_problems(tool_context.state)
+    return construction_plan, problems, unverified
 
 
 # Tool: Approve the proposed construction plan
@@ -576,8 +643,8 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     if problems:
         return tool_error(
             "The proposed construction plan was NOT approved. It is inconsistent, "
-            "or it leaves an approved file's reference column unreachable:\n- "
-            + "\n- ".join(problems)
+            "or it leaves an approved file's reference column unreachable:\n"
+            + format_problem_bullets(problems)
             + "\nFix the plan, then show the user the corrected plan returned by "
             "'get_proposed_construction_plan_with_approval_check' and ask them to "
             "approve again. Do not describe the plan as fixed until "
@@ -620,8 +687,8 @@ def get_proposed_construction_plan_with_approval_check(
             # calling the loop. Only the instruction knows which branch it is
             # in, and it already says what to do in each.
             "This plan cannot be approved as it stands. "
-            "'approve_proposed_construction_plan' will refuse it for:\n- "
-            + "\n- ".join(problems)
+            "'approve_proposed_construction_plan' will refuse it for:\n"
+            + format_problem_bullets(problems)
             # Carries the plan even though approval would refuse it. The
             # coordinator's instruction forbids describing a plan from memory
             # and requires reproducing this tool's returned fields, and this is
