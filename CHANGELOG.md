@@ -8,11 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Changed
-- **Neo4j driver 6.x**: the `neo4j` Python driver moves from 5.x to 6.3.1. Nothing changes for users: since
-  connection recovery (#10), a closed connection is rebuilt rather than reused, which is the one 6.x change
-  (a closed driver now raises instead of warning) that would otherwise have broken every graph tool. The
-  connection-recovery tests now close the connection before each tool, so each tool's own recovery is
-  checked, rather than only whichever tool happened to run first.
+- **Neo4j driver 6.x**: the `neo4j` Python driver moves from 5.x to 6.3.1. Every graph tool keeps working
+  across a dropped connection, as before: since connection recovery (#10), a closed connection is rebuilt
+  rather than reused, which is the one 6.x change (a closed driver now raises instead of warning) that
+  would otherwise have broken every graph tool until a restart. One narrow case does change: if the
+  connection is closed *while* a schema read is already in flight — `neo4j_is_ready` closes it whenever a
+  query fails — that read now returns an error the agent can retry, where 5.x reopened the connection
+  silently. The connection-recovery tests now close the connection before each tool, so each tool's own
+  recovery is checked, rather than only whichever tool happened to run first.
 
 ### Fixed
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule

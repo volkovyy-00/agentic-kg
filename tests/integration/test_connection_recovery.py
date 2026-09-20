@@ -105,7 +105,11 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
 
         # 2. Profiled schema -- the profiling path end to end, including
         #    graph_profile's own binding and cache invalidation. Real data, not
-        #    merely absence of error.
+        #    merely absence of error. Like get_config above, that binding is
+        #    not what meets the closed driver here (get_driver runs first, and
+        #    graph_profile reaches the database through send_read_query, which
+        #    step 3 covers); what this step pins is that the path still works
+        #    across a break, which is what the module docstring is about.
         neo4j_for_adk.close_graphdb()
         profiled = cypher_tools.get_graph_schema_with_profile()
         assert profiled["status"] == "success", profiled.get("error_message")
