@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   introduced by the second round's revision still waits for approval, since the loop runs at most two
   iterations. Approval-time behaviour is unchanged, and remains what guarantees a broken plan cannot be
   approved.
-- **Column checks stream their source instead of holding every row (#NN)**: `column_stats`,
+- **Column checks stream their source instead of holding every row (#62)**: `column_stats`,
   `join_preview`, `collapse_check` and the construction plan's reference-column reachability
   check now read a source column as a stream. Peak memory follows the column's distinct values,
   or the node key's distinct keys, rather than the file's row count: over a million-row source,
