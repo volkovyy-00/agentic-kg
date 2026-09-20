@@ -5,8 +5,19 @@ turn that the one-call-per-turn cap would otherwise cost. See
 docs/superpowers/specs/2026-09-20-loop-side-plan-checks-design.md.
 """
 
+import asyncio
+import logging
+from types import SimpleNamespace
+
+import fsspec
+import pytest
+
+from agentic_kg.common.config import reset_settings
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+    CRITIC_PREAMBLE,
+    EMPTY_VERDICT_SUMMARY,
     PLAN_PROBLEM_HEADER,
+    CheckStatusAndEscalate,
     _compose_feedback,
     _is_loop_authored,
     _normalized,
@@ -99,3 +110,183 @@ def test_one_normalisation_serves_the_router_and_the_drop_rule():
     assert _normalized("Valid.") == "valid"
     assert _normalized("  valid:  ") == "valid"
     assert _normalized("retry,") == "retry"
+
+
+@pytest.fixture
+def stranding_plan_state(monkeypatch):
+    """A plan whose node key leaves readings.csv's plot_id reference
+    unreachable -- the same shape test_construction_plan_tools.py pins for the
+    approval path, so the two can be compared directly."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/src/plots.csv", "w") as handle:
+        handle.write("plot_label,plot_id\nridge,PL-1\nridge,PL-2\nhollow,PL-3\n")
+    with fs.open("/src/readings.csv", "w") as handle:
+        handle.write("reading_id,plot_id\nR-1,PL-1\nR-2,PL-3\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    yield {
+        "proposed_construction_plan": {
+            "Plot": {
+                "construction_type": "node",
+                "source_file": "plots.csv",
+                "label": "Plot",
+                "unique_column_name": "plot_label",
+                "properties": [],
+            }
+        },
+        "approved_file_list": ["plots.csv", "readings.csv"],
+    }
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+
+
+def _run(state):
+    checker = CheckStatusAndEscalate(name="StopChecker")
+    ctx = SimpleNamespace(session=SimpleNamespace(state=state))
+
+    async def collect():
+        return [event async for event in checker._run_async_impl(ctx)]
+
+    return asyncio.run(collect())
+
+
+def _text(event):
+    if not event.content or not event.content.parts:
+        return ""
+    return "\n".join(part.text for part in event.content.parts if part.text)
+
+
+def test_problems_are_published_as_state_delta_not_by_mutation(stranding_plan_state):
+    """AgentTool runs the loop in a fresh child session and forwards ONLY
+    event.actions.state_delta to the parent. A mutating implementation would
+    still feed the next iteration's {feedback}, so it looks correct -- but the
+    second loop call in the same turn would quote the critic's stale 'valid'.
+    Asserting on the state dict would pass that bug; this asserts on the delta."""
+    stranding_plan_state["feedback"] = "valid"
+    events = _run(stranding_plan_state)
+
+    delta = events[0].actions.state_delta
+    assert "plot_id" in delta["feedback"]
+    assert delta["feedback"].startswith(PLAN_PROBLEM_HEADER)
+
+
+def test_problems_do_not_escalate_whatever_the_verdict(stranding_plan_state):
+    """The stop-check never needs to know whether an iteration remains: if one
+    does it runs, and if none does LoopAgent ends anyway with this event last.
+    One behaviour serves both."""
+    for verdict in ("valid", "retry\n- something else", ""):
+        stranding_plan_state["feedback"] = verdict
+        events = _run(stranding_plan_state)
+        assert events[0].actions.escalate is False
+        assert _text(events[0]).startswith("retry")
+
+
+def test_a_clean_plan_passes_the_verdict_through_untouched(stranding_plan_state):
+    """Nothing found must change nothing -- including emitting no delta, so an
+    empty verdict still leaves the slot as it was."""
+    stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
+        "plot_id"
+    )
+    stranding_plan_state["feedback"] = "valid\nWarnings:\n- partial join coverage"
+    events = _run(stranding_plan_state)
+
+    assert _text(events[0]) == "valid\nWarnings:\n- partial join coverage"
+    assert events[0].actions.escalate is True
+    assert not events[0].actions.state_delta
+
+
+def test_an_absent_plan_passes_through(stranding_plan_state):
+    """The empty-plan rule: no plan is not a plan with every column stranded."""
+    del stranding_plan_state["proposed_construction_plan"]
+    stranding_plan_state["feedback"] = "valid"
+    events = _run(stranding_plan_state)
+
+    assert _text(events[0]) == "valid"
+    assert not events[0].actions.state_delta
+
+
+def test_unverified_only_findings_pass_the_verdict_through(stranding_plan_state):
+    """AC4's other half. The reachability check fails open: a source it cannot
+    read yields a note, never a problem. An implementation that treated notes
+    as problems would pass every other test here."""
+    stranding_plan_state["approved_file_list"] = ["plots.csv", "absent.csv"]
+    stranding_plan_state["feedback"] = "valid"
+    events = _run(stranding_plan_state)
+
+    assert _text(events[0]) == "valid"
+    assert events[0].actions.escalate is True
+    assert not events[0].actions.state_delta
+
+
+def test_a_stale_composite_is_not_recomposed(stranding_plan_state):
+    """Built from the composer's own output, never a copied literal: a
+    hand-written header would stay green if the real one were reworded and the
+    detector thereby broken."""
+    stale = _compose_feedback("valid", ["an earlier problem"])
+    stranding_plan_state["feedback"] = stale
+    events = _run(stranding_plan_state)
+
+    composite = events[0].actions.state_delta["feedback"]
+    assert composite.count(PLAN_PROBLEM_HEADER) == 1
+    assert "an earlier problem" not in composite
+    assert CRITIC_PREAMBLE not in composite
+
+
+def test_a_repaired_plan_clears_the_stale_composite(stranding_plan_state):
+    """The one pass-through path that emits a delta, and it is not optional:
+    round 1's composite already reached the PARENT session via its own delta,
+    so emitting nothing here would leave it for prepare_refinement_loop_invocation
+    to quote in its 'stopped:' message -- stale mechanical problems for a plan
+    that no longer has them."""
+    stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
+        "plot_id"
+    )
+    stranding_plan_state["feedback"] = _compose_feedback(
+        "valid", ["an earlier problem"]
+    )
+    events = _run(stranding_plan_state)
+
+    assert events[0].actions.state_delta == {"feedback": ""}
+    assert _text(events[0]) == EMPTY_VERDICT_SUMMARY
+    assert events[0].actions.escalate is True
+
+
+def test_a_crashing_check_leaves_the_verdict_alone(
+    monkeypatch, caplog, stranding_plan_state
+):
+    """Fail-open in the loop, because approval still refuses the plan. A raise
+    here would instead abort the loop mid-turn: a dead turn with no response
+    and no spinner, to protect an optimisation approval backstops."""
+    # NOT `import ...schema_proposal_agent.agent as module`: sub_agents/__init__.py
+    # rebinds the name `schema_proposal_agent` to the LlmAgent, so that form
+    # raises ImportError.
+    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
+        agent as module,
+    )
+
+    def boom(*args, **kwargs):
+        raise PermissionError("source unreadable")
+
+    monkeypatch.setattr(module, "find_plan_problems", boom)
+    stranding_plan_state["feedback"] = "valid"
+    with caplog.at_level(logging.WARNING):
+        events = _run(stranding_plan_state)
+
+    assert _text(events[0]) == "valid"
+    assert events[0].actions.escalate is True
+    assert not events[0].actions.state_delta
+    assert "PermissionError" in caplog.text
+
+
+def test_a_real_adk_state_object_works(stranding_plan_state):
+    """The tests above use dict fakes; StateLike exists for ADK's State, which
+    is not a Mapping. Exercise it against the type it was written for."""
+    from google.adk.sessions.state import State
+
+    state = State(value=dict(stranding_plan_state), delta={})
+    state["feedback"] = "valid"
+    events = _run(state)
+
+    assert "plot_id" in events[0].actions.state_delta["feedback"]
