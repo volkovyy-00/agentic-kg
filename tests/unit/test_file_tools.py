@@ -671,3 +671,113 @@ def test_collapse_check_folds_an_absent_key_in_with_a_blank_one(ragged_source):
     assert check["example_conflicts"] == [
         {"node_key": "", "values": ["", "k2"]},
     ]
+
+
+@pytest.fixture
+def conflict_source(memory_source):
+    """Shapes that distinguish first-appearance order from detection order."""
+    fs = memory_source
+    # 'a' appears first but only disagrees on its last row; 'b' appears second
+    # and disagrees immediately. Today's answer lists a before b.
+    with fs.open("/src/late_conflict.csv", "w") as handle:
+        handle.write("key,value\na,1\nb,1\nb,2\nc,1\na,2\n")
+    # Seven conflicting keys, so the five reported are chosen, not merely all.
+    with fs.open("/src/many_conflicts.csv", "w") as handle:
+        rows = "".join(f"k{i},1\nk{i},2\n" for i in range(7))
+        handle.write("key,value\n" + rows)
+    # 'z' is seen first but sorts last: the ten reported values are the ten
+    # SMALLEST of all distinct values, so the first-seen value can fall outside.
+    with fs.open("/src/wide_conflict.csv", "w") as handle:
+        values = ["z"] + [f"v{i:02d}" for i in range(12)]
+        handle.write("key,value\n" + "".join(f"k,{v}\n" for v in values))
+    # A blank and a non-blank under one key: a conflict forward, and the
+    # reverse direction drops the blank.
+    with fs.open("/src/blank_conflict.csv", "w") as handle:
+        handle.write("key,value\nk,\nk,x\n")
+    # Seven keys appear in order k0..k6, then conflict in REVERSE order. The
+    # five reported must end up k0..k4, which means k6 and k5 are admitted first
+    # and then displaced by earlier-appearing keys.
+    with fs.open("/src/reverse_conflicts.csv", "w") as handle:
+        first_pass = "".join(f"k{i},1\n" for i in range(7))
+        second_pass = "".join(f"k{i},2\n" for i in range(6, -1, -1))
+        handle.write("key,value\n" + first_pass + second_pass)
+    return fs
+
+
+def test_collapse_check_reports_conflicts_in_first_appearance_order(conflict_source):
+    """'b' starts disagreeing on row 3 and 'a' only on row 5, yet 'a' is reported
+    first, because grouping is by first appearance and not by detection. A
+    streaming rewrite that reports conflicts as it notices them fails here."""
+    result = file_tools.collapse_check(
+        "late_conflict.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["group_count"] == 3
+    assert check["groups_with_conflicts"] == 2
+    assert [entry["node_key"] for entry in check["example_conflicts"]] == ["a", "b"]
+
+
+def test_collapse_check_reports_the_five_earliest_of_seven_conflicts(conflict_source):
+    """Seven keys conflict; the five named are the five that appear earliest in
+    the file, and 'groups_with_conflicts' still counts all seven."""
+    result = file_tools.collapse_check(
+        "many_conflicts.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["group_count"] == 7
+    assert check["groups_with_conflicts"] == 7
+    assert [entry["node_key"] for entry in check["example_conflicts"]] == [
+        "k0",
+        "k1",
+        "k2",
+        "k3",
+        "k4",
+    ]
+
+
+def test_collapse_check_reports_the_ten_smallest_values_not_the_first_ten(
+    conflict_source,
+):
+    """'z' is the first value seen and is not among the ten reported, because the
+    report is sorted(values)[:10]. A rewrite keeping 'the first ten seen' fails."""
+    result = file_tools.collapse_check(
+        "wide_conflict.csv", "key", "value", FakeToolContext()
+    )
+    values = result["collapse_check"]["example_conflicts"][0]["values"]
+    assert values == [f"v{i:02d}" for i in range(10)]
+    assert "z" not in values
+
+
+def test_collapse_check_displaces_a_late_conflict_with_an_earlier_key(
+    conflict_source,
+):
+    """Every key appears before any of them conflicts, and they then conflict in
+    reverse order -- so k6 and k5 are the first to earn a place and must be
+    displaced by k1 and k0. A streaming implementation that keeps the first five
+    it notices reports k6..k2 here, and one that always admits the newcomer
+    thrashes. Deterministic on purpose: the randomized differential catches this
+    too, but only on some seeds, and a seed is not a regression test."""
+    result = file_tools.collapse_check(
+        "reverse_conflicts.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["group_count"] == 7
+    assert check["groups_with_conflicts"] == 7
+    assert [entry["node_key"] for entry in check["example_conflicts"]] == [
+        "k0",
+        "k1",
+        "k2",
+        "k3",
+        "k4",
+    ]
+
+
+def test_collapse_check_counts_a_blank_against_a_value_as_a_conflict(conflict_source):
+    """Forward grouping keeps the blank, so {'', 'x'} is two distinct values under
+    one key. The reverse direction, which only _property_failure uses, drops it."""
+    result = file_tools.collapse_check(
+        "blank_conflict.csv", "key", "value", FakeToolContext()
+    )
+    check = result["collapse_check"]
+    assert check["groups_with_conflicts"] == 1
+    assert check["example_conflicts"] == [{"node_key": "k", "values": ["", "x"]}]
