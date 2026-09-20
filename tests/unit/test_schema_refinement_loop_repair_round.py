@@ -169,7 +169,8 @@ def test_the_proposal_step_is_told_the_problems_in_the_second_round(
         for part in event.content.parts
         if part.function_response and part.function_response.response
     ]
-    assert results and results[0].startswith("retry")
+    assert results
+    assert results[0].startswith("retry")
 
 
 def test_a_second_loop_call_in_the_same_turn_quotes_the_composite(

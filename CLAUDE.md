@@ -203,7 +203,7 @@ columns, and whether every approved file's reference columns can still be reache
 plan — accepting remaining critic objections stays the user's call. Reachability reads the approved sources and
 fails open: a file it cannot read yields a `not_verified` note, never a refusal.
 
-Since KG-14 both of those checks — `check_construction_plan_consistency` and
+Since KG-14 (PR #60) both of those checks — `check_construction_plan_consistency` and
 `check_reference_columns_are_reachable` — also run **inside** `schema_refinement_loop`, in its `StopChecker`,
 through the shared `find_plan_problems(state)`. A plan carrying either kind of problem is sent back for another
 iteration (the stop-check writes a `retry` composite to `feedback` via `state_delta`, never by mutating state —
