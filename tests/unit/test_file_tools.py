@@ -563,3 +563,64 @@ def test_the_column_readers_are_importable_under_their_public_names(memory_sourc
     pairs, error = file_tools.collect_column_pairs("people.csv", "id", "name")
     assert error is None
     assert pairs == [("1", "Ada"), ("2", "Grace")]
+
+
+@pytest.fixture
+def edge_source(memory_source):
+    """A header-only export and a zero-byte file, next to an ordinary CSV."""
+    fs = memory_source
+    with fs.open("/src/header_only.csv", "w") as handle:
+        handle.write("id,name\n")
+    with fs.open("/src/empty.csv", "w") as handle:
+        handle.write("")
+    return fs
+
+
+def test_column_stats_calls_a_header_only_column_vacuously_unique(edge_source):
+    """A header-only file is a valid empty export. Zero rows means no empties and
+    zero distinct values, so the is_unique arithmetic returns True. Pinned so the
+    streaming rewrite cannot change it by accident."""
+    result = file_tools.column_stats("header_only.csv", "id", FakeToolContext())
+    assert result["status"] == "success"
+    stats = result["column_stats"]
+    assert stats["row_count"] == 0
+    assert stats["distinct_count"] == 0
+    assert stats["empty_count"] == 0
+    assert stats["is_unique"] is True
+
+
+def test_join_preview_of_a_header_only_file_reports_zero_coverage(edge_source):
+    result = file_tools.join_preview(
+        "header_only.csv", "id", "people.csv", "id", FakeToolContext()
+    )
+    assert result["status"] == "success"
+    preview = result["join_preview"]
+    assert preview["file_a_total"] == 0
+    assert preview["file_a_matched"] == 0
+    assert preview["file_a_match_fraction"] == 0.0
+    assert preview["file_b_total"] == 2
+
+
+def test_collapse_check_of_a_header_only_file_errors_today(edge_source):
+    """THIS IS THE ONE CHARACTERIZATION THAT FLIPS. collect_column_pairs has no
+    header fallback, so a valid empty export is reported as a broken file. Task 10
+    replaces this assertion with zero counts."""
+    result = file_tools.collapse_check(
+        "header_only.csv", "id", "name", FakeToolContext()
+    )
+    assert result["status"] == "error"
+    assert "no header row" in result["error_message"]
+
+
+def test_a_zero_byte_file_has_no_header_row_in_every_file_tool(edge_source):
+    """A file with no header cannot even say whether a column is misspelled. All
+    three file tools agree; the reachability check does not (see
+    test_a_zero_byte_file_passes_the_reachability_check_in_silence)."""
+    context = FakeToolContext()
+    for result in (
+        file_tools.column_stats("empty.csv", "id", context),
+        file_tools.collapse_check("empty.csv", "id", "name", context),
+        file_tools.join_preview("empty.csv", "id", "people.csv", "id", context),
+    ):
+        assert result["status"] == "error"
+        assert "no header row" in result["error_message"]

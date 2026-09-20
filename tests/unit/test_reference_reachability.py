@@ -799,3 +799,43 @@ def test_a_non_iterable_approved_file_list_does_not_raise(survey_source):
     )
     assert problems == []
     assert unverified == []
+
+
+def test_a_header_only_file_is_not_an_identifier_home(survey_source):
+    """Zero rows is not a home: _home_files' at-least-one-row condition is the
+    one place uniqueness and identity differ, and it must survive the rewrite.
+
+    Keep this file's vocabulary neutral -- tests/unit/test_generality.py asserts
+    the bundled dataset's column names are absent from this module."""
+    fs = survey_source
+    with fs.open("/src/header_only.csv", "w") as handle:
+        handle.write("plot_label,canopy\n")
+    homes, evidence_complete, notes, value_sets = rr._home_files(
+        "plot_label", ["header_only.csv"]
+    )
+    assert homes == []
+    assert evidence_complete is True
+    assert notes == []
+    assert value_sets == {"header_only.csv": set()}
+
+
+def test_a_zero_byte_file_passes_the_reachability_check_in_silence(survey_source):
+    """Deliberate asymmetry with the file tools, and pre-existing: _columns_by_file
+    reads headers through read_csv_header, which returns [] for a zero-byte file
+    WITHOUT raising, so the file contributes no column names and never reaches
+    _home_files. Pinned so the rewrite does not 'fix' it into a new answer."""
+    fs = survey_source
+    with fs.open("/src/empty.csv", "w") as handle:
+        handle.write("")
+    plan = {
+        "r1": {
+            "construction_type": "node",
+            "source_file": "empty.csv",
+            "label": "Thing",
+            "unique_column_name": "plot_label",
+            "properties": ["plot_label"],
+        }
+    }
+    problems, unverified = rr.check_reference_columns_are_reachable(plan, ["empty.csv"])
+    assert problems == []
+    assert unverified == []
