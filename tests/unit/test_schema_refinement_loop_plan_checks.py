@@ -290,3 +290,32 @@ def test_a_real_adk_state_object_works(stranding_plan_state):
     events = _run(state)
 
     assert "plot_id" in events[0].actions.state_delta["feedback"]
+
+
+def test_the_cleared_slot_is_not_quoted_by_the_second_loop_call(stranding_plan_state):
+    """End-to-end on the clearing path: apply the delta the stop-check emitted,
+    then run the turn-cap callback that short-circuits a second loop call in
+    the same turn. Its 'stopped:' message quotes whatever is in the slot, so a
+    slot left holding the old composite would hand the coordinator mechanical
+    problems for a plan that has since been repaired."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+        prepare_refinement_loop_invocation,
+    )
+
+    stranding_plan_state["proposed_construction_plan"]["Plot"][
+        "unique_column_name"
+    ] = "plot_id"
+    stranding_plan_state["feedback"] = _compose_feedback("valid", ["an earlier problem"])
+
+    events = _run(stranding_plan_state)
+    stranding_plan_state.update(events[0].actions.state_delta)
+
+    # calls == 1 already spent this turn, so the next invocation short-circuits
+    stranding_plan_state["schema_refinement_calls_this_turn"] = 1
+    callback_context = SimpleNamespace(state=stranding_plan_state)
+    content = prepare_refinement_loop_invocation(callback_context)
+
+    message = content.parts[0].text
+    assert message.startswith("stopped:")
+    assert PLAN_PROBLEM_HEADER not in message
+    assert "an earlier problem" not in message
