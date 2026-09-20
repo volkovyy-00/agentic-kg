@@ -802,3 +802,35 @@ def test_a_failure_part_way_through_a_read_returns_an_error_not_a_raise(
 
     result = file_tools.collapse_check("people.csv", "id", "name", FakeToolContext())
     assert result["status"] == "error"
+
+
+def test_the_row_reader_validates_columns_before_yielding_a_header_only_file(
+    edge_source,
+):
+    """The loader's _batches_and_header exists because read_csv_batches yields
+    nothing for a header-only file, so a column check inside the batch loop never
+    runs for one. The row reader must not repeat that: a misspelled column in a
+    valid empty export is still a misspelled column."""
+    rows, error = file_tools._column_rows("header_only.csv", ["nope"])
+    assert error is not None
+    assert "nope" in error["error_message"]
+    assert list(rows) == []
+
+    rows, error = file_tools._column_rows("header_only.csv", ["id", "name"])
+    assert error is None
+    assert list(rows) == []
+
+
+def test_the_row_reader_yields_absent_and_blank_cells_apart(ragged_source):
+    """None means the row was too short to reach the column; "" means the cell was
+    present and empty. The loader treats them differently, so the reader must not
+    fold them together -- that is each summariser's own decision."""
+    rows, error = file_tools._column_rows("ragged.csv", ["key", "value"])
+    assert error is None
+    assert list(rows) == [
+        ("k1", "x"),
+        ("k2", None),
+        (None, None),
+        ("k3", " x"),
+        ("k4", "   "),
+    ]

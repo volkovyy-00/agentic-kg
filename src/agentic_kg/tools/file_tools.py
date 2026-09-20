@@ -1,5 +1,5 @@
 import logging
-from itertools import islice
+from itertools import chain, islice
 from typing import Any, Dict, List, Optional
 
 from google.adk.tools import ToolContext
@@ -254,6 +254,62 @@ def _missing_column_error(file_path: str, column: str, header: List[str]) -> dic
     return tool_error(
         f"Column '{column}' is not in {file_path}. Available columns: {header}"
     )
+
+
+def _column_rows(file_path: str, columns: List[str]):
+    """Stream one tuple per data row, holding only the named columns.
+
+    Returns:
+        (rows, error). On success `rows` yields a tuple per data row carrying
+        each column's raw value: None when the row was too short to reach that
+        column, "" for a present-but-empty cell. Folding those together is the
+        caller's decision, not this reader's -- the loader treats them
+        differently and the hint tools count them apart.
+
+    Column names are validated ONCE, against the first batch's header or, when
+    there is no batch at all, against a header read on its own. That second read
+    is what a header-only file costs, and it is the loader's `_batches_and_header`
+    rule: read_csv_batches yields nothing for a valid empty export, so a check
+    living inside the batch loop never runs for one.
+
+    A failure part way through the stream raises out of the returned iterator.
+    Consume it inside a try -- `summarize_column` and `summarize_key_groups` do,
+    which is why they, and not their callers, own the whole read.
+    """
+    try:
+        if not source_exists(file_path):
+            return iter(()), tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return iter(()), tool_error(str(exc))
+
+    try:
+        batches = read_csv_batches(file_path)
+        first = next(batches, None)
+        if first is None:
+            header = read_csv_header(file_path)
+            batches = iter(())
+        else:
+            header = first[0]
+            batches = chain([first], batches)
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return iter(()), tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    if not header:
+        return iter(()), tool_error(f"CSV file has no header row: {file_path}")
+    missing = [column for column in columns if column not in header]
+    if missing:
+        if len(columns) == 1:
+            return iter(()), _missing_column_error(file_path, columns[0], header)
+        return iter(()), tool_error(
+            f"Column(s) {missing} are not in {file_path}. Available columns: {header}"
+        )
+
+    def rows():
+        for _batch_header, batch in batches:
+            for row in batch:
+                yield tuple(row.get(column) for column in columns)
+
+    return rows(), None
 
 
 def collect_column_values(file_path: str, column: str):
