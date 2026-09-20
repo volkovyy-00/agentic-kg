@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   query fails — that read now returns an error the agent can retry, where 5.x reopened the connection
   silently. The connection-recovery tests now close the connection before each tool, so each tool's own
   recovery is checked, rather than only whichever tool happened to run first.
-- **Plan problems are caught during schema refinement, not only at approval (#<N>)**: `schema_refinement_loop` now
+- **Plan problems are caught during schema refinement, not only at approval (#60)**: `schema_refinement_loop` now
   runs the same two checks `approve_proposed_construction_plan` runs — construction-plan consistency (joins,
   endpoint labels, declared types) and reference-column reachability — and sends a plan carrying either kind
   of problem back for another refinement iteration. Previously such a plan was only refused when read for
