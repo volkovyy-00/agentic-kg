@@ -302,10 +302,12 @@ def test_the_cleared_slot_is_not_quoted_by_the_second_loop_call(stranding_plan_s
         prepare_refinement_loop_invocation,
     )
 
-    stranding_plan_state["proposed_construction_plan"]["Plot"][
-        "unique_column_name"
-    ] = "plot_id"
-    stranding_plan_state["feedback"] = _compose_feedback("valid", ["an earlier problem"])
+    stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
+        "plot_id"
+    )
+    stranding_plan_state["feedback"] = _compose_feedback(
+        "valid", ["an earlier problem"]
+    )
 
     events = _run(stranding_plan_state)
     stranding_plan_state.update(events[0].actions.state_delta)
