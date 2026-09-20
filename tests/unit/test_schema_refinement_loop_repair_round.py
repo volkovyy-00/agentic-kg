@@ -170,3 +170,71 @@ def test_the_proposal_step_is_told_the_problems_in_the_second_round(
         if part.function_response and part.function_response.response
     ]
     assert results and results[0].startswith("retry")
+
+
+def test_a_second_loop_call_in_the_same_turn_quotes_the_composite(
+    monkeypatch, stranding_sources
+):
+    """The turn cap short-circuits a second schema_refinement_loop call with a
+    'stopped:' message quoting the feedback slot. That slot must hold the
+    composite, not the critic's 'valid' -- which is exactly what a mutating
+    implementation would leave there, since AgentTool forwards only
+    state_delta out of the loop's child session."""
+
+    async def run():
+        monkeypatch.setattr(
+            schema_proposal_agent,
+            "model",
+            RecordingLlm(
+                model="recording",
+                responses=[_text_response("a minimal schema proposal")],
+            ),
+        )
+        monkeypatch.setattr(
+            schema_critic_agent,
+            "model",
+            RecordingLlm(model="recording", responses=[_text_response("valid")]),
+        )
+        monkeypatch.setattr(
+            root_agent,
+            "model",
+            RecordingLlm(
+                model="recording",
+                responses=[
+                    _tool_call_response("propose an initial schema"),
+                    _tool_call_response("the user asked for another change"),
+                    _text_response("final response"),
+                ],
+            ),
+        )
+
+        runner = InMemoryRunner(agent=root_agent, app_name="second_call_test")
+        session = await runner.session_service.create_session(
+            app_name="second_call_test",
+            user_id="u1",
+            state=stranding_sources,
+        )
+        return [
+            event
+            async for event in runner.run_async(
+                user_id="u1",
+                session_id=session.id,
+                new_message=types.Content(
+                    role="user", parts=[types.Part(text="please propose a schema")]
+                ),
+            )
+        ]
+
+    events = asyncio.run(run())
+    results = [
+        str(part.function_response.response.get("result", ""))
+        for event in events
+        if event.content and event.content.parts
+        for part in event.content.parts
+        if part.function_response and part.function_response.response
+    ]
+
+    assert len(results) == 2
+    assert results[1].startswith("stopped:")
+    assert "plot_id" in results[1]
+    assert "last verdict: valid" not in results[1]
