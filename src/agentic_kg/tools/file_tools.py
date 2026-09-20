@@ -521,8 +521,10 @@ def collect_column_values(file_path: str, column: str):
     empty_count treat both as empty -- but not to the loader, which skips an
     absent key and clears a blank one, so the hint tool counts them apart.
 
-    Public because `tools/reference_reachability.py` reads source columns through
-    it rather than reimplementing CSV reading.
+    Public because `column_type_hint` reads one column through it. The hint tools
+    count an absent key apart from a blank cell, so they need the per-row list
+    this returns rather than either summariser's reduction; giving them the
+    streaming reader is their own ticket.
     """
     try:
         if not source_exists(file_path):
@@ -821,64 +823,6 @@ def column_type_hints(
             for column in requested
         ],
     )
-
-
-def collect_column_pairs(file_path: str, column_a: str, column_b: str):
-    """Read two columns of one source CSV, row by row.
-
-    Returns:
-        (pairs, error) where pairs is a list of (value_a, value_b) tuples and
-        error is a tool_error dict when the file or either column cannot be
-        read.
-
-    Public because `tools/reference_reachability.py` reads source columns through
-    it rather than reimplementing CSV reading.
-    """
-    try:
-        if not source_exists(file_path):
-            return None, tool_error(f"CSV file does not exist: {file_path}")
-    except SourceError as exc:
-        return None, tool_error(str(exc))
-
-    pairs = []
-    saw_header = False
-    try:
-        for batch_header, rows in read_csv_batches(file_path):
-            if not saw_header:
-                saw_header = True
-                missing = [c for c in (column_a, column_b) if c not in batch_header]
-                if missing:
-                    return None, tool_error(
-                        f"Column(s) {missing} are not in {file_path}. "
-                        f"Available columns: {batch_header}"
-                    )
-            for row in rows:
-                pairs.append((row.get(column_a, ""), row.get(column_b, "")))
-    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
-
-    if not saw_header:
-        return None, tool_error(f"CSV file has no header row: {file_path}")
-
-    return pairs, None
-
-
-def group_values_by_key(pairs) -> Dict[str, set]:
-    """Group a column's values by a node key's values, as MERGE would collapse them.
-
-    Returns EVERY group, not only the conflicting ones: 'collapse_check' reports
-    'group_count' (the number of distinct node keys) alongside
-    'groups_with_conflicts', and those are different numbers. Callers filter.
-
-    Values of None become "" so a ragged row's absent key groups with a blank one,
-    which is how the loader treats them.
-    """
-    groups: Dict[str, set] = {}
-    for key, value in pairs:
-        key_text = "" if key is None else str(key)
-        value_text = "" if value is None else str(value)
-        groups.setdefault(key_text, set()).add(value_text)
-    return groups
 
 
 def collapse_check(

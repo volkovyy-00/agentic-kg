@@ -538,31 +538,49 @@ def test_the_hint_docstring_documents_every_key_it_returns(bom_source):
         assert f"'{key}'" in file_tools.column_type_hint.__doc__, key
 
 
-def test_group_values_by_key_returns_every_group_not_only_conflicts():
-    """Catches an extraction that returns the filtered conflict list: collapse_check
-    needs group_count, which is len(groups) BEFORE filtering."""
-    groups = file_tools.group_values_by_key([("k1", "a"), ("k1", "b"), ("k2", "c")])
-    assert set(groups) == {"k1", "k2"}
-    assert groups["k1"] == {"a", "b"}
-    assert groups["k2"] == {"c"}
+def test_the_group_summary_counts_every_key_not_only_the_conflicting_ones(
+    conflict_source,
+):
+    """Catches a summariser that counts only what it reports: collapse_check needs
+    group_count, which is every distinct key, alongside groups_with_conflicts."""
+    summary, error = file_tools.summarize_key_groups(
+        "late_conflict.csv", "key", "value", keep_examples=5
+    )
+    assert error is None
+    assert summary is not None
+    assert summary.group_count == 3
+    assert summary.conflict_count == 2
 
 
-def test_group_values_by_key_normalises_none_to_empty_string():
-    """Catches an extraction that drops collapse_check's None handling, which would
-    make a ragged row's absent key crash on set membership."""
-    groups = file_tools.group_values_by_key([(None, None)])
-    assert groups == {"": {""}}
+def test_the_group_summary_folds_an_absent_key_in_with_a_blank_one(ragged_source):
+    """Catches a summariser that drops the None handling, which would make a
+    ragged row's absent key a separate group from a genuinely blank one."""
+    summary, error = file_tools.summarize_key_groups(
+        "ragged.csv", "value", "key", keep_examples=5
+    )
+    assert error is None
+    assert summary is not None
+    assert summary.group_count == 4
 
 
 def test_the_column_readers_are_importable_under_their_public_names(memory_source):
-    """Catches a promotion that renamed only the definition and left call sites (or
-    vice versa) — reference_reachability imports these by their public names."""
+    """Catches a rename that touched the definition and not the call sites (or
+    the reverse) -- reference_reachability imports the summarisers by name, and
+    column_type_hint still imports the per-row collector."""
+    summary, error = file_tools.summarize_column("people.csv", "name")
+    assert error is None
+    assert summary is not None
+    assert summary.distinct == {"Ada", "Grace"}
+    assert summary.is_unique is True
+
+    groups, error = file_tools.summarize_key_groups("people.csv", "id", "name")
+    assert error is None
+    assert groups is not None
+    assert groups.group_count == 2
+
     values, error = file_tools.collect_column_values("people.csv", "name")
     assert error is None
     assert values == ["Ada", "Grace"]
-    pairs, error = file_tools.collect_column_pairs("people.csv", "id", "name")
-    assert error is None
-    assert pairs == [("1", "Ada"), ("2", "Grace")]
 
 
 @pytest.fixture
