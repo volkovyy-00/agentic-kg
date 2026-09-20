@@ -1147,3 +1147,90 @@ def test_a_retained_id_on_a_node_per_row_of_a_repeating_file_is_not_reachable(
     assert len(problems) == 1
     assert "product_id" in problems[0]
     assert unverified == []
+
+
+def test_find_plan_problems_returns_nothing_for_a_falsy_plan(stranding_state):
+    """An empty plan makes the reachability check report every shared unique
+    column as stranded. A caller that lost its own guard would then loop on
+    nothing, so the guard lives here instead of in each caller."""
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    # The approved files must be present and genuinely stranding, or the test
+    # passes with the emptiness guard deleted -- reachability reports nothing
+    # when there are no files to compare either.
+    state = dict(stranding_state.state)
+    for empty in (None, {}, []):
+        state[PROPOSED_CONSTRUCTION_PLAN] = empty
+        assert find_plan_problems(state) == ([], [])
+    del state[PROPOSED_CONSTRUCTION_PLAN]
+    assert find_plan_problems(state) == ([], [])
+
+
+def test_find_plan_problems_orders_structural_problems_first(stranding_state):
+    """Both callers render these as a flat bullet list, so the order is part of
+    what the reader sees. Structural problems are cheap and name a construction
+    rule; reachability problems are long and name files."""
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    stranding_state.state[PROPOSED_CONSTRUCTION_PLAN]["MEASURED_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "MEASURED_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Reading",
+        "from_node_column": "reading_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_id",
+    }
+    problems, _ = find_plan_problems(stranding_state.state)
+
+    structural = [p for p in problems if p.startswith("MEASURED_AT:")]
+    reachability = [
+        p for p in problems if "plot_id" in p and not p.startswith("MEASURED_AT:")
+    ]
+    assert structural, "expected the missing-endpoint-label problem"
+    assert reachability, "expected the stranded-column problem"
+    assert problems.index(structural[-1]) < problems.index(reachability[0])
+
+
+def test_find_plan_problems_has_no_guard_of_its_own(monkeypatch, stranding_state):
+    """Load-bearing: a guard here would make approve_proposed_construction_plan
+    swallow a crashed check and write an approved plan whose checks never ran.
+    The loop guards its own call instead."""
+    import agentic_kg.tools.construction_plan_tools as module
+
+    def boom(*args, **kwargs):
+        raise PermissionError("source unreadable")
+
+    monkeypatch.setattr(module, "check_reference_columns_are_reachable", boom)
+    with pytest.raises(PermissionError):
+        module.find_plan_problems(stranding_state.state)
+
+
+def test_approval_fails_closed_when_the_structural_check_raises(
+    monkeypatch, stranding_state
+):
+    """The exception must reach the caller with no approved plan written."""
+    import agentic_kg.tools.construction_plan_tools as module
+
+    def boom(*args, **kwargs):
+        raise TypeError("unhashable type: 'dict'")
+
+    monkeypatch.setattr(module, "check_construction_plan_consistency", boom)
+    with pytest.raises(TypeError):
+        module.approve_proposed_construction_plan(stranding_state)
+    assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
+
+
+def test_approval_fails_closed_when_the_reachability_check_raises(
+    monkeypatch, stranding_state
+):
+    """Same guarantee for the other check: neither may be swallowed."""
+    import agentic_kg.tools.construction_plan_tools as module
+
+    def boom(*args, **kwargs):
+        raise PermissionError("source unreadable")
+
+    monkeypatch.setattr(module, "check_reference_columns_are_reachable", boom)
+    with pytest.raises(PermissionError):
+        module.approve_proposed_construction_plan(stranding_state)
+    assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
