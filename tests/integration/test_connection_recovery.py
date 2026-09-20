@@ -9,19 +9,22 @@ exercises -- reintroducing the defect there would otherwise be invisible.
 """
 
 import logging
-import warnings
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-# The logger _ensure_connected writes its rebuild line to. Asserting on that
-# line is the half of this test's evidence that this repo controls: the
-# use-after-close DeprecationWarning below is emitted by the neo4j package, so
-# if it is ever reworded -- in any patch release, not only at the 6.0 removal
-# the comments anticipate -- the warning filter would silently match nothing
-# and pass while verifying nothing at all. Our own log line cannot drift
-# without this repo changing it.
+# How these tests catch a closed driver being reused: since neo4j 6.0,
+# Driver._check_state raises DriverError("Driver closed") on any use after
+# close(), and every graph tool turns that into a `status: error` result. So a
+# call site that lost its heal fails its tool's success assertion -- but only
+# if it is the FIRST call after a close; once any path heals, the rest run on
+# the new driver. Hence the close before every step below, and hence a new
+# entry point needing its own close-then-call step to be covered at all.
+#
+# The logger _ensure_connected writes its rebuild line to. The rebuild count
+# pins that each heal actually ran, as opposed to the step succeeding some
+# other way.
 RECONNECT_LOGGER = "agentic_kg.common.neo4j_for_adk"
 
 try:
@@ -30,27 +33,6 @@ try:
     docker.from_env().ping()
 except Exception as exc:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {exc}", allow_module_level=True)
-
-
-def _use_after_close_warnings(caught):
-    """The recorded warnings that say a closed Driver was used.
-
-    Matched narrowly on category plus the driver's exact phrase, not a bare
-    "closed" substring: the callers' warnings.simplefilter("always") also lifts
-    Python's default ResourceWarning suppression, and they drive a live Bolt
-    pool, so an incidental "unclosed <socket...>" ResourceWarning from GC would
-    otherwise fail them for a reason unrelated to the defect under test.
-
-    One definition, used by both tests: the phrase and the category are a
-    single invariant tied to neo4j 5.x driver internals, and two copies could
-    be updated apart -- silently weakening whichever one was missed.
-    """
-    return [
-        w
-        for w in caught
-        if issubclass(w.category, DeprecationWarning)
-        and "after it has been closed" in str(w.message).lower()
-    ]
 
 
 def _rebuild_log_lines(caplog):
@@ -105,34 +87,47 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
     # entry from an earlier test could mask a broken profiling path.
     graph_profile.reset_cache()
 
-    # The break: exactly what neo4j_is_ready does on a transient failure.
-    neo4j_for_adk.close_graphdb()
-
-    with (
-        warnings.catch_warnings(record=True) as caught,
-        caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER),
-    ):
-        warnings.simplefilter("always")
-
+    # Each step below opens with a break -- exactly what neo4j_is_ready does on
+    # a transient failure. See RECONNECT_LOGGER for why every step needs its own.
+    #
+    # The exception is a heal that still does not run first within its own step.
+    # get_config() is the case: _physical_schema calls get_driver() one line
+    # earlier, which clears _closed, so dropping get_config's heal passes every
+    # test here. tests/unit/test_neo4j_for_adk.py covers it instead -- and it
+    # needs covering, since a stale config returns success-shaped data rather
+    # than failing (see get_config's docstring).
+    with caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
         # 1. Schema read -- the get_driver() path.
+        neo4j_for_adk.close_graphdb()
         schema = cypher_tools.get_physical_schema()
         assert schema["status"] == "success", schema.get("error_message")
         assert "Supplier" in schema["schema"]["node_props"]
 
-        # 2. Profiled schema -- graph_profile's own binding plus cache
-        #    invalidation. Real data, not merely absence of error.
+        # 2. Profiled schema -- the profiling path end to end, including
+        #    graph_profile's own binding and cache invalidation. Real data, not
+        #    merely absence of error. Like get_config above, that binding is
+        #    not what meets the closed driver here (get_driver runs first, and
+        #    graph_profile reaches the database through send_read_query, which
+        #    step 3 covers); what this step pins is that the path still works
+        #    across a break, which is what the module docstring is about.
+        neo4j_for_adk.close_graphdb()
         profiled = cypher_tools.get_graph_schema_with_profile()
         assert profiled["status"] == "success", profiled.get("error_message")
         assert profiled["schema"]["profile"]["entity_counts"]["Supplier"] == 20
         assert profiled["schema"]["profile"]["properties"]
 
-        # 3. Ad-hoc read query.
+        # 3. Ad-hoc read query -- the send_read_query path.
+        neo4j_for_adk.close_graphdb()
         rows = cypher_tools.read_neo4j_cypher("MATCH (p:Part) RETURN count(p) AS c")
         assert rows["status"] == "success", rows.get("error_message")
         assert rows["query_result"]["records"][0]["c"] == 88
 
-        # 4. Both loaders, re-run after the break.
+        # 4. Both loaders -- the send_query path. import_nodes opens with
+        #    create_uniqueness_constraint, import_relationships with its first
+        #    UNWIND batch; either way a write is the first call after the break.
+        neo4j_for_adk.close_graphdb()
         assert kg.import_nodes(SUPPLIER_RULE)["status"] == "success"
+        neo4j_for_adk.close_graphdb()
         assert kg.import_relationships(SUPPLIED_BY_RULE)["status"] == "success"
 
         rels = neo4j_graph_with_apoc.send_query(
@@ -140,32 +135,9 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
         )
         assert rels["records"][0]["c"] > 0
 
-    # neo4j 5.x's Driver tolerates use after close() -- _check_state in
-    # neo4j/_sync/driver.py only warns, with a literal "# TODO: 6.0 - raise
-    # the error" above it -- so every assertion above passes whether or not a
-    # reconnection call site actually ran: a stale, closed Driver silently
-    # reopens its own connection pool on the next session/execute_query call.
-    # The DeprecationWarning it emits on the way is the only signal, today,
-    # that distinguishes "reconnected on purpose" from "reused a closed
-    # handle that happened to still work" -- and at the 6.0 bump this becomes
-    # a hard error on all four production call paths this test exercises, so
-    # asserting its absence now is what actually catches a regressed
-    # reconnection call site rather than the driver's own leniency.
-    closed_warnings = _use_after_close_warnings(caught)
-    assert not closed_warnings, [str(w.message) for w in closed_warnings]
-
-    # The half of the evidence this repo owns (see RECONNECT_LOGGER): the heal
-    # ran, and ran exactly once for the whole block -- the first call rebuilds,
-    # the rest reuse the healthy driver.
-    #
-    # Known limit: this pins THAT a heal happened, not WHICH call site did it.
-    # Several entry points heal, so if the driver's warning text above were ever
-    # reworded AND one call site lost its heal, another would cover for it and
-    # the count would still be 1. Asserting the count earlier does not fix that
-    # -- get_config heals too, and runs inside the very first step. Catching a
-    # single regressed call site rests on the warning assertion; this one
-    # catches healing being lost altogether, and survives a reworded warning.
-    assert len(_rebuild_log_lines(caplog)) == 1, _rebuild_log_lines(caplog)
+    # One heal per break, five breaks: each close was followed by a rebuild,
+    # not merely by a step that happened to succeed.
+    assert len(_rebuild_log_lines(caplog)) == 5, _rebuild_log_lines(caplog)
 
 
 def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph, caplog):
@@ -175,26 +147,13 @@ def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph, caplog):
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
 
-    with (
-        warnings.catch_warnings(record=True) as caught,
-        caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER),
-    ):
-        warnings.simplefilter("always")
-
+    with caplog.at_level(logging.INFO, logger=RECONNECT_LOGGER):
         for _ in range(3):
             neo4j_for_adk.close_graphdb()
             result = cypher_tools.read_neo4j_cypher("RETURN 1 AS ok")
             assert result["status"] == "success", result.get("error_message")
             assert result["query_result"]["records"][0]["ok"] == 1
 
-    # See the comment on the equivalent assertion in
-    # test_every_graph_tool_works_after_a_close_and_recover_cycle: neo4j 5.x's
-    # Driver tolerates use after close() and only warns, so a passing
-    # assertion above proves nothing about whether reconnection actually ran
-    # -- only the absence of this warning does.
-    closed_warnings = _use_after_close_warnings(caught)
-    assert not closed_warnings, [str(w.message) for w in closed_warnings]
-
     # One heal per cycle, three cycles: proves each close was actually followed
-    # by a rebuild rather than by a closed driver the library tolerated.
+    # by a rebuild, not just that the first one was.
     assert len(_rebuild_log_lines(caplog)) == 3, _rebuild_log_lines(caplog)
