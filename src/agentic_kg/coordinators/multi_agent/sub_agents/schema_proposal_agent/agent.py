@@ -15,6 +15,7 @@ from agentic_kg.tools.construction_plan_tools import (
     StateLike,
     approve_proposed_construction_plan,
     find_plan_problems,
+    format_problem_bullets,
     get_proposed_construction_plan_with_approval_check,
 )
 
@@ -101,7 +102,7 @@ def _compose_feedback(verdict: str, problems: list[str]) -> str:
     The critic's own text is kept alongside rather than replaced, because on a
     second retry the coordinator must still show its remaining objections.
     """
-    bullets = "\n".join(f"- {problem}" for problem in problems)
+    bullets = format_problem_bullets(problems)
     composite = f"{PLAN_PROBLEM_HEADER}\n{bullets}"
     remainder = _without_bare_valid(verdict)
     if remainder:

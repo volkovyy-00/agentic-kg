@@ -526,6 +526,21 @@ def _format_unverified_notes(unverified: list[str]) -> str:
     return "\n\nNot verified:\n- " + "\n- ".join(unverified)
 
 
+def format_problem_bullets(problems: list[str]) -> str:
+    """Render find_plan_problems' output as the bullet list every caller shows.
+
+    Same argument as _format_unverified_notes above, one list over: approval,
+    its dry run, and the refinement loop's retry composite all render the same
+    problem strings, so a third spelling of the format would drift the moment
+    one is reworded -- and the loop's text would stop matching what approval
+    shows the user for the identical problem.
+
+    Public, unlike its sibling, because the composer lives in the schema
+    proposal agent's module rather than here.
+    """
+    return "\n".join(f"- {problem}" for problem in problems)
+
+
 class StateLike(Protocol):
     """Anything the plan checks can read session state from.
 
@@ -628,8 +643,8 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     if problems:
         return tool_error(
             "The proposed construction plan was NOT approved. It is inconsistent, "
-            "or it leaves an approved file's reference column unreachable:\n- "
-            + "\n- ".join(problems)
+            "or it leaves an approved file's reference column unreachable:\n"
+            + format_problem_bullets(problems)
             + "\nFix the plan, then show the user the corrected plan returned by "
             "'get_proposed_construction_plan_with_approval_check' and ask them to "
             "approve again. Do not describe the plan as fixed until "
@@ -672,8 +687,8 @@ def get_proposed_construction_plan_with_approval_check(
             # calling the loop. Only the instruction knows which branch it is
             # in, and it already says what to do in each.
             "This plan cannot be approved as it stands. "
-            "'approve_proposed_construction_plan' will refuse it for:\n- "
-            + "\n- ".join(problems)
+            "'approve_proposed_construction_plan' will refuse it for:\n"
+            + format_problem_bullets(problems)
             # Carries the plan even though approval would refuse it. The
             # coordinator's instruction forbids describing a plan from memory
             # and requires reproducing this tool's returned fields, and this is
