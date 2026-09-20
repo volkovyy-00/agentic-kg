@@ -781,3 +781,24 @@ def test_collapse_check_counts_a_blank_against_a_value_as_a_conflict(conflict_so
     check = result["collapse_check"]
     assert check["groups_with_conflicts"] == 1
     assert check["example_conflicts"] == [{"node_key": "k", "values": ["", "x"]}]
+
+
+def test_a_failure_part_way_through_a_read_returns_an_error_not_a_raise(
+    memory_source, monkeypatch
+):
+    """A source can fail after the header and some rows have been read. Today the
+    collectors catch it around the batch loop and return a tool_error; the
+    summarisers must keep owning that, because handing callers a lazy iterator
+    would move the failure into find_plan_problems, which does not catch."""
+
+    def failing_batches(path, *args, **kwargs):
+        yield ["id", "name"], [{"id": "1", "name": "Ada"}]
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(file_tools, "read_csv_batches", failing_batches)
+    result = file_tools.column_stats("people.csv", "id", FakeToolContext())
+    assert result["status"] == "error"
+    assert "people.csv" in result["error_message"]
+
+    result = file_tools.collapse_check("people.csv", "id", "name", FakeToolContext())
+    assert result["status"] == "error"

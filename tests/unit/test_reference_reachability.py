@@ -839,3 +839,26 @@ def test_a_zero_byte_file_passes_the_reachability_check_in_silence(survey_source
     problems, unverified = rr.check_reference_columns_are_reachable(plan, ["empty.csv"])
     assert problems == []
     assert unverified == []
+
+
+def test_a_failure_part_way_through_a_read_becomes_a_note_not_a_raise(
+    survey_source, monkeypatch
+):
+    """reference_reachability promises that nothing in it raises. A mid-read
+    failure must arrive as evidence_complete=False plus a note.
+
+    Patched by dotted path rather than through an imported module object, so this
+    needs no new import in either the test module or the production one."""
+
+    def failing_batches(path, *args, **kwargs):
+        yield ["plot_label"], [{"plot_label": "ridge"}]
+        raise OSError("source went away")
+
+    monkeypatch.setattr("agentic_kg.tools.file_tools.read_csv_batches", failing_batches)
+    homes, evidence_complete, notes, value_sets = rr._home_files(
+        "plot_label", ["plots.csv"]
+    )
+    assert homes == []
+    assert evidence_complete is False
+    assert len(notes) == 1
+    assert "plots.csv" in notes[0]
