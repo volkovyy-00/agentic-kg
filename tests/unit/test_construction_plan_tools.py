@@ -938,15 +938,42 @@ def stranding_state(monkeypatch):
     fs.pseudo_dirs.clear()
 
 
-def test_both_callers_report_the_same_reachability_problems(stranding_state):
-    """The PR #20 anti-drift pin, extended: a precondition added to one path and
-    not the other is exactly what _read_plan_for_approval exists to prevent."""
+def test_every_path_reports_the_same_plan_problems(stranding_state):
+    """The PR #20 anti-drift pin, extended to the refinement loop: a check added
+    to one path and not another is exactly what the shared reader exists to
+    prevent. All three read the same plan through find_plan_problems, so every
+    problem approval names must appear verbatim in the loop's composite."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+        _compose_feedback,
+    )
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    stranding_state.state[PROPOSED_CONSTRUCTION_PLAN]["MEASURED_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "MEASURED_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Reading",
+        "from_node_column": "reading_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_id",
+    }
+
     refusal = approve_proposed_construction_plan(stranding_state)
     check = get_proposed_construction_plan_with_approval_check(stranding_state)
+    problems, _ = find_plan_problems(stranding_state.state)
+    composite = _compose_feedback("valid", problems)
+
     assert refusal["status"] == "error"
     assert check["status"] == "error"
-    assert "plot_id" in refusal["error_message"]
-    assert "plot_id" in check["error_message"]
+    for problem in problems:
+        assert problem in refusal["error_message"]
+        assert problem in check["error_message"]
+        assert problem in composite
+
+    # Note the seam this does NOT cover: it composes directly rather than
+    # running the stop-check, so it pins the wording, not the wiring. That the
+    # stop-check actually calls find_plan_problems is pinned separately, in
+    # tests/unit/test_schema_refinement_loop_plan_checks.py.
 
 
 def test_approval_refuses_a_plan_that_strands_a_reference_column(stranding_state):
