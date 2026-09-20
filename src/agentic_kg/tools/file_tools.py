@@ -1,6 +1,7 @@
 import logging
+from bisect import insort
 from itertools import chain, islice
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from google.adk.tools import ToolContext
 
@@ -310,6 +311,201 @@ def _column_rows(file_path: str, columns: List[str]):
                 yield tuple(row.get(column) for column in columns)
 
     return rows(), None
+
+
+EXAMPLE_VALUE_LIMIT = 10
+"""collapse_check reports sorted(values)[:10], so only the ten smallest are ever
+read. Holding the full set instead is what makes a per-row-unique candidate under
+a repeating key cost O(rows) -- the one shape the tool exists to catch."""
+
+
+class ColumnSummary(NamedTuple):
+    """What every caller needs to know about one column's values."""
+
+    row_count: int
+    empty_count: int
+    distinct: set[str]
+
+    @property
+    def is_unique(self) -> bool:
+        """THE definition of a per-row-unique column, for every caller.
+
+        Both column_stats and reference_reachability ask this question, and they
+        used to answer it in two places. Note that zero rows is unique here (no
+        empties, and zero distinct equals zero rows); _home_files adds its own
+        at-least-one-row condition on top, because a zero-row file is not an
+        identifier's home even though its column is vacuously unique.
+        """
+        return self.empty_count == 0 and len(self.distinct) == self.row_count
+
+
+class KeyGroupSummary(NamedTuple):
+    """What every caller needs to know about values grouped under a node key."""
+
+    row_count: int
+    group_count: int
+    conflict_count: int
+    examples: list[dict]
+    values_on_one_key: bool | None
+    """None when track_value_owners was False -- never guess it from the rest."""
+
+
+def summarize_column(file_path: str, column: str):
+    """Read one column, keeping only its distinct non-blank values.
+
+    Returns (summary, error). This owns the whole read: a failure part way
+    through comes back as an error result, never as a raise. Callers depend on
+    that -- find_plan_problems does not catch, so a raise there makes a plan
+    unshowable.
+
+    The distinct SET, not just a count, because two callers need the values
+    themselves: join_preview intersects two sides, and _home_files returns a
+    per-file value set that later comparisons read instead of filtering again.
+    """
+    rows, error = _column_rows(file_path, [column])
+    if error is not None:
+        return None, error
+
+    row_count = 0
+    empty_count = 0
+    distinct: set[str] = set()
+    try:
+        for (value,) in rows:
+            row_count += 1
+            if is_blank(value):
+                empty_count += 1
+            else:
+                distinct.add(str(value))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    return ColumnSummary(row_count, empty_count, distinct), None
+
+
+class _KeyState:
+    """One key's running state: enough to answer, never the rows themselves."""
+
+    __slots__ = ("first_value", "rank", "conflicted", "examples")
+
+    def __init__(self, first_value: str, rank: int):
+        self.first_value = first_value
+        self.rank = rank
+        self.conflicted = False
+        self.examples: list[str] | None = None
+        """A sorted list of the ten smallest distinct values, or None when this
+        key is not one of the reported few (or never was, or was displaced)."""
+
+
+def _keep_smallest(values: list[str], value: str) -> None:
+    """Insert into a sorted list capped at the ten smallest distinct values."""
+    if value in values:
+        return
+    if len(values) < EXAMPLE_VALUE_LIMIT:
+        insort(values, value)
+    elif value < values[-1]:
+        insort(values, value)
+        values.pop()
+
+
+def summarize_key_groups(
+    file_path: str,
+    key_column: str,
+    value_column: str,
+    *,
+    keep_examples: int = 0,
+    track_value_owners: bool = False,
+):
+    """Group a column's values under a node key, as MERGE would collapse them.
+
+    Returns (summary, error), and owns the whole read for the same reason
+    summarize_column does.
+
+    Memory is one small state per DISTINCT KEY -- a first value, a rank and a
+    flag -- plus the ten smallest values for at most `keep_examples` keys. It is
+    deliberately not one state per distinct value: the shape this tool exists to
+    catch is a candidate unique per row under a repeating key, where the two are
+    the same number as the row count.
+
+    WHICH keys are reported is not "the first few that conflict". collapse_check
+    reports the conflicting keys that appear EARLIEST IN THE FILE, which is a
+    different set: a key seen on row 1 may only start disagreeing on the last
+    row. So a newly-conflicting key COMPETES with the ones already held, and the
+    earliest-appearing survive; a key that loses can never return, because the
+    highest rank among the held only ever decreases.
+
+    `track_value_owners` is opt-in because answering it costs one entry per
+    distinct VALUE, which is exactly the cost collapse_check must not pay.
+    _property_failure needs it; collapse_check does not.
+    """
+    rows, error = _column_rows(file_path, [key_column, value_column])
+    if error is not None:
+        return None, error
+
+    states: dict[str, _KeyState] = {}
+    held: list[str] = []  # keys currently holding example values
+    owners: dict[str, str] = {}  # value -> its one key, while that is still true
+    row_count = 0
+    conflict_count = 0
+    values_on_one_key = True if track_value_owners else None
+
+    def admit(key: str, state: _KeyState, value: str) -> None:
+        """Give this newly-conflicting key an example list, if it earns one."""
+        if keep_examples <= 0:
+            return
+        if len(held) >= keep_examples:
+            latest = max(held, key=lambda other: states[other].rank)
+            if states[latest].rank < state.rank:
+                return  # every held key appears earlier: the newcomer loses
+            states[latest].examples = None
+            held.remove(latest)
+        state.examples = []
+        _keep_smallest(state.examples, state.first_value)
+        _keep_smallest(state.examples, value)
+        held.append(key)
+
+    try:
+        for key, value in rows:
+            row_count += 1
+            key_text = "" if key is None else str(key)
+            value_text = "" if value is None else str(value)
+
+            state = states.get(key_text)
+            if state is None:
+                states[key_text] = _KeyState(value_text, len(states))
+            else:
+                if not state.conflicted and value_text != state.first_value:
+                    state.conflicted = True
+                    conflict_count += 1
+                    admit(key_text, state, value_text)
+                elif state.examples is not None:
+                    _keep_smallest(state.examples, value_text)
+
+            if values_on_one_key and not is_blank(value):
+                owner = owners.setdefault(value_text, key_text)
+                if owner != key_text:
+                    values_on_one_key = False
+                    owners.clear()  # the answer cannot change back
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+
+    examples = []
+    for key in sorted(held, key=lambda other: states[other].rank):
+        kept = states[key].examples
+        # A held key always has an example list -- `held` is only ever appended
+        # to alongside setting it. Assert rather than `or []`: a None here means
+        # that invariant broke, and an empty conflict list would hide it.
+        assert kept is not None
+        examples.append({"node_key": key, "values": list(kept)})
+    return (
+        KeyGroupSummary(
+            row_count=row_count,
+            group_count=len(states),
+            conflict_count=conflict_count,
+            examples=examples,
+            values_on_one_key=values_on_one_key,
+        ),
+        None,
+    )
 
 
 def collect_column_values(file_path: str, column: str):
