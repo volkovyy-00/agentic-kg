@@ -478,6 +478,8 @@ def summarize_key_groups(
                     conflict_count += 1
                     admit(key_text, state, value_text)
                 elif state.examples is not None:
+                    # Not a fresh conflict: the key is already conflicted and still
+                    # held, or this value just repeats its first_value.
                     _keep_smallest(state.examples, value_text)
 
             if values_on_one_key and not is_blank(value):

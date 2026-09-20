@@ -84,10 +84,12 @@ def _home_files(
 ) -> Tuple[List[str], bool, List[str], Dict[str, Set[str]]]:
     """Stage 2: the files in which this column identifies rows, and every value read.
 
-    Per-row unique means no empty values and every value distinct -- ColumnSummary.is_unique
-    decides that, and column_stats reports the same property from the same place.
-    The at-least-one-row condition is this function's own: a zero-row column is
-    vacuously unique but is nobody's identifier home.
+    Per-row unique means no empty values and every value distinct --
+    ColumnSummary.is_unique decides that, and column_stats reports the same
+    property from the same place. The at-least-one-row condition is this
+    function's own: a zero-row column is vacuously unique but is nobody's
+    identifier home.
+
     A column unique nowhere is not an identifier and gets no verdict at all.
 
     Returns evidence_complete=False when any file's values could not be read, so

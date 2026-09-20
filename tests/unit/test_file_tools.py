@@ -692,10 +692,9 @@ def test_column_stats_keeps_a_leading_space_distinct(ragged_source):
 
 def test_collapse_check_folds_an_absent_key_in_with_a_blank_one(ragged_source):
     """An absent key groups with a genuinely blank one, which is how the loader
-    treats them. Today that fold happens in collect_column_pairs, whose
-    row.get(column, "") supplies the default; group_values_by_key's own None
-    handling never sees a None from that path. After this change one summariser
-    does both."""
+    treats them. That fold used to happen in the pair collector, whose
+    row.get(column, "") default meant the grouper's own None handling never saw a
+    None from that path. One summariser now does both."""
     result = file_tools.collapse_check("ragged.csv", "value", "key", FakeToolContext())
     check = result["collapse_check"]
     assert check["row_count"] == 5
@@ -789,9 +788,12 @@ def test_collapse_check_displaces_a_late_conflict_with_an_earlier_key(
     """Every key appears before any of them conflicts, and they then conflict in
     reverse order -- so k6 and k5 are the first to earn a place and must be
     displaced by k1 and k0. A streaming implementation that keeps the first five
-    it notices reports k6..k2 here, and one that always admits the newcomer
-    thrashes. Deterministic on purpose: the randomized differential catches this
-    too, but only on some seeds, and a seed is not a regression test."""
+    it notices reports k6..k2 here. The variant that always admits a
+    newly-conflicting key instead of making it compete survives this shape --
+    test_collapse_check_reports_the_five_earliest_of_seven_conflicts is what
+    catches that one. Deterministic on purpose: the randomized differential
+    catches this too, but only on some seeds, and a seed is not a regression
+    test."""
     result = file_tools.collapse_check(
         "reverse_conflicts.csv", "key", "value", FakeToolContext()
     )
@@ -816,6 +818,13 @@ def test_collapse_check_counts_a_blank_against_a_value_as_a_conflict(conflict_so
     check = result["collapse_check"]
     assert check["groups_with_conflicts"] == 1
     assert check["example_conflicts"] == [{"node_key": "k", "values": ["", "x"]}]
+
+    summary, error = file_tools.summarize_key_groups(
+        "blank_conflict.csv", "key", "value", track_value_owners=True
+    )
+    assert error is None
+    assert summary is not None
+    assert summary.values_on_one_key is True
 
 
 def test_a_failure_part_way_through_a_read_returns_an_error_not_a_raise(

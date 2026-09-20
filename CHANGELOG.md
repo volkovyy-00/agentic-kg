@@ -27,13 +27,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   approved.
 - **Column checks stream their source instead of holding every row (#NN)**: `column_stats`,
   `join_preview`, `collapse_check` and the construction plan's reference-column reachability
-  check now read a source column as a stream. Peak memory follows the column's distinct
-  values, or the node key's distinct keys, rather than the file's row count — on a
-  million-row source with ten distinct values it is the cost of ten. Every answer is
-  unchanged but one: a file holding a header and no data rows is a valid empty export, so
-  `collapse_check` now reads it as zero rows and answers with zero counts instead of
-  reporting "no header row". A file holding no header at all still reports that error.
-  Reading one column is modestly slower in exchange — see the PR for the measurement.
+  check now read a source column as a stream. Peak memory follows the column's distinct values,
+  or the node key's distinct keys, rather than the file's row count: over a million-row source,
+  `collapse_check` on a per-row-unique candidate falls from 202 MB to about 1 MB, and
+  `column_stats` on a ten-value column from 60 MB to about 1 MB. A column that really is unique
+  per row still costs its distinct values, as it must. Every answer is unchanged but one: a file
+  holding a header and no data rows is a valid empty export, so `collapse_check` now reads it as
+  zero rows and answers with zero counts instead of reporting "no header row" — and, for the same
+  reason, a header-only file naming a column it does not have now reports that missing column
+  rather than "no header row". A file holding no header at all still reports that error. Reading
+  one column costs roughly 30% more time in exchange, measured over 300,000 rows; see the PR for
+  both measurements.
 
 ### Fixed
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule

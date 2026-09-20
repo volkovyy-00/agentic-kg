@@ -1,10 +1,11 @@
 """Differential test: the streaming summarisers against today's list logic.
 
-The oracle below is a VERBATIM copy of file_tools.group_values_by_key and
-collapse_check's reduction as they stood at fcc0661, before this change deleted
-them. It is duplicated on purpose: its whole job is to outlive the original, so
-the old semantics remain executable and a regression is a diff rather than a
-judgement call. Do not "simplify" it to call the new code.
+The oracle below is a VERBATIM copy of file_tools.group_values_by_key,
+collapse_check's reduction, and _property_failure's reverse grouping (the
+source of _oracle_values_on_one_key) as they stood at fcc0661, before this
+change deleted them. It is duplicated on purpose: its whole job is to outlive
+the original, so the old semantics remain executable and a regression is a
+diff rather than a judgement call. Do not "simplify" it to call the new code.
 """
 
 import random
