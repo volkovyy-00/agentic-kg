@@ -33,6 +33,9 @@ Each gets its own spec, plan and implementation cycle.
 - **Decisions for sub-projects 2 and 3: `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`**
 - Foundation is merged to `main` (the `foundation-file-sources-and-models` branch is gone — deleted after merge); work continues directly on `main`.
 
+All three documents above live under `docs/superpowers/`, which is **gitignored** — they exist in this working
+copy, not in a fresh clone. `docs/spec.md` is the only tracked document under `docs/`.
+
 **All design decisions for sub-projects 2 and 3 are already settled** — chunking, extraction context,
 resumability, identity model, approval posture, models, and definition of done — and are recorded with their
 reasoning in the decisions document above. Read it before writing spec 2 or 3; do not re-derive them. Technical
@@ -55,26 +58,13 @@ for what shipped, and [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) 
 entry for the design record — the underlying spec/plan are gitignored local notes, not something a fresh
 clone has. Sub-projects 2 and 3 remain the actual next work and are still unstarted.
 
-Also interleaved since: a contributor workflow (`0.4.0`, PR #5 — `CONTRIBUTING.md`/`CHANGELOG.md`), a living
-spec at `docs/spec.md` (PR #6 — the "what is this and why" document; read it alongside this file, not instead
-of it), a README rewrite (PR #7), explicit construction-handoff confirmation (PR #8), the same gate
-applied to the retrieval phase (PR #9 — see Architecture's *Handoff confirmation gates* subsection), a
-fix for the Neo4j singleton's use-after-close defect (PR #10 — see Architecture's *Neo4j access* subsection,
-which already documents the resulting behavior), a fix for both handoff gates being bypassable via ADK's
-own injected `transfer_to_agent` tool (PR #11 — see Architecture's *Handoff confirmation gates* subsection),
-and a gate on the user-intent phase so it cannot be left before the user's goal approval is actually
-recorded (PR #12 — same subsection; it is the one gate that holds no per-turn flag). None of these
-touch sub-projects 2/3, which remain unstarted.
-
-`main` has kept moving well past PR #12 — it's at #59 now, with `CHANGELOG.md` as the entry-by-entry
-record — through further schema/construction-plan hardening (PRs #19–#24), a September CI/quality wave
-(SonarCloud, pyright, pytest-in-CI, Dependabot in #25–#28, pyright later made to fail CI on any type
-error in #51 once its backlog was cleared), and dependency movement including `google-adk` 1.10.0 →
-1.28.1 (#38, fixing CVE-2026-4810) and the Neo4j driver to 6.x (#53) — see *Commands* above for the
-pinned floor versus what `uv.lock` actually resolves. Most recently, reachability is now judged by the
-values a node actually carries rather than by which file built it (#52, 2026-09-19) — the change this
-branch's work builds on. Released since as `0.6.0` (2026-08-17) and `0.6.1` (2026-09-18); sub-projects
-2/3 remain unstarted.
+Much else has been interleaved since — handoff gates, Neo4j connection self-heal, schema/construction-plan
+hardening, a CI/quality wave, dependency movement — none of it touching sub-projects 2/3. `main` is at PR #60,
+released through `0.6.0` (2026-08-17) and `0.6.1` (2026-09-18). **`CHANGELOG.md` is the entry-by-entry record;
+the *Architecture* sections below carry the reasoning behind whatever is still load-bearing.** Two pointers
+worth having up front: `docs/spec.md` is the living "what is this and why" document (read it alongside this
+file, not instead of it), and reachability is now judged by the values a node actually carries rather than by
+which file built it (#52, 2026-09-19) — the change the current work builds on.
 
 ## Commands
 
@@ -95,12 +85,18 @@ uv run pytest --cov --cov-report=term-missing   # with coverage (CI sends covera
 
 # Integration tests (require Docker; spins up Neo4j via Testcontainers; ~12 min, function-scoped containers)
 uv run pytest -q -m integration
+
+# Lint / type check (both gate CI)
+uv run ruff check . && uv run ruff format --check .
+uv run pyright        # must report 0 errors
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
 - Pinned to `google-adk>=1.28.1,<2` (`pyproject.toml`; the floor is the CVE-2026-4810 fix) — ADK 2.x is a
   breaking rewrite; check which major version any ADK doc, sample, or blog post is describing before trusting
   it against this code.
+- The floor is not what you run: the committed `uv.lock` resolves `google-adk 1.39.1` (and `neo4j 6.3.1`),
+  so `uv sync` installs those. Check the lock, not `pyproject.toml`, when a behaviour looks version-dependent.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
 - `tests/integration/conftest.py` has two fixtures: `neo4j_graph` (plain container) and `neo4j_graph_with_apoc`.
@@ -108,7 +104,8 @@ uv run pytest -q -m integration
   APOC-only (`apoc.meta.data`/`apoc.meta.graph`), and a stock `neo4j:5` image doesn't have it.
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
-- Ruff lints and formats (`ruff check`, `ruff format`); config is `pyproject.toml`'s `[tool.ruff]`.
+- Ruff config is `pyproject.toml`'s `[tool.ruff]`; pyright's is `[tool.pyright]` (`basic` mode, `src` only).
+  Drop `--check` from `ruff format` to fix locally.
 - Two remotes are configured: `origin` (`volkovyy-00/agentic-kg`) and `upstream`
   (`neo4j-contrib/agentic-kg`, the repo this was forked from). No `gh` default repo is set
   (`gh repo set-default --view` reports none), so an unqualified `gh` command can resolve against
