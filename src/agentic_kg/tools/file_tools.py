@@ -407,6 +407,83 @@ def _keep_smallest(values: list[str], value: str) -> None:
         values.pop()
 
 
+class _KeyGroupAccumulator:
+    """The running state of one pass over a key/value column pair.
+
+    A class rather than one long loop body because the pass answers two
+    independent questions at once -- which keys collapse, and whether any value
+    belongs to more than one key -- and they share nothing but the row. Folding
+    each row is still a single pass; only the reading of it is split.
+    """
+
+    def __init__(self, keep_examples: int, track_value_owners: bool):
+        self.keep_examples = keep_examples
+        self.states: dict[str, _KeyState] = {}
+        self.held: list[str] = []  # keys currently holding example values
+        self.owners: dict[str, str] = {}  # value -> its one key, while that holds
+        self.row_count = 0
+        self.conflict_count = 0
+        self.values_on_one_key = True if track_value_owners else None
+
+    def add(self, key, value) -> None:
+        """Fold one row in, holding nothing that scales with the rows seen."""
+        self.row_count += 1
+        key_text = "" if key is None else str(key)
+        value_text = "" if value is None else str(value)
+        self._group(key_text, value_text)
+        if self.values_on_one_key and not is_blank(value):
+            self._own(key_text, value_text)
+
+    def _group(self, key_text: str, value_text: str) -> None:
+        """Track this key's first value, its rank, and whether it conflicts."""
+        state = self.states.get(key_text)
+        if state is None:
+            self.states[key_text] = _KeyState(value_text, len(self.states))
+        elif not state.conflicted and value_text != state.first_value:
+            state.conflicted = True
+            self.conflict_count += 1
+            self._admit(key_text, state, value_text)
+        elif state.examples is not None:
+            # Not a fresh conflict: the key is already conflicted and still
+            # held, or this value just repeats its first_value.
+            _keep_smallest(state.examples, value_text)
+
+    def _own(self, key_text: str, value_text: str) -> None:
+        """Note this value's owning key, until a second key claims it."""
+        owner = self.owners.setdefault(value_text, key_text)
+        if owner != key_text:
+            self.values_on_one_key = False
+            self.owners.clear()  # the answer cannot change back
+
+    def _admit(self, key: str, state: _KeyState, value: str) -> None:
+        """Give this newly-conflicting key an example list, if it earns one."""
+        if self.keep_examples <= 0:
+            return
+        if len(self.held) >= self.keep_examples:
+            latest = max(self.held, key=lambda other: self.states[other].rank)
+            if self.states[latest].rank < state.rank:
+                return  # every held key appears earlier: the newcomer loses
+            self.states[latest].examples = None
+            self.held.remove(latest)
+        state.examples = []
+        _keep_smallest(state.examples, state.first_value)
+        _keep_smallest(state.examples, value)
+        self.held.append(key)
+
+    def examples(self) -> List[dict]:
+        """The held keys, ordered by where they first appear in the file."""
+        reported = []
+        for key in sorted(self.held, key=lambda other: self.states[other].rank):
+            kept = self.states[key].examples
+            # A held key always has an example list -- `held` is only ever
+            # appended to alongside setting it. Assert rather than `or []`: a
+            # None here means that invariant broke, and an empty conflict list
+            # would hide it.
+            assert kept is not None
+            reported.append({"node_key": key, "values": list(kept)})
+        return reported
+
+
 def summarize_key_groups(
     file_path: str,
     key_column: str,
@@ -441,70 +518,20 @@ def summarize_key_groups(
     if error is not None:
         return None, error
 
-    states: dict[str, _KeyState] = {}
-    held: list[str] = []  # keys currently holding example values
-    owners: dict[str, str] = {}  # value -> its one key, while that is still true
-    row_count = 0
-    conflict_count = 0
-    values_on_one_key = True if track_value_owners else None
-
-    def admit(key: str, state: _KeyState, value: str) -> None:
-        """Give this newly-conflicting key an example list, if it earns one."""
-        if keep_examples <= 0:
-            return
-        if len(held) >= keep_examples:
-            latest = max(held, key=lambda other: states[other].rank)
-            if states[latest].rank < state.rank:
-                return  # every held key appears earlier: the newcomer loses
-            states[latest].examples = None
-            held.remove(latest)
-        state.examples = []
-        _keep_smallest(state.examples, state.first_value)
-        _keep_smallest(state.examples, value)
-        held.append(key)
-
+    accumulator = _KeyGroupAccumulator(keep_examples, track_value_owners)
     try:
         for key, value in rows:
-            row_count += 1
-            key_text = "" if key is None else str(key)
-            value_text = "" if value is None else str(value)
-
-            state = states.get(key_text)
-            if state is None:
-                states[key_text] = _KeyState(value_text, len(states))
-            else:
-                if not state.conflicted and value_text != state.first_value:
-                    state.conflicted = True
-                    conflict_count += 1
-                    admit(key_text, state, value_text)
-                elif state.examples is not None:
-                    # Not a fresh conflict: the key is already conflicted and still
-                    # held, or this value just repeats its first_value.
-                    _keep_smallest(state.examples, value_text)
-
-            if values_on_one_key and not is_blank(value):
-                owner = owners.setdefault(value_text, key_text)
-                if owner != key_text:
-                    values_on_one_key = False
-                    owners.clear()  # the answer cannot change back
+            accumulator.add(key, value)
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
         return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
 
-    examples = []
-    for key in sorted(held, key=lambda other: states[other].rank):
-        kept = states[key].examples
-        # A held key always has an example list -- `held` is only ever appended
-        # to alongside setting it. Assert rather than `or []`: a None here means
-        # that invariant broke, and an empty conflict list would hide it.
-        assert kept is not None
-        examples.append({"node_key": key, "values": list(kept)})
     return (
         KeyGroupSummary(
-            row_count=row_count,
-            group_count=len(states),
-            conflict_count=conflict_count,
-            examples=examples,
-            values_on_one_key=values_on_one_key,
+            row_count=accumulator.row_count,
+            group_count=len(accumulator.states),
+            conflict_count=accumulator.conflict_count,
+            examples=accumulator.examples(),
+            values_on_one_key=accumulator.values_on_one_key,
         ),
         None,
     )

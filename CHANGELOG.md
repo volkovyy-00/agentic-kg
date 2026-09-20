@@ -37,7 +37,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reason, a header-only file naming a column it does not have now reports that missing column
   rather than "no header row". A file holding no header at all still reports that error. Reading
   one column costs roughly 30% more time in exchange, measured over 300,000 rows; see the PR for
-  both measurements.
+  both measurements. Two consequences of that vacuous-but-valid empty export are handled alongside
+  it: the schema-proposal agent is now told to check `row_count` before reading either
+  `survives_collapse` or `is_unique` as clearance, since a header-only file satisfies both for want
+  of any rows to contradict them; and `_property_failure` withholds evidence on a zero-row source
+  instead of reporting the property sound, restoring the contract that an unreadable source has
+  always had there.
 
 ### Fixed
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule

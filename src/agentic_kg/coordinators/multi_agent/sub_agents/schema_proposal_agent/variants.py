@@ -40,7 +40,9 @@ _VALIDATION_RULES = """
               how many distinct values a column actually holds. Do not judge uniqueness with
               'search_file': it is a substring scan over raw lines and cannot distinguish a repeated
               value from a coincidental match elsewhere in a row. Composite identifiers are not
-              acceptable.
+              acceptable. Check 'row_count' as well: a file holding a header and no data rows
+              reports 'is_unique' true over zero distinct values, which is vacuous rather than
+              evidence that the column identifies anything.
             - A per-row identifier being unique is not enough: it can still be the wrong node
               identifier. A file can have one row per *pairing* of two entities (e.g. one row per
               item that belongs to a group), where every row gets its own unique ID even though the
