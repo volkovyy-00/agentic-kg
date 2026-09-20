@@ -819,6 +819,34 @@ def test_a_header_only_file_is_not_an_identifier_home(survey_source):
     assert value_sets == {"header_only.csv": set()}
 
 
+def test_a_zero_row_source_withholds_evidence_instead_of_supplying_it(survey_source):
+    """A zero-row source has no conflicting group and no value under two keys
+    because it has no rows, so both of _property_failure's checks pass
+    vacuously and the caller would read (None, None) as 'covered'. It must
+    return a message instead, exactly as an unreadable source does -- the
+    docstring's rule is that it withholds evidence, never supplies it.
+
+    _property_failure cannot be reached this way through
+    check_reference_columns_are_reachable, because _home_files admits a home
+    only when row_count is non-zero and no non-empty home set is a subset of
+    this file's empty one. That makes this the only place the contract can be
+    pinned, and the reason to pin it: the guard must not silently depend on a
+    condition living in another function."""
+    fs = survey_source
+    with fs.open("/src/empty_export.csv", "w") as handle:
+        handle.write("plot_label,canopy\n")
+    rule = {
+        "construction_type": "node",
+        "source_file": "empty_export.csv",
+        "label": "Plot",
+        "unique_column_name": "plot_label",
+        "properties": ["plot_label", "canopy"],
+    }
+    failure, error_message = rr._property_failure(rule, "canopy")
+    assert failure is None
+    assert error_message == "the source has no data rows"
+
+
 def test_a_zero_byte_file_passes_the_reachability_check_in_silence(survey_source):
     """Deliberate asymmetry with the file tools, and pre-existing: _columns_by_file
     reads headers through read_csv_header, which returns [] for a zero-byte file

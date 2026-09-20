@@ -157,6 +157,18 @@ def _property_failure(rule: dict, column: str) -> Tuple[str | None, str | None]:
     if error is not None:
         return None, error["error_message"]
     assert summary is not None  # summarize_key_groups: error is None => summary set
+    if not summary.row_count:
+        # Vacuous agreement is not evidence. A zero-row source has no conflicting
+        # group and no value under two keys because it has no rows at all, so both
+        # checks below would pass and the caller would read that as "covered".
+        # Withhold instead, as an unreadable source does: before these reads
+        # streamed, a header-only file failed here and became a 'not verified'
+        # note. Unreachable today -- _home_files admits a home only when
+        # row_count is non-zero, so no non-empty home set is a subset of this
+        # file's empty one -- but it is the one direction the fail-open rule
+        # exists to prevent, and it should not depend on a condition in another
+        # function staying where it is.
+        return None, "the source has no data rows"
     if summary.conflict_count:
         return _collapse_detail(column, rule), None
     if not summary.values_on_one_key:

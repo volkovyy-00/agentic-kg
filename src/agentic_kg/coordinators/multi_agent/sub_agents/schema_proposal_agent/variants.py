@@ -66,7 +66,9 @@ _VALIDATION_RULES = """
             - Call 'collapse_check' with the node's source file, the node's declared unique
               identifier as 'node_key_column', and the candidate join column as 'candidate_column'.
               The join key is safe only if 'survives_collapse' is true (that is,
-              'groups_with_conflicts' is 0). Any conflicting group listed in 'example_conflicts' is
+              'groups_with_conflicts' is 0) AND 'row_count' is above 0. A file holding a header and
+              no data rows reports 'survives_collapse' true because nothing collapsed -- that is
+              vacuous, not clearance. Any conflicting group listed in 'example_conflicts' is
               a node whose join value would be silently overwritten.
             - Do not substitute 'column_stats' or 'join_preview' for this check. 'column_stats' only
               reports how unique a column is on its own, which answers "could this be a node
