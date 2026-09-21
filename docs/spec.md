@@ -110,10 +110,11 @@ except the next stage's tools failing on the missing state key, the same fail-fa
    `LoopAgent` (`schema_refinement_loop`, `max_iterations=2`) that runs `schema_proposal_agent_v1` →
    `schema_critic_agent_v1` → stop-check. The critic inspects joins
    with `join_preview` / `column_stats` / `collapse_check` and returns `valid` or `retry`.
-   The stop-check overrides that verdict with its own `retry` when either mechanical plan check —
-   consistency or reference-column reachability — finds a problem, so the repair happens in the same turn
-   rather than at approval time, as long as one of the loop's two iterations remains. Writes
-   `proposed_construction_plan`, `feedback`, `approved_construction_plan`.
+   The stop-check overrides that verdict with its own `retry` when any mechanical plan check —
+   consistency, a joined property holding one value per node, or reference-column reachability — finds a
+   problem, so the repair happens in the same turn rather than at approval time, as long as one of the
+   loop's two iterations remains. Writes `proposed_construction_plan`, `feedback`,
+   `approved_construction_plan`.
 4. **`graph_construction_agent_v1`** — reads the approved plan, creates uniqueness constraints, and runs
    `build_graph_from_construction_rules`. Writes one key,
    `construction_handoff_confirmed`, a per-turn flag gating the explicit handoff to stage 5. ADK's
