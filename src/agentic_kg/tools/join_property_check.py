@@ -61,10 +61,14 @@ def _joins_by_node_property(
 
 
 def _unusable_field(rule: dict) -> str | None:
-    """The first field a read needs that is not text, or None if both are."""
+    """The first field a read needs that is not usable, or None if both are.
+
+    An empty key is as unusable as a non-text one, as in `_property_failure`:
+    read anyway, it would come back as an error blamed on the file."""
     if not isinstance(rule.get("source_file"), str):
         return "source_file"
-    if not isinstance(rule.get("unique_column_name"), str):
+    key = rule.get("unique_column_name")
+    if not isinstance(key, str) or not key:
         return "unique_column_name"
     return None
 
@@ -111,7 +115,8 @@ def check_joined_properties_hold_one_value(
     read; a column that is not a declared property, a node with no rule, and a node
     whose `properties` cannot be read are left to the structural check, which
     already reports them. A source that cannot be read, or a rule missing a field
-    the read needs, is a note, and one unreadable file gives one note.
+    the read needs, is a note: one per unreadable file and one per unusable rule,
+    each naming every join it left unchecked.
     """
     if not isinstance(construction_plan, dict):
         return [], []
@@ -122,7 +127,7 @@ def check_joined_properties_hold_one_value(
         if isinstance(rule, dict) and rule.get("construction_type") == "node"
     }
     problems: List[str] = []
-    shape_notes: List[str] = []
+    unusable_rules: Dict[Tuple[str, str], List[str]] = {}
     unreadable: Dict[Tuple[str, str], List[str]] = {}
 
     joins = _joins_by_node_property(construction_plan)
@@ -139,10 +144,7 @@ def check_joined_properties_hold_one_value(
             continue
         unusable = _unusable_field(rule)
         if unusable is not None:
-            shape_notes.append(
-                f"'{label}.{column}' could not be checked for one value per "
-                f"node: the rule has no usable '{unusable}'"
-            )
+            unusable_rules.setdefault((label, unusable), []).append(f"{label}.{column}")
             continue
         summary, error = summarize_key_groups(
             rule["source_file"], rule["unique_column_name"], column
@@ -163,6 +165,11 @@ def check_joined_properties_hold_one_value(
                 )
             )
 
+    shape_notes = [
+        f"{quoted_list(unchecked)} could not be checked for one value per node: "
+        f"the rule has no usable '{field}'"
+        for (_, field), unchecked in unusable_rules.items()
+    ]
     file_notes = [
         f"{quoted_list(unchecked)} could not be checked for one value per node: "
         f"'{path}' could not be read ({message})"

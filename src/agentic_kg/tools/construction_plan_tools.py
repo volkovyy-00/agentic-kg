@@ -559,7 +559,7 @@ NO_PROPOSED_PLAN_MESSAGE = (
 
 
 def _format_unverified_notes(unverified: list[str]) -> str:
-    """Render the reachability check's unverified notes for a caller's message.
+    """Render find_plan_problems' unverified notes for a caller's message.
 
     Shared for the same reason the preconditions themselves are: both callers
     append this block, and two copies of the format would drift the moment one

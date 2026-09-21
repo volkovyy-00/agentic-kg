@@ -348,6 +348,29 @@ def test_a_rule_without_a_usable_unique_column_is_a_note(source):
     assert "unique_column_name" in unverified[0]
 
 
+def test_an_empty_unique_column_is_a_rule_note_not_a_read_error(source):
+    source("walks.csv", WALKS_SEVERAL)
+    plan = _several_values_plan()
+    plan["Transect"]["unique_column_name"] = ""
+    problems, unverified = check(plan)
+    assert problems == []
+    assert len(unverified) == 1
+    assert "no usable 'unique_column_name'" in unverified[0]
+
+
+def test_one_unusable_rule_gives_one_note_naming_every_join_it_left_unchecked(
+    source,
+):
+    plan = _several_values_plan()
+    plan["Transect"]["source_file"] = None
+    plan["Transect"]["properties"] = ["species_code", "tally"]
+    plan["COUNTED"] = _rel("COUNTED", "Transect", "tally", "Species", "species_code")
+    _, unverified = check(plan)
+    assert len(unverified) == 1
+    assert "Transect.species_code" in unverified[0]
+    assert "Transect.tally" in unverified[0]
+
+
 # --- never raises ------------------------------------------------------------
 
 
