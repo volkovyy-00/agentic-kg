@@ -4,11 +4,21 @@ All notable changes to this project are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as described in [CONTRIBUTING.md](CONTRIBUTING.md).
+Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated section on top, and
+each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
+There is no `[Unreleased]` section.
 
-## [Unreleased]
+## [0.7.0] - 2026-09-21
+
+### Added
+- **One release per PR, with its ticket (#64, KG-36)**: each changelog-worthy PR now bumps the version and
+  adds its own section here, citing its Jira ticket; merging it tags the release. A CI check refuses a
+  PR that names no ticket or skips the release without saying so (`no-ticket` / `no-release` labels).
+  The contributor guide now says where each kind of project knowledge lives, so status no longer goes
+  stale inside `CLAUDE.md`.
 
 ### Changed
-- **Neo4j driver 6.x**: the `neo4j` Python driver moves from 5.x to 6.3.1. Every graph tool keeps working
+- **Neo4j driver 6.x (#53, KG-9)**: the `neo4j` Python driver moves from 5.x to 6.3.1. Every graph tool keeps working
   across a dropped connection, as before: since connection recovery (#10), a closed connection is rebuilt
   rather than reused, which is the one 6.x change (a closed driver now raises instead of warning) that
   would otherwise have broken every graph tool until a restart. One narrow case does change: if the
@@ -16,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   query fails — that read now returns an error the agent can retry, where 5.x reopened the connection
   silently. The connection-recovery tests now close the connection before each tool, so each tool's own
   recovery is checked, rather than only whichever tool happened to run first.
-- **Plan problems are caught during schema refinement, not only at approval (#60)**: `schema_refinement_loop` now
+- **Plan problems are caught during schema refinement, not only at approval (#60, KG-14)**: `schema_refinement_loop` now
   runs the same two checks `approve_proposed_construction_plan` runs — construction-plan consistency (joins,
   endpoint labels, declared types) and reference-column reachability — and sends a plan carrying either kind
   of problem back for another refinement iteration. Previously such a plan was only refused when read for
@@ -25,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   introduced by the second round's revision still waits for approval, since the loop runs at most two
   iterations. Approval-time behaviour is unchanged, and remains what guarantees a broken plan cannot be
   approved.
-- **Column checks stream their source instead of holding every row (#62)**: `column_stats`,
+- **Column checks stream their source instead of holding every row (#62, KG-21)**: `column_stats`,
   `join_preview`, `collapse_check` and the construction plan's reference-column reachability
   check now read a source column as a stream. Peak memory follows the column's distinct values,
   or the node key's distinct keys, rather than the file's row count: over a million-row source,
@@ -48,7 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Reachability note for a node rule without a usable key (#48)**: when a construction plan's node rule
   has a missing, empty or non-string `unique_column_name`, the "not verified" note now says so, instead of
   reporting that a column named `[None]` or `['']` is missing from the source file. The plan is still left unverified, never refused.
-- **Reachability judged by values, not by source file (#52)**: approval no longer refuses a construction plan
+- **Reachability judged by values, not by source file (#52, KG-13)**: approval no longer refuses a construction plan
   because the node carrying a reference column was built from a different file than the one that
   identifies rows by it. Keying a node by such a column from a file where it repeats, with the
   identifying file used only for relationships, was refused as unbuildable even though every join
@@ -57,7 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   each node keeps one value and no two nodes share one; previously only the identifying file's own node
   counted. When a node holds only some of the values, the refusal says how many it is missing and gives
   examples, and every refusal names a new node's label as needing to be its own.
-- **An unreadable `properties` value is reported, not crashed on or misread (#63)**: when a node or
+- **An unreadable `properties` value is reported, not crashed on or misread (#63, KG-27)**: when a node or
   relationship in a construction plan declares `properties` as anything but a list of text — a number,
   a piece of text, a map, or a list holding a non-text entry — the plan check now reports that once,
   naming the construction, and gives no verdict that would read the value until it is fixed: a node's
