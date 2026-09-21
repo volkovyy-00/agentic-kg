@@ -257,6 +257,28 @@ def _missing_column_error(file_path: str, column: str, header: List[str]) -> dic
     )
 
 
+def _csv_source_error(file_path: str) -> Optional[dict]:
+    """A tool_error when the source cannot be confirmed to exist, else None.
+
+    The plan-path column readers share this one guard. Reachability promises
+    that nothing in it raises, and these readers are how it reads, so a failure
+    of the existence check -- a transient error from a remote source, say --
+    must come back as an error result worded like a read failure, never as an
+    exception.
+
+    Branch order matters: SourceError is an Exception, so the broad catch must
+    stay below it or it would replace that message.
+    """
+    try:
+        if not source_exists(file_path):
+            return tool_error(f"CSV file does not exist: {file_path}")
+    except SourceError as exc:
+        return tool_error(str(exc))
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return tool_error(f"Error reading CSV file {file_path}: {exc}")
+    return None
+
+
 def _column_rows(file_path: str, columns: List[str]):
     """Stream one tuple per data row, holding only the named columns.
 
@@ -277,11 +299,9 @@ def _column_rows(file_path: str, columns: List[str]):
     Consume it inside a try -- `summarize_column` and `summarize_key_groups` do,
     which is why they, and not their callers, own the whole read.
     """
-    try:
-        if not source_exists(file_path):
-            return iter(()), tool_error(f"CSV file does not exist: {file_path}")
-    except SourceError as exc:
-        return iter(()), tool_error(str(exc))
+    source_error = _csv_source_error(file_path)
+    if source_error is not None:
+        return iter(()), source_error
 
     try:
         batches = read_csv_batches(file_path)
@@ -555,11 +575,9 @@ def collect_column_values(file_path: str, column: str):
     this returns rather than either summariser's reduction; giving them the
     streaming reader is their own ticket.
     """
-    try:
-        if not source_exists(file_path):
-            return None, tool_error(f"CSV file does not exist: {file_path}")
-    except SourceError as exc:
-        return None, tool_error(str(exc))
+    source_error = _csv_source_error(file_path)
+    if source_error is not None:
+        return None, source_error
 
     values: List[Optional[str]] = []
     header: List[str] = []
@@ -729,11 +747,9 @@ def _collect_columns_values(file_path: str, columns: List[str]):
     present-but-empty cell contributes "", the distinction
     collect_column_values documents and _hint_from_values counts apart.
     """
-    try:
-        if not source_exists(file_path):
-            return None, tool_error(f"CSV file does not exist: {file_path}")
-    except SourceError as exc:
-        return None, tool_error(str(exc))
+    source_error = _csv_source_error(file_path)
+    if source_error is not None:
+        return None, source_error
 
     values_by_column: Dict[str, List[Optional[str]]] = {
         column: [] for column in columns
