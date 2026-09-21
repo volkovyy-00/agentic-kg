@@ -22,8 +22,7 @@ picks input files, proposes a graph schema, builds the graph, and then answers q
 pausing for explicit human approval between each of those stages.
 
 It began as a fork of the companion project to the deeplearning.ai short course *Agentic Knowledge Graph
-Construction* (GitHub still lists it as forked from `neo4j-contrib/agentic-kg`, though this clone keeps no
-local `upstream` remote), but it is now developed as a real
+Construction* (GitHub lists it as forked from `neo4j-contrib/agentic-kg`), but it is now developed as a real
 program rather than a teaching artifact. What makes that true, concretely, rather than as a claim:
 
 - Six tagged releases (`v0.1.0` … `v0.5.0`) and sixteen merged PRs beyond the fork point (#1–#16); #17
@@ -239,10 +238,9 @@ the end-to-end test asserts on what reached the model, never on what the model s
 See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHANGELOG conventions, and
 `CLAUDE.md` for the architecture map. Only the things most likely to bite you are repeated here:
 
-- **One remote.** `origin` (`volkovyy-00/agentic-kg`) is the only configured remote. A local `upstream`
-  pointing at `neo4j-contrib/agentic-kg` existed early on and was removed once the project stopped
-  tracking the parent's history — GitHub's own "forked from" display is independent of local git config
-  and is unaffected. `gh` should resolve to `origin` without an explicit `--repo`.
+- **It's a fork, and `gh` knows it.** GitHub lists this repo as a fork of `neo4j-contrib/agentic-kg`, and a
+  clone may carry an `upstream` remote pointing there. Without `gh repo set-default volkovyy-00/agentic-kg`,
+  `gh` resolves commands — `gh pr create` included — against the parent. See `CONTRIBUTING.md`.
 - **Design notes are local-only.** `.gitignore:27` and `:30` exclude `docs/superpowers/` and
   `docs/backlog/`. Documents there are absent from a fresh clone — do not cite those paths as if a
   reader can open them. Only those two subdirectories are excluded; the rest of `docs/`, including this
@@ -250,8 +248,8 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 - **Tests.** `uv run pytest` defaults to `-m 'not integration'`, so it never touches Docker; integration
   tests are opt-in with `-m integration` and skip cleanly when no Docker daemon is reachable.
 - **Ruff lints and formats.** `ruff check .` / `ruff format --check .` (config: `pyproject.toml`'s
-  `[tool.ruff]`) — see `CONTRIBUTING.md`. CI is still not configured, so these are self-run before a PR,
-  not automatically enforced.
+  `[tool.ruff]`) — see `CONTRIBUTING.md`. CI runs them, with the unit tests, pyright and SonarCloud, on
+  every PR.
 - **Merge commits, not squash.** PRs are merged with a real merge commit (`gh pr merge --merge`),
   preserving every internal commit — enforced at the GitHub-settings level (squash and rebase merge are
   disabled). Older history is mixed: #8 and #13 landed as single squash commits, while #9, #11 and #12
@@ -261,29 +259,12 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
 
 ---
 
-## 6. Current state
+## 6. Roadmap and known gaps
 
-**Shipped** (all PR numbers verified against the repository's merged PRs):
+What has shipped, release by release, is `CHANGELOG.md`; what is in progress and next is the Jira backlog
+(project `KG`). This section keeps only the longer-range direction, which the backlog doesn't yet hold.
 
-| Version | Date | What |
-|---|---|---|
-| 0.5.0 | 2026-08-09 | Typed CSV properties, this living spec, construction/retrieval handoff confirmation, Neo4j reconnection, closing the transfer-bypass, intent-approval gate, README repositioning, dropped `upstream` remote, Ruff, real merge commits (#6–#16) |
-| 0.4.0 | 2026-08-03 | Contributor workflow: `CONTRIBUTING.md`, `CHANGELOG.md`, narrowed `.gitignore` (#5) |
-| 0.3.0 | 2026-08-02 | Retrieval grounding — §4 (#4) |
-| 0.2.1 | 2026-07-30 | `schema_refinement_loop` feedback-clobbering fix, per-turn invocation cap (#3) |
-| 0.2.0 | 2026-07-29 | Foundation: `fsspec` file sources, driver-side CSV loading, OpenRouter + per-job models (#2) |
-| 0.1.0 | 2026-07-26 | Test-suite fixes (#1) |
-
-**`CHANGELOG.md` matches the `v0.5.0` tag.** The tag was cut at `382359e` on 2026-08-09, covering all
-eleven PRs merged since `v0.4.0`: typed CSV properties (#13), this document (#6), the README rewrite
-(#7), explicit construction/retrieval handoff confirmation (#8, #9), Neo4j connection recovery after a
-close (#10), closing the `transfer_to_agent` bypass in both handoff gates (#11), gating the intent phase
-on a recorded approval (#12), dropping the local `upstream` remote (#14), adding Ruff (#15), and
-enforcing real merge commits over squash (#16). `CHANGELOG.md`'s dated `[0.5.0]` section — briefly
-incomplete and dated a day early, since it was written before the tag existed — was reconciled to list
-all eleven and match the tag's date (#18). `[Unreleased]` is empty until the next batch of work lands.
-
-**Next**, in order — designs are settled and recorded in local notes; specs are not yet written:
+**Planned** — designs are settled and recorded in local notes; specs are not yet written:
 
 1. **Unstructured ingestion** — entity/fact-type agents, chunking, PDF and Markdown loaders, an
    extraction executor, resumability, and scoped resolution, generic rather than hardcoded to the
@@ -304,8 +285,6 @@ bundled furniture example must keep working throughout.
   — and now duplicates logic: `graph_profile.py`'s own numeric-pattern regexes have diverged from
   `value_types.py`'s (the construction path handles negative currency written either way round and
   accounting-parenthesis negatives; the profile's copy does not), a gap #13 knowingly left unclosed.
-- **`pyproject.toml:3` still reads `version = "0.1.0"`**, five releases behind, as does its mirror in
-  `uv.lock:21`. These are the only machine-readable versions in the repo.
 - Model configuration drifts from documentation: the models named in `CLAUDE.md` and `CHANGELOG.md` 0.4.0
   exist only in an untracked `.env`. A fresh clone runs on the `gpt-4o`/`gpt-4o-mini` defaults in
   `.env.example` and `common/config.py`.

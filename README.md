@@ -56,25 +56,29 @@ Open `http://localhost:8000` (pass `--port 8001` if that's busy). Two coordinato
 
 ## Testing
 
-273 tests (253 unit, 20 integration).
-
 ```bash
 uv run pytest -q                # unit tests, fast, no external deps
 uv run pytest -q -m integration # integration tests, need Docker (spins up Neo4j via Testcontainers)
 ```
 
 If you use [colima](https://github.com/abiosoft/colima) instead of Docker Desktop, the integration run
-needs two extra env vars first — see `CONTRIBUTING.md` for the exact workaround.
+needs two extra env vars first:
+
+```bash
+export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
+export TESTCONTAINERS_RYUK_DISABLED=true
+```
 
 ## Roadmap
 
-See `docs/spec.md` (§6, "Current state") and `CHANGELOG.md`'s `[Unreleased]` section for what's shipped
-and what's next.
+What's shipped is in `CHANGELOG.md`; what's planned is in `docs/spec.md` (§6) and the project's Jira
+backlog.
 
 ## Contributing
 
-See `CONTRIBUTING.md` for the branch/PR workflow and testing expectations. No CI is configured — run the
-test suite yourself before opening a PR.
+See `CONTRIBUTING.md` for the branch/PR workflow, ticket and release conventions, and testing
+expectations. CI runs the unit tests and static checks on every PR; integration tests need Docker and are
+run locally.
 
 ## License
 

@@ -16,56 +16,31 @@ that mirrors the course. Reproducibility for students is not a design goal.
 See `CONTRIBUTING.md` for the PR workflow, testing expectations, and CHANGELOG conventions to follow when
 making changes here.
 
-## Current work: unstructured ingestion (3 sub-projects)
+## Where knowledge lives
 
-Adding ingestion of unstructured documents (PDF/Markdown) alongside the existing CSV path, generic
-rather than hardcoded to the bundled furniture example. Split into three sub-projects, built in order.
-Each gets its own spec, plan and implementation cycle.
+This file holds what stays true until the code changes — architecture, invariants, commands. **It carries no
+status**: `CONTRIBUTING.md`'s *Where project knowledge lives* table says where everything else goes. In short:
 
-| | Scope | Status |
-|---|---|---|
-| **1. Foundation** | File sources via `fsspec`, driver-side CSV loading, OpenRouter + per-job models, `finished()` fix | **implemented** |
-| **2. Unstructured ingestion** | Entity/fact-type agents, chunking, PDF+Markdown loaders, extraction executor, resumability, scoped resolution | design settled, **spec not written** |
-| **3. Linking** | `CORRESPONDS_TO` correlation to reference tables; cross-tier retrieval | design settled, **spec not written** |
+- **What's in progress / next / blocked, and session handoffs:** Jira project `KG`
+  (<https://stormdoc.atlassian.net/browse/KG>) — backlog rank is the agreed implementation order; read the
+  ticket's comments before starting on it.
+- **What shipped, per release:** `CHANGELOG.md` (each entry cites `#PR` and `KG-NN`). **Why it was done that
+  way:** the commit messages and PR description of that PR — `git log` / `gh pr view <n>`.
+- **What the program is and why:** `docs/spec.md` — read it alongside this file, not instead of it.
+- **Specs, plans, intents:** `docs/superpowers/`, a separate private git repo nested in the working copy
+  (gitignored here, absent from a fresh clone and from git worktrees). Cite paths there only as local notes.
 
-- Foundation spec: `docs/superpowers/specs/2026-07-27-foundation-design.md`
-- Foundation plan: `docs/superpowers/plans/2026-07-27-foundation.md` (12 TDD tasks — self-contained, assumes no prior context)
-- **Decisions for sub-projects 2 and 3: `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`**
-- Foundation is merged to `main` (the `foundation-file-sources-and-models` branch is gone — deleted after merge); work continues directly on `main`.
+**Roadmap beyond the backlog:** ingestion of unstructured documents (PDF/Markdown) alongside the CSV path,
+generic rather than hardcoded to the bundled furniture example — sub-project 2 (entity/fact-type agents,
+chunking, loaders, extraction executor, resumability, scoped resolution) and sub-project 3 (`CORRESPONDS_TO`
+linking to reference tables, cross-tier retrieval). Sub-project 1, Foundation, shipped as `0.2.0`. **Every design
+decision for 2 and 3 is already settled** in `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`
+— read it before writing either spec; do not re-derive them. Technical constraints found while fact-checking
+Foundation live in `2026-07-27-foundation-design.md`'s *Follow-on work*. Their target dataset (SEC 10-K filings,
+`Company_Filings.csv`, `Asset_Manager_Holdings.csv`) is not in this repo and must be sourced.
 
-All three documents above live under `docs/superpowers/`, which is **gitignored** — they exist in this working
-copy, not in a fresh clone. `docs/spec.md` is the only tracked document under `docs/`.
-
-**All design decisions for sub-projects 2 and 3 are already settled** — chunking, extraction context,
-resumability, identity model, approval posture, models, and definition of done — and are recorded with their
-reasoning in the decisions document above. Read it before writing spec 2 or 3; do not re-derive them. Technical
-constraints found while fact-checking Foundation (PdfLoader's `fs`/path contract, missing
-`langchain-text-splitters`, `LongRunningFunctionTool`'s falsy-return behaviour, APOC Core-only on Aura) live in
-the Foundation spec's *Follow-on work* section.
-
-Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Asset_Manager_Holdings.csv`.
-**Those files are not in this repo and must be sourced.** The bundled furniture example must keep working throughout.
-
-**Write specs 2 and 3 against the post-Foundation codebase** — which now also includes graphrag grounding
-(below), merged after Foundation and before either spec was written.
-
-### Interleaved and already shipped: graphrag grounding
-
-Between Foundation and sub-projects 2/3, a separate effort — grounding `graphrag_agent` in the graph instead
-of conversational recall — was designed, implemented, and merged as `0.3.0` (2026-08-02, PR #4). It is **not**
-part of the 3-sub-project plan above; it jumped the queue. See Architecture's *`graphrag_agent_v2`* subsection
-for what shipped, and [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s `0.3.0`
-entry for the design record — the underlying spec/plan are gitignored local notes, not something a fresh
-clone has. Sub-projects 2 and 3 remain the actual next work and are still unstarted.
-
-Much else has been interleaved since — handoff gates, Neo4j connection self-heal, schema/construction-plan
-hardening, a CI/quality wave, dependency movement — none of it touching sub-projects 2/3. The latest
-release is `0.6.1` (2026-09-18); `git log` and `CHANGELOG.md`'s `[Unreleased]` are the current state.
-**`CHANGELOG.md` is the entry-by-entry record; the *Architecture* sections below carry the reasoning behind
-whatever is still load-bearing.** Two pointers
-worth having up front: `docs/spec.md` is the living "what is this and why" document (read it alongside this
-file, not instead of it), and reachability is now judged by the values a node actually carries rather than by
-which file built it (#52, 2026-09-19) — the change the current work builds on.
+**Invariant:** the bundled furniture example (`data/bom`) must keep working — but it is one dataset, not the
+scope. Designs and fixes must hold for source files the program has never seen.
 
 ## Commands
 
@@ -107,10 +82,9 @@ uv run pyright        # must report 0 errors
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - Ruff config is `pyproject.toml`'s `[tool.ruff]`; pyright's is `[tool.pyright]` (`basic` mode, `src` only).
   Drop `--check` from `ruff format` to fix locally.
-- Two remotes are configured: `origin` (`volkovyy-00/agentic-kg`) and `upstream`
-  (`neo4j-contrib/agentic-kg`, the repo this was forked from). No `gh` default repo is set
-  (`gh repo set-default --view` reports none), so an unqualified `gh` command can resolve against
-  either — always pass `--repo volkovyy-00/agentic-kg` explicitly to keep it targeting this fork.
+- This repo is a GitHub fork of `neo4j-contrib/agentic-kg`; a clone may also carry an `upstream` remote
+  pointing there. Unless `gh repo set-default volkovyy-00/agentic-kg` has been run in the clone (check:
+  `gh repo set-default --view`), `gh` resolves commands against the parent — pass `--repo volkovyy-00/agentic-kg`.
 - Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
   nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
   has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with
@@ -216,7 +190,9 @@ Approval is the guarantee: the loop's copy is fail-open behind one guard, approv
 it fails closed, and reachability itself fails open on an unreadable file (a `not_verified` note, never a
 refusal). Do not move the check into a critic-side tool: it would depend on the model choosing to call it, and
 the check is mechanical precisely because the prose rule it replaced resolved the same file two different ways
-on two runs. Approval framing also stays out of the critic's context.
+on two runs. Approval framing also stays out of the critic's context. Reachability asks whether some node carries every value an
+identifying file holds, whichever file built that node (#52, KG-13) — never whether the node was built from that
+file.
 
 ### Handoff confirmation gates
 
