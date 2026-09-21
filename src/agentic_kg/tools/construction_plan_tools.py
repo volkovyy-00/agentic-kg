@@ -383,6 +383,30 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     }
     problems = []
 
+    # A properties value that is not a list of text cannot be read as one: a
+    # string would contribute its characters, a dict its keys, a falsy value
+    # nothing at all, and anything unhashable or unordered would crash the
+    # checks below. Report it once and give no verdict on that construction's
+    # joins or declared types until it is fixed -- any verdict would be about
+    # the misreading, not the plan. Missing or null declares no properties.
+    unreadable = set()
+    for key, rule in construction_plan.items():
+        if not isinstance(rule, dict):
+            continue
+        properties = rule.get("properties")
+        if properties is None or (
+            isinstance(properties, list)
+            and all(isinstance(name, str) for name in properties)
+        ):
+            continue
+        unreadable.add(key)
+        problems.append(
+            f"{key}: 'properties' must be a list of property names, got "
+            f"{properties!r}. Supply a list of column names (or an empty list). "
+            f"Its joins and declared types are not checked until this is fixed."
+        )
+    unreadable_rules = [construction_plan[key] for key in unreadable]
+
     # Every column a relationship joins on, so a property can be checked against
     # the whole plan rather than only its own construction. This is what makes a
     # type retroactively invalid when a later relationship joins on it.
@@ -391,6 +415,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         if (
             not isinstance(rule, dict)
             or rule.get("construction_type") != "relationship"
+            or key in unreadable
         ):
             continue
         for label, column in (
@@ -405,6 +430,8 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             problems.append(
                 f"{rel_key}: {side} node label '{label}' has no node construction in the plan."
             )
+            return
+        if any(node_rule is rule for rule in unreadable_rules):
             return
         unique_column = node_rule.get("unique_column_name")
         known_columns = {unique_column, *(node_rule.get("properties") or [])}
@@ -421,6 +448,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         if (
             not isinstance(rule, dict)
             or rule.get("construction_type") != "relationship"
+            or key in unreadable
         ):
             continue
         check_endpoint(
@@ -431,7 +459,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     # Declared property types. Three rules, all refusing at approval time rather
     # than failing much later at import time.
     for key, rule in construction_plan.items():
-        if not isinstance(rule, dict):
+        if not isinstance(rule, dict) or key in unreadable:
             continue
         property_types = rule.get("property_types") or {}
         if not isinstance(property_types, dict):

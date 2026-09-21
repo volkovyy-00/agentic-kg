@@ -895,6 +895,112 @@ def test_an_unknown_type_name_is_refused():
     assert any("decimal" in problem for problem in problems)
 
 
+UNREADABLE_PROPERTIES = [
+    5,
+    0,
+    "part_name",
+    "",
+    {"part_name": 1},
+    {},
+    True,
+    [1, "part_name"],
+    [{"a": 1}, "b"],
+    [["part_name"]],
+    [None],
+]
+
+# Warehouse is referenced by nothing, so its properties are read only by the
+# property-type block; Part is joined on; SUPPLIED_BY is a relationship.
+UNREADABLE_CONSTRUCTIONS = ["Part", "Warehouse", "SUPPLIED_BY"]
+
+
+def _plan_with_warehouse():
+    return _typed_plan(
+        Warehouse={
+            "construction_type": "node",
+            "source_file": "warehouses.csv",
+            "label": "Warehouse",
+            "unique_column_name": "warehouse_id",
+            "properties": ["city"],
+            "property_types": {},
+        }
+    )
+
+
+@pytest.mark.parametrize("declares_types", [False, True])
+@pytest.mark.parametrize("key", UNREADABLE_CONSTRUCTIONS)
+@pytest.mark.parametrize("properties", UNREADABLE_PROPERTIES, ids=repr)
+def test_an_unreadable_properties_value_is_reported_once_and_nothing_else(
+    properties, key, declares_types
+):
+    """A value that is not a list of text is neither iterated (a string would
+    give its characters, a dict its keys, a falsy value an empty list) nor
+    allowed to crash the check -- which, at approval, fails closed with no
+    explanation. The join on Part and the type declared on 'part_name' (a
+    substring-match hit against the text 'part_name') are not judged."""
+    plan = _plan_with_warehouse()
+    plan[key]["properties"] = properties
+    plan[key]["property_types"] = {"part_name": "integer"} if declares_types else {}
+    if key == "Part":
+        # A join on a column only the misread value could vouch for.
+        plan["SUPPLIED_BY"]["from_node_column"] = "part_name"
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 1
+    assert problems[0].startswith(f"{key}: ")
+    assert "properties" in problems[0]
+
+
+@pytest.mark.parametrize("properties", UNREADABLE_PROPERTIES, ids=repr)
+def test_an_unreadable_node_does_not_hide_a_problem_at_the_other_endpoint(
+    properties,
+):
+    plan = _typed_plan()
+    plan["Part"]["properties"] = properties
+    plan["SUPPLIED_BY"]["from_node_column"] = "part_name"
+    plan["SUPPLIED_BY"]["to_node_column"] = "supplier_name"
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 2
+    assert problems[0].startswith("Part: ")
+    assert "'supplier_name'" in problems[1]
+    assert "'Supplier'" in problems[1]
+
+
+@pytest.mark.parametrize("key", UNREADABLE_CONSTRUCTIONS)
+def test_an_unreadable_properties_value_does_not_hide_problems_elsewhere(key):
+    plan = _plan_with_warehouse()
+    plan[key]["properties"] = 5
+    plan["Supplier"]["property_types"] = {"rating": "float"}
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 2
+    assert any(p.startswith(f"{key}: ") for p in problems)
+    assert any(p.startswith("Supplier: ") and "'rating'" in p for p in problems)
+
+
+@pytest.mark.parametrize("key", UNREADABLE_CONSTRUCTIONS)
+@pytest.mark.parametrize("absent", ["missing", "null"])
+def test_a_missing_or_null_properties_value_declares_none(key, absent):
+    """Not unreadable: judged exactly as an empty list always has been."""
+    plan = _plan_with_warehouse()
+    if absent == "missing":
+        del plan[key]["properties"]
+    else:
+        plan[key]["properties"] = None
+    plan[key]["property_types"] = {}
+
+    assert check_construction_plan_consistency(plan) == []
+
+    plan[key]["property_types"] = {"part_name": "integer"}
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1
+    assert "not in the properties list []" in problems[0]
+
+
 def test_approval_refuses_a_plan_with_an_illegal_type(ctx):
     """The rules are only worth anything if approval enforces them."""
     plan = _typed_plan()
