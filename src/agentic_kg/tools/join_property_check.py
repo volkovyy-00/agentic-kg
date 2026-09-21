@@ -123,7 +123,7 @@ def check_joined_properties_hold_one_value(
     }
     problems: List[str] = []
     shape_notes: List[str] = []
-    unreadable: Dict[str, Tuple[str, List[str]]] = {}
+    unreadable: Dict[Tuple[str, str], List[str]] = {}
 
     joins = _joins_by_node_property(construction_plan)
     for (label, column), relationships in joins.items():
@@ -148,10 +148,8 @@ def check_joined_properties_hold_one_value(
             rule["source_file"], rule["unique_column_name"], column
         )
         if error is not None:
-            _, unchecked = unreadable.setdefault(
-                rule["source_file"], (error["error_message"], [])
-            )
-            unchecked.append(f"{label}.{column}")
+            key = (rule["source_file"], error["error_message"])
+            unreadable.setdefault(key, []).append(f"{label}.{column}")
             continue
         assert summary is not None  # summarize_key_groups: error is None => summary set
         if summary.conflict_count:
@@ -168,6 +166,6 @@ def check_joined_properties_hold_one_value(
     file_notes = [
         f"{quoted_list(unchecked)} could not be checked for one value per node: "
         f"'{path}' could not be read ({message})"
-        for path, (message, unchecked) in unreadable.items()
+        for (path, message), unchecked in unreadable.items()
     ]
     return problems, shape_notes + file_notes

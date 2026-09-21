@@ -302,6 +302,29 @@ def test_one_unreadable_file_gives_one_note_naming_every_join_it_left_unchecked(
     assert "Transect.tally" in unverified[0]
 
 
+def test_two_missing_columns_on_one_readable_file_each_get_their_own_note(source):
+    """Unlike one unreadable file (same message for every column left
+    unchecked), a readable file missing two joined columns fails each column's
+    read for a different reason, so each gets its own note naming only itself."""
+    source("walks.csv", "transect_name,tally\nnorth,3\n")
+    plan = {
+        "Transect": _node(
+            "Transect", "walks.csv", "transect_name", ["species_code", "habitat"]
+        ),
+        "Species": _node("Species", "species.csv", "species_code", ["common_name"]),
+        "SEEN": _rel("SEEN", "Transect", "species_code", "Species", "species_code"),
+        "FOUND_IN": _rel("FOUND_IN", "Transect", "habitat", "Species", "species_code"),
+    }
+    problems, unverified = check(plan)
+    assert problems == []
+    assert len(unverified) == 2
+    species_note = next(note for note in unverified if "Transect.species_code" in note)
+    habitat_note = next(note for note in unverified if "Transect.habitat" in note)
+    assert "Transect.habitat" not in species_note
+    assert "Transect.species_code" not in habitat_note
+    assert "species_code" in species_note
+
+
 def test_a_source_with_no_data_rows_gives_nothing(source):
     source("walks.csv", "transect_name,species_code,tally\n")
     assert check(_several_values_plan()) == ([], [])
