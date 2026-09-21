@@ -154,8 +154,9 @@ invocation per user turn (deliberate): `reset_schema_refinement_turn_budget` (co
 `before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
 
 **Plan checks: one rule set, two enforcement points.** `check_construction_plan_consistency` (joins, endpoint
-labels, typed columns) and `check_reference_columns_are_reachable` (every approved file's reference columns can
-still be reached) run:
+labels, typed columns), `check_joined_properties_hold_one_value` (`tools/join_property_check.py`: a relationship
+may not join on a node property that holds several values per node) and `check_reference_columns_are_reachable`
+(every approved file's reference columns can still be reached) run:
 
 - **At approval** — in `approve_proposed_construction_plan`, and in the read tool the current variant uses,
   `get_proposed_construction_plan_with_approval_check` (`tools/construction_plan_tools.py`), through a shared
@@ -164,19 +165,25 @@ still be reached) run:
   it. The read tool's error branch still returns the plan alongside the problems; its success branch says only
   that those checks passed, not that it's the *right* plan — accepting remaining critic objections is the
   user's call.
-- **Inside `schema_refinement_loop`** — its `StopChecker` runs both through `find_plan_problems(state)`, and a
-  plan with either problem goes back for another iteration. The stop-check writes a `retry` composite to
+- **Inside `schema_refinement_loop`** — its `StopChecker` runs all three through `find_plan_problems(state)`, and a
+  plan with any of these problems goes back for another iteration. The stop-check writes a `retry` composite to
   `feedback` via `state_delta`, never by mutating state (`AgentTool` forwards only the delta out of the loop's
   child session). The loop runs at most two iterations, so a problem the second revision introduces still
   surfaces at approval.
 
 Approval is the guarantee: the loop's copy is fail-open behind one guard, approval propagates a crashed check so
-it fails closed, and reachability itself fails open on an unreadable file (a `not_verified` note, never a
-refusal). Do not move the check into a critic-side tool: it would depend on the model choosing to call it, and
+it fails closed, and the joined-property check and reachability fail open on an unreadable file (a
+`not_verified` note, never a refusal). Do not move the check into a critic-side tool: it would depend on the model choosing to call it, and
 the check is mechanical precisely because the prose rule it replaced resolved the same file two different ways
 on two runs. Approval framing also stays out of the critic's context. Reachability asks whether some node carries every value an
 identifying file holds, whichever file built that node (#52, KG-13) — never whether the node was built from that
 file.
+
+The joined-property check reads only `conflict_count` from `summarize_key_groups`; it does not reuse
+reachability's `_property_failure`, which also refuses several nodes sharing a value, and a join may
+legitimately match those. The key-group reading counts a row with no cell for the value column as no
+value, and a present blank cell as a value, because the loader skips the write for the first and
+overwrites with the second (KG-22).
 
 ### Handoff confirmation gates
 

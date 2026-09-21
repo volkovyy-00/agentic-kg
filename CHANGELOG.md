@@ -8,6 +8,28 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.7.2] - 2026-09-21
+
+### Added
+- **A join on a property with several values per node is refused (#66, KG-22)**: a relationship can join on a
+  node property that the node's source file holds several values of per node. The build keeps one arbitrary
+  value of it, so most relationship rows silently matched nothing, and approval accepted the plan. The plan
+  checks now refuse it, with the same line when the plan is presented, at approval, and in the refinement
+  loop's revision feedback. The line names the relationships, the node and the property, says how many
+  nodes conflict, and offers a fix that keeps the relationship: a node keyed by the joined column, built
+  from the node's own source, under a label of its own. Several nodes sharing one value is still fine, a
+  join on the node's key is not read, and an unreadable source gives a "not verified" note, never a refusal.
+  The check reads one source column per joined non-key property on every presentation, loop iteration and
+  approval.
+
+### Fixed
+- **A row with no cell for a property is no longer counted as a second value (#66, KG-22)**: the loader skips
+  the write for a row too short to reach a column, so the node keeps an earlier value, but the key-group
+  reading counted that row as a blank one. `collapse_check` and the reachability check therefore reported
+  conflicts on files with short rows that the loader does not produce. A row with no cell now adds no value;
+  a present blank cell still counts, because the loader writes over an earlier value with it. Answers change
+  only on files with short rows, and only toward fewer conflicts.
+
 ## [0.7.1] - 2026-09-21
 
 ### Fixed

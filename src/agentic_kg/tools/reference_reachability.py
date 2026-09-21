@@ -295,7 +295,9 @@ def _covers_a_home(
     )
 
 
-def _node_description(rule: dict) -> str:
+def node_description(rule: dict) -> str:
+    """A node rule as a message names it. Public: join_property_check words its
+    refusal with the same description, so the two cannot drift."""
     return (
         f"'{rule.get('label')}' (built from '{rule.get('source_file')}', "
         f"keyed by '{rule.get('unique_column_name')}')"
@@ -305,7 +307,7 @@ def _node_description(rule: dict) -> str:
 def _collapse_detail(column: str, rule: dict) -> str:
     """Why a retained property does not carry the column: its groups disagree."""
     return (
-        f"{_node_description(rule)} retains '{column}' as a property, but it does "
+        f"{node_description(rule)} retains '{column}' as a property, but it does "
         f"not survive collapsing: nodes sharing a key disagree about it, so each "
         f"keeps one arbitrary value and a relationship joining on it would match "
         f"almost nothing, with no error at build time."
@@ -315,7 +317,7 @@ def _collapse_detail(column: str, rule: dict) -> str:
 def _shared_detail(column: str, rule: dict) -> str:
     """Why a retained property does not carry the column: its values repeat."""
     return (
-        f"{_node_description(rule)} retains '{column}' as a property, but more "
+        f"{node_description(rule)} retains '{column}' as a property, but more "
         f"than one node holds the same value, so a relationship joining on it "
         f"would attach to all of them instead of to the one row the value "
         f"identifies."
@@ -326,12 +328,13 @@ _EXAMPLE_LIMIT = 3
 _VALUE_LIMIT = 40
 
 
-def _quoted_list(names: List[str]) -> str:
+def quoted_list(names: List[str]) -> str:
     """Comma-separated, single-quoted file names for a message.
 
     One spelling, because these lists are read side by side in the same refusal:
     two ways of quoting the same kind of value diverge the moment a name contains
     a quote or a backslash.
+    Public because join_property_check names relationships the same way.
     """
     return ", ".join(f"'{name}'" for name in names)
 
@@ -375,10 +378,10 @@ def _report(
     every one of its own values: keying a node by the column from that file
     supplies all of them. That is why a refusal can never dead-end.
     """
-    home_list = _quoted_list(homes)
+    home_list = quoted_list(homes)
     holder = "that file holds" if len(homes) == 1 else "any one of those files holds"
     if repeating:
-        other_list = _quoted_list(repeating)
+        other_list = quoted_list(repeating)
         appears_clause = f" and also appears in {other_list}"
         join_clause = f"joining {other_list} to {home_list}"
     else:
@@ -430,7 +433,7 @@ def _shortfall_clause(
     examples = sorted(wanted - closest.domain)[:_EXAMPLE_LIMIT]
     missing = ", ".join(_quoted_value(value) for value in examples)
     return (
-        f"{_node_description(closest.rule)} {share} {len(wanted)} "
+        f"{node_description(closest.rule)} {share} {len(wanted)} "
         f"'{column}' values '{home}' holds (missing e.g. {missing})"
     )
 
@@ -463,7 +466,7 @@ def _refusal(
         )
     elif not failures:
         details.append(
-            f"no node built from {_quoted_list(list(value_sets))} is keyed by "
+            f"no node built from {quoted_list(list(value_sets))} is keyed by "
             f"'{column}', and none retains it as a property."
         )
     return _report(column, homes, repeating, " ".join(details), consequence)

@@ -10,6 +10,7 @@ from agentic_kg.common.value_types import ALLOWED_TYPES
 graphdb = get_graphdb()
 
 from .file_tools import APPROVED_FILES, search_file
+from .join_property_check import check_joined_properties_hold_one_value
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -558,7 +559,7 @@ NO_PROPOSED_PLAN_MESSAGE = (
 
 
 def _format_unverified_notes(unverified: list[str]) -> str:
-    """Render the reachability check's unverified notes for a caller's message.
+    """Render find_plan_problems' unverified notes for a caller's message.
 
     Shared for the same reason the preconditions themselves are: both callers
     append this block, and two copies of the format would drift the moment one
@@ -602,13 +603,13 @@ class StateLike(Protocol):
 def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
     """Everything that would make approval refuse the proposed plan.
 
-    Returns (problems, unverified). Structural problems come first, then
-    reachability's; `unverified` holds the reachability check's notes about
-    sources it could not read.
+    Returns (problems, unverified). Structural problems come first, then the
+    joined-property check's, then reachability's; `unverified` holds those two
+    checks' notes about sources they could not read.
 
     Both the approval path and the refinement loop's stop-check call this, so
     what the loop catches cannot drift from what approval refuses. Copying the
-    two calls into each caller instead would make that equivalence hold only by
+    calls into each caller instead would make that equivalence hold only by
     convention -- the drift _read_plan_for_approval was created to prevent.
 
     A falsy plan returns nothing at all. The reachability check reports every
@@ -628,10 +629,18 @@ def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
         return [], []
 
     problems = check_construction_plan_consistency(construction_plan)
-    reachability_problems, unverified = check_reference_columns_are_reachable(
-        construction_plan, state.get(APPROVED_FILES) or []
+    joined_problems, joined_unverified = check_joined_properties_hold_one_value(
+        construction_plan
     )
-    return problems + reachability_problems, unverified
+    reachability_problems, reachability_unverified = (
+        check_reference_columns_are_reachable(
+            construction_plan, state.get(APPROVED_FILES) or []
+        )
+    )
+    return (
+        problems + joined_problems + reachability_problems,
+        joined_unverified + reachability_unverified,
+    )
 
 
 def _read_plan_for_approval(
@@ -646,9 +655,10 @@ def _read_plan_for_approval(
     a dry run that reports success where approval refuses is the exact bug the
     dry run exists to prevent.
 
-    The reachability check reads the approved files, unlike the structural one.
-    It fails open: a source it cannot read produces a note in the third return
-    value, never a problem, so an unreachable disk cannot make a plan unshowable.
+    The joined-property and reachability checks read files, unlike the structural
+    one. Both fail open: a source they cannot read produces a note in the third
+    return value, never a problem, so an unreachable disk cannot make a plan
+    unshowable.
 
     The checks themselves live in find_plan_problems, which the refinement
     loop's stop-check also calls. The plan is still read here as well, because
@@ -672,7 +682,8 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
 
     Approval is refused when a relationship construction joins on a column the
     referenced node does not carry, or names an endpoint label that has no node
-    construction in the plan, or when it leaves an approved file's reference
+    construction in the plan, or joins on a node property that holds more than
+    one value per node, or when it leaves an approved file's reference
     column with no node in the plan that carries it reachably -- in every one
     of these cases the plan cannot build the graph that was described to the
     user no matter what was said in conversation.
@@ -686,7 +697,8 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     if problems:
         return tool_error(
             "The proposed construction plan was NOT approved. It is inconsistent, "
-            "or it leaves an approved file's reference column unreachable:\n"
+            "joins on a node property that holds several values per node, or "
+            "leaves an approved file's reference column unreachable:\n"
             + format_problem_bullets(problems)
             + "\nFix the plan, then show the user the corrected plan returned by "
             "'get_proposed_construction_plan_with_approval_check' and ask them to "
@@ -708,7 +720,7 @@ def get_proposed_construction_plan_with_approval_check(
     """Get the proposed construction plan, and whether it can be approved right now.
 
     Use this whenever you are about to show the user a construction plan. It runs
-    the same consistency check 'approve_proposed_construction_plan' runs, without
+    the same checks 'approve_proposed_construction_plan' runs, without
     approving anything, so its answer is exactly what approval will do.
 
     An error result means approval would be refused, and the message lists the
@@ -757,8 +769,8 @@ def get_proposed_construction_plan_with_approval_check(
                 # which branch the coordinator is in, and on a first 'retry' the
                 # instruction mandates another schema_refinement_loop pass on an
                 # objection these checks have no way to observe (they only know
-                # joins, endpoint labels, typed join columns, and reference-
-                # column reachability). An
+                # joins, endpoint labels, typed join columns, multi-valued joined
+                # properties, and reference-column reachability). An
                 # unconditional claim here would be true on 'stopped:' and the
                 # second 'retry' but false on the first, contradicting the
                 # instruction on exactly the branch where refinement is still
@@ -766,7 +778,8 @@ def get_proposed_construction_plan_with_approval_check(
                 "This plan can be approved right now: "
                 "'approve_proposed_construction_plan' will accept it as it stands. "
                 "That is all this tool knows: it checks joins, endpoint labels, "
-                "typed columns, and whether every approved file's reference "
+                "typed columns, whether each joined node property holds one value "
+                "per node, and whether every approved file's reference "
                 "columns can still be reached, not whether the plan is the right "
                 "one. When your instruction has you presenting this plan, show it "
                 "to the user together with any outstanding critic objections, ask "

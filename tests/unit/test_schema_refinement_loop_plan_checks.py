@@ -377,3 +377,46 @@ def test_the_check_authored_wording_carries_no_approval_framing(stranding_plan_s
     for problem in [*structural, *reachability]:
         assert "approv" not in problem.lower()
         assert "ready" not in problem.lower()
+
+
+def _join_on_a_multi_valued_property(plan):
+    """plots.csv keys Plot by plot_label; 'ridge' holds two plot_id values."""
+    plan["Plot"]["properties"] = ["plot_id"]
+    plan["MEASURED_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "MEASURED_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Plot",
+        "from_node_column": "plot_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_label",
+    }
+
+
+def test_the_stop_check_reports_a_join_on_a_multi_valued_property(
+    stranding_plan_state,
+):
+    """The loop reaches the new check through find_plan_problems, so its retry
+    composite carries the same line approval would refuse the plan for."""
+    _join_on_a_multi_valued_property(stranding_plan_state["proposed_construction_plan"])
+    stranding_plan_state["feedback"] = "valid"
+    events = _run(stranding_plan_state)
+
+    delta = events[0].actions.state_delta
+    assert "more than one value per node" in delta["feedback"]
+
+
+def test_the_joined_property_wording_carries_no_approval_framing(
+    stranding_plan_state,
+):
+    from agentic_kg.tools.join_property_check import (
+        check_joined_properties_hold_one_value,
+    )
+
+    plan = stranding_plan_state["proposed_construction_plan"]
+    _join_on_a_multi_valued_property(plan)
+    problems, _ = check_joined_properties_hold_one_value(plan)
+    assert problems  # or the loop below would pass on an empty list
+    for problem in problems:
+        assert "approv" not in problem.lower()
+        assert "ready" not in problem.lower()

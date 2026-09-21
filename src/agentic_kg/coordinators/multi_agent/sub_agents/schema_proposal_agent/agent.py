@@ -191,12 +191,12 @@ schema_critic_agent = LlmAgent(
 def _plan_problems(state: StateLike) -> list[str]:
     """The mechanical problems in the proposed plan, or none if a check crashed.
 
-    ONE guard for both checks, not one each. Per-check independence would need
+    ONE guard for all three checks, not one each. Per-check independence would need
     either a guard inside find_plan_problems -- which approval inherits, and
     which would let approval write an approved plan whose checks never ran --
     or a catch-and-report shape whose fail-closed depends on a re-raise line
     inside the enforcement path. The cost of one guard is that a raise in
-    either check drops the other's early catch FOR THAT ITERATION, IN THE LOOP
+    any check drops the others' early catch FOR THAT ITERATION, IN THE LOOP
     ONLY; approval still refuses the plan.
 
     exc_info because the adk web server's own stdout is the only place these
@@ -348,7 +348,8 @@ root_agent = LlmAgent(
     - If they disapprove, pass their feedback to the 'schema_refinement_loop' tool and go back to step 1
     - If the user approves, use the 'approve_proposed_construction_plan' tool to record the approval.
       This tool refuses plans whose relationships join on columns their nodes do not carry, or whose
-      relationships reference a node label that has no node construction in the plan. If it returns
+      relationships reference a node label that has no node construction in the plan, or that join on
+      a node property holding several values per node. If it returns
       an error, the schema is NOT approved: report the error to the user verbatim, run
       'schema_refinement_loop' with that error as feedback, and present the corrected plan for approval
       again. Never tell the user the schema is approved unless that tool returned success.

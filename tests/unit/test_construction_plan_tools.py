@@ -26,6 +26,7 @@ from agentic_kg.tools.construction_plan_tools import (
     PROPOSED_CONSTRUCTION_PLAN,
     approve_proposed_construction_plan,
     check_construction_plan_consistency,
+    find_plan_problems,
     get_proposed_construction_plan,
     get_proposed_construction_plan_with_approval_check,
     propose_node_construction,
@@ -1144,6 +1145,90 @@ def test_every_path_reports_the_same_plan_problems(stranding_state):
     # tests/unit/test_schema_refinement_loop_plan_checks.py.
 
 
+def _join_on_a_multi_valued_property(state):
+    """Make stranding_state's plan join on a property its node keeps one value of.
+
+    plots.csv keys Plot by plot_label and 'ridge' holds two plot_id values, so a
+    join on Plot.plot_id is a join on a property with several values per node."""
+    plan = state.state[PROPOSED_CONSTRUCTION_PLAN]
+    plan["Plot"]["properties"] = ["plot_id"]
+    plan["MEASURED_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "MEASURED_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Plot",
+        "from_node_column": "plot_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_label",
+    }
+
+
+def test_every_path_reports_the_joined_property_problem_verbatim(stranding_state):
+    """SC4: the same line, character for character, at approval, at presentation
+    and in the refinement loop's composite. All three read find_plan_problems."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+        _compose_feedback,
+    )
+
+    _join_on_a_multi_valued_property(stranding_state)
+
+    refusal = approve_proposed_construction_plan(stranding_state)
+    check = get_proposed_construction_plan_with_approval_check(stranding_state)
+    problems, _ = find_plan_problems(stranding_state.state)
+    composite = _compose_feedback("valid", problems)
+
+    lines = [p for p in problems if "more than one value per node" in p]
+    assert len(lines) == 1
+    assert lines[0] in refusal["error_message"]
+    assert lines[0] in check["error_message"]
+    assert lines[0] in composite
+
+
+@pytest.fixture
+def empty_source(monkeypatch):
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    yield
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+
+
+def _plan_joining_on_a_property_that_cannot_be_read():
+    """Assembly's source is never written, so the retained property it joins on
+    cannot be checked: the check must say so, not refuse."""
+    plan = _consistent_plan()
+    plan["ASSEMBLY_OF"]["to_node_label"] = "Assembly"
+    plan["ASSEMBLY_OF"]["to_node_column"] = "product_id"  # a property, not the key
+    return plan
+
+
+def test_presentation_shows_the_plan_with_a_note_when_a_joined_property_cannot_be_checked(
+    ctx, empty_source
+):
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = (
+        _plan_joining_on_a_property_that_cannot_be_read()
+    )
+    result = get_proposed_construction_plan_with_approval_check(ctx)
+    assert result["status"] == "success"
+    notes = result["result"]["not_verified"]
+    assert len(notes) == 1
+    assert "assemblies.csv" in notes[0]
+
+
+def test_approval_still_approves_with_a_note_when_a_joined_property_cannot_be_checked(
+    ctx, empty_source
+):
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = (
+        _plan_joining_on_a_property_that_cannot_be_read()
+    )
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "success"
+    assert len(result["result"]["not_verified"]) == 1
+
+
 def test_approval_refuses_a_plan_that_strands_a_reference_column(stranding_state):
     """Catches wiring the check somewhere that does not gate approval: the whole
     point is that this plan stops being approvable."""
@@ -1393,6 +1478,58 @@ def test_a_retained_id_on_a_node_per_row_of_a_repeating_file_is_not_reachable(
     assert len(problems) == 1
     assert "product_id" in problems[0]
     assert unverified == []
+
+
+@pytest.fixture
+def ticket_refusal(bom_source):
+    """KG-22's observed plan, on top of the full reference plan.
+
+    The reference plan already has a Part built from components.csv; the ticket's
+    Part is built from the mapping file under the same label, so it REPLACES it.
+    The reference plan alone is accepted, and so is this plan today: that is the
+    bug. Asserting the new line's own text (not merely 'a refusal') matters: the
+    ticket's three rules alone draw four unrelated refusals from reachability,
+    and a test that only checked for a refusal would pass on those."""
+    plan = {
+        "Product": _bom_node("products.csv", "Product", "product_id", ["product_name"]),
+        "Supplier": _bom_node("suppliers.csv", "Supplier", "supplier_id", ["name"]),
+        "Assembly": _bom_node(
+            "assemblies.csv", "Assembly", "assembly_id", ["quantity"]
+        ),
+        "Part": _bom_node(
+            "part_supplier_mapping.csv", "Part", "part_id", ["part_name"]
+        ),
+        "SubAssembly": _bom_node(
+            "components.csv", "SubAssembly", "sub_assembly_name", ["part_id"]
+        ),
+        "SUPPLIED_BY": _bom_relationship(
+            "part_supplier_mapping.csv",
+            "SUPPLIED_BY",
+            "SubAssembly",
+            "part_id",
+            "Supplier",
+            "supplier_id",
+        ),
+    }
+    state = {PROPOSED_CONSTRUCTION_PLAN: plan, APPROVED_FILES: BOM_FILES}
+    problems, unverified = find_plan_problems(state)
+    assert unverified == []
+    assert len(problems) == 1, "expected only the new line; got: " + repr(problems)
+    return problems[0]
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "'SUPPLIED_BY'",
+        "'SubAssembly'",
+        "'part_id'",
+        "more than one value per node",
+        "in 27 of 27 nodes",
+    ],
+)
+def test_the_ticket_plan_on_the_bundled_example_is_refused(ticket_refusal, fragment):
+    assert fragment in ticket_refusal
 
 
 def test_find_plan_problems_returns_nothing_for_a_falsy_plan(stranding_state):
