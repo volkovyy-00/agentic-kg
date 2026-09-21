@@ -6,6 +6,10 @@ source of _oracle_values_on_one_key) as they stood at fcc0661, before this
 change deleted them. It is duplicated on purpose: its whole job is to outlive
 the original, so the old semantics remain executable and a regression is a
 diff rather than a judgement call. Do not "simplify" it to call the new code.
+
+Since KG-22 the grouping half is NOT verbatim any more: see
+_oracle_groups_value_absent_aware, which diverges on purpose. _oracle_groups and
+_oracle_values_on_one_key still are.
 """
 
 import random
@@ -25,9 +29,31 @@ def _oracle_groups(pairs):
     return groups
 
 
+def _oracle_groups_value_absent_aware(pairs):
+    """_oracle_groups, changed on purpose at KG-22.
+
+    A value the reader reports as absent (None: a short row that never reaches the
+    column) registers its key and adds no value, because the loader skips the
+    write for an absent cell and the node keeps what an earlier row gave it. A
+    present blank cell is "" and still counts.
+
+    A separate function, not an edit of _oracle_groups: _oracle_values_on_one_key
+    calls that one with (value, key) reversed, so changing it in place would alter
+    the reverse grouping whenever a row has a value cell but no key cell -- a case
+    the generator cannot produce today, so nothing would fail and the change would
+    be silent."""
+    groups = {}
+    for key, value in pairs:
+        key_text = "" if key is None else str(key)
+        values = groups.setdefault(key_text, set())
+        if value is not None:
+            values.add(str(value))
+    return groups
+
+
 def _oracle_examples(pairs):
-    """Verbatim copy of collapse_check's reduction at fcc0661."""
-    groups = _oracle_groups(pairs)
+    """collapse_check's reduction at fcc0661, over the value-absent-aware grouping."""
+    groups = _oracle_groups_value_absent_aware(pairs)
     conflicts = [(key, values) for key, values in groups.items() if len(values) > 1]
     return {
         "group_count": len(groups),
@@ -49,6 +75,11 @@ def _oracle_values_on_one_key(pairs):
     return all(len(keys) == 1 for keys in by_value.values())
 
 
+ABSENT = object()
+"""A value with no cell at all: a short row that stops at the key. None is a
+present blank cell here, which _write writes as `key,`."""
+
+
 def _random_pairs(rng):
     """A pair list shaped to hit the cases that distinguish the two algorithms."""
     key_count = rng.randint(1, 9)
@@ -56,7 +87,7 @@ def _random_pairs(rng):
     # emptiness test but distinct values for identity, and " v00"/"v00 " sort
     # around "v00". Without them, three mutants that strip before comparing
     # survive every test in this repo.
-    value_pool = ["", " ", "   ", " v00", "v00 ", None] + [
+    value_pool = ["", " ", "   ", " v00", "v00 ", None, ABSENT] + [
         f"v{i:02d}" for i in range(rng.randint(1, 15))
     ]
     keys = [None, ""] + [f"k{i}" for i in range(key_count)]
@@ -82,6 +113,8 @@ def _write(fs, pairs):
     for key, value in pairs:
         if key is None:
             lines.append("")  # a short row: no cell reaches 'value' either
+        elif value is ABSENT:
+            lines.append(f"{key}")  # a short row: the key, and no value cell
         else:
             lines.append(f"{key},{'' if value is None else value}")
     with fs.open("/src/pairs.csv", "w") as handle:

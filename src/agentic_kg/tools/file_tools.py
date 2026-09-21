@@ -407,8 +407,10 @@ class _KeyState:
 
     __slots__ = ("first_value", "rank", "conflicted", "examples")
 
-    def __init__(self, first_value: str, rank: int):
+    def __init__(self, first_value: str | None, rank: int):
         self.first_value = first_value
+        """None until a row supplies a value: a key whose rows so far had no cell
+        for the value column has no value yet, which is not the value ""."""
         self.rank = rank
         self.conflicted = False
         self.examples: list[str] | None = None
@@ -449,7 +451,16 @@ class _KeyGroupAccumulator:
         """Fold one row in, holding nothing that scales with the rows seen."""
         self.row_count += 1
         key_text = "" if key is None else str(key)
-        value_text = "" if value is None else str(value)
+        if value is None:
+            # No cell for the value column. The loader skips the write, so the node
+            # keeps whatever an earlier row gave it: not a second value, unlike a
+            # present blank cell, which the loader writes over it. The key is still
+            # a group, so group_count is unchanged. Handled before the coercion to
+            # text: _group would otherwise put "" among a held key's examples.
+            if key_text not in self.states:
+                self.states[key_text] = _KeyState(None, len(self.states))
+            return
+        value_text = str(value)
         self._group(key_text, value_text)
         if self.values_on_one_key and not is_blank(value):
             self._own(key_text, value_text)
@@ -459,6 +470,8 @@ class _KeyGroupAccumulator:
         state = self.states.get(key_text)
         if state is None:
             self.states[key_text] = _KeyState(value_text, len(self.states))
+        elif state.first_value is None:
+            state.first_value = value_text
         elif not state.conflicted and value_text != state.first_value:
             state.conflicted = True
             self.conflict_count += 1
@@ -485,6 +498,7 @@ class _KeyGroupAccumulator:
                 return  # every held key appears earlier: the newcomer loses
             self.states[latest].examples = None
             self.held.remove(latest)
+        assert state.first_value is not None  # a conflict needs a first value
         state.examples = []
         _keep_smallest(state.examples, state.first_value)
         _keep_smallest(state.examples, value)
@@ -516,6 +530,10 @@ def summarize_key_groups(
 
     Returns (summary, error), and owns the whole read for the same reason
     summarize_column does.
+
+    A value of None (a row too short to reach the column) registers its key without
+    giving it a value, so it is never a second value; "" (a present blank cell) is
+    a value, because the loader writes over an earlier one with it (KG-22).
 
     Memory is one small state per DISTINCT KEY -- a first value, a rank and a
     flag -- plus the ten smallest values for at most `keep_examples` keys. It is
@@ -899,6 +917,11 @@ def collapse_check(
     with zero counts and 'survives_collapse' True. That True is vacuous: nothing
     collapsed because there was nothing to collapse. Check 'row_count' before
     treating it as evidence the column is safe.
+
+    A row with no cell for 'candidate_column' (a short row) is not a value: the
+    loader skips the write, so the node keeps whatever an earlier row gave it, and
+    the row does not count toward 'groups_with_conflicts'. A present but blank cell
+    is a value, because the loader overwrites with it, and does count.
 
     Args:
       file_path: Path to the node file's CSV, relative to the source location.

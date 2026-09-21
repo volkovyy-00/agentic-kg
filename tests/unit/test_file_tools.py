@@ -694,17 +694,81 @@ def test_collapse_check_folds_an_absent_key_in_with_a_blank_one(ragged_source):
     """An absent key groups with a genuinely blank one, which is how the loader
     treats them. That fold used to happen in the pair collector, whose
     row.get(column, "") default meant the grouper's own None handling never saw a
-    None from that path. One summariser now does both."""
+    None from that path. One summariser now does both.
+
+    The group's two rows are the short row (candidate 'k2') and the blank line
+    (no candidate cell at all). The blank line is not a second value: the loader
+    skips the write, so the node holds only 'k2' and the group does not conflict.
+    Until KG-22 this test expected a conflict of ["", "k2"], which existed only
+    because an absent value used to be counted as ""."""
     result = file_tools.collapse_check("ragged.csv", "value", "key", FakeToolContext())
     check = result["collapse_check"]
     assert check["row_count"] == 5
     # Grouped by 'value': 'x', '' (the short row and the blank line together),
     # ' x' and '   ' -- whitespace is trimmed to decide emptiness, never identity.
     assert check["group_count"] == 4
+    assert check["groups_with_conflicts"] == 0
+    assert check["example_conflicts"] == []
+
+
+def _write_source(fs, name, text):
+    with fs.open(f"/src/{name}", "w") as handle:
+        handle.write(text)
+
+
+def _collapse(file_name, key="key", candidate="value"):
+    result = file_tools.collapse_check(file_name, key, candidate, FakeToolContext())
+    return result["collapse_check"]
+
+
+def test_collapse_check_does_not_count_a_missing_cell_as_a_second_value(
+    memory_source,
+):
+    """The loader skips the write for a row with no cell for the property, so
+    node 'a' keeps 'x'. Counting that short row as "" would refuse a correct
+    plan (KG-22)."""
+    _write_source(memory_source, "gaps.csv", "key,value\na,x\na\na,x\n")
+    check = _collapse("gaps.csv")
+    assert check["groups_with_conflicts"] == 0
+    assert check["group_count"] == 1
+    assert check["row_count"] == 3
+
+
+def test_collapse_check_still_counts_a_present_blank_cell_as_a_second_value(
+    memory_source,
+):
+    """One cell different from the test above: a present blank cell is written
+    over the earlier value by the loader, so it is a value and it conflicts."""
+    _write_source(memory_source, "blanks.csv", "key,value\nb,y\nb,\n")
+    check = _collapse("blanks.csv")
     assert check["groups_with_conflicts"] == 1
-    assert check["example_conflicts"] == [
-        {"node_key": "", "values": ["", "k2"]},
-    ]
+    assert check["example_conflicts"] == [{"node_key": "b", "values": ["", "y"]}]
+
+
+def test_a_missing_cell_never_appears_among_a_conflicts_example_values(
+    memory_source,
+):
+    """Key 'a' conflicts on its second row, then a short row arrives while the
+    key is held for reporting. It must not put "" in the examples."""
+    _write_source(memory_source, "held.csv", "key,value\na,x\na,y\na\n")
+    check = _collapse("held.csv")
+    assert check["example_conflicts"] == [{"node_key": "a", "values": ["x", "y"]}]
+
+
+def test_a_key_first_seen_with_no_value_takes_its_first_real_value_quietly(
+    memory_source,
+):
+    _write_source(memory_source, "late.csv", "key,value\na\na,x\n")
+    check = _collapse("late.csv")
+    assert check["groups_with_conflicts"] == 0
+    assert check["group_count"] == 1
+
+
+def test_a_key_first_seen_with_no_value_can_still_conflict_later(memory_source):
+    _write_source(memory_source, "later.csv", "key,value\na\na,x\na,y\n")
+    check = _collapse("later.csv")
+    assert check["groups_with_conflicts"] == 1
+    assert check["example_conflicts"] == [{"node_key": "a", "values": ["x", "y"]}]
 
 
 @pytest.fixture
