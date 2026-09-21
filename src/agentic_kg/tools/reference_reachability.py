@@ -176,24 +176,42 @@ def _property_failure(rule: dict, column: str) -> Tuple[str | None, str | None]:
     return None, None
 
 
-def _rule_properties(rule: dict) -> List[str]:
-    """A rule's 'properties', defensively -- only the strings in it.
+def declared_properties(rule: dict) -> List[str] | None:
+    """The property names a rule declares, or None if it declares them unreadably.
 
-    A malformed rule can carry anything here -- an int, a string, another
-    dict. Only a genuine list is a property list; anything else is treated as
-    empty rather than risking a crash (non-iterable) or silent substring
-    matching (a string 'in' check) against a value the rule never declared.
+    A missing or null 'properties' declares none, so it is []. Only a genuine
+    list of text is a property list. Anything else -- a number, text (which
+    would contribute its characters), a map (its keys), a falsy value that reads
+    as empty, or a list holding a non-text entry -- is None: the rule said
+    something, and what it said cannot be read as names. Reading it as [] would
+    turn "unreadable" into "declares nothing", and a verdict on that would be
+    about the misreading, not the plan.
 
     The elements need the same guard as the container: a property name is a
-    column name, so a non-string is not one, and dropping it here cannot
-    change a match. Passing one through can still crash -- an unhashable
-    element (a dict, a list) raises the moment a caller splats this into a
-    set, which is exactly what stage 1's unreadable-source scan does.
+    column name, and an unhashable element (a dict, a list) raises the moment a
+    caller splats the list into a set, which is exactly what stage 1's
+    unreadable-source scan does.
+
+    Shared with the plan-consistency check so the two cannot disagree about
+    what "unreadable" means.
     """
     properties = rule.get("properties")
-    if not isinstance(properties, list):
+    if properties is None:
         return []
-    return [name for name in properties if isinstance(name, str)]
+    if isinstance(properties, list) and all(
+        isinstance(name, str) for name in properties
+    ):
+        return properties
+    return None
+
+
+def _rule_properties(rule: dict) -> List[str]:
+    """A rule's 'properties' as names, treating an unreadable value as none.
+
+    For a caller that only needs the names a rule certainly declares. One that
+    must not read absence into an unreadable value asks declared_properties.
+    """
+    return declared_properties(rule) or []
 
 
 def _rule_unique_column_name(rule: dict) -> str | None:
@@ -213,6 +231,20 @@ class _Carrier(NamedTuple):
     position: int
     rule: dict
     domain: Set[str]
+
+
+def _may_retain_unreadably(rule: dict, column: str, files: List[str]) -> bool:
+    """Whether a rule's unreadable 'properties' could be what retains the column.
+
+    A rule keyed by the column already carries it outright, so it is not in
+    doubt. Otherwise the rule can retain the column only if it is built from a
+    file that has it -- and only if its 'properties' can be read to say so.
+    """
+    return (
+        declared_properties(rule) is None
+        and _rule_unique_column_name(rule) != column
+        and rule.get("source_file") in files
+    )
 
 
 def _carrying_rules(
@@ -481,6 +513,15 @@ def check_reference_columns_are_reachable(
                 notes.append(
                     f"'{rule.get('source_file')}' could not be read, and "
                     f"'{rule.get('label')}' is built from it"
+                )
+            elif _may_retain_unreadably(rule, column, files):
+                # The construction check reports the value itself. Here it only
+                # means this rule cannot be shown NOT to retain the column, so a
+                # refusal would rest on a misreading of what the rule declared.
+                evidence_complete = False
+                notes.append(
+                    f"'{rule.get('label')}' declares 'properties' in a form that "
+                    f"could not be read, so it may retain '{column}'"
                 )
 
         carriers, retaining = _carrying_rules(rules, column, value_sets)

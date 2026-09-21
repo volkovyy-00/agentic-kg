@@ -661,8 +661,8 @@ def test_malformed_rule_field_types_do_not_raise_or_substring_match(survey_sourc
     unreadable rule's non-string 'unique_column_name' (a list) built into a set
     literal alongside a non-list 'properties' (an int) must not raise
     'unhashable type: list' / 'argument of type int is not iterable', and a
-    *string* 'properties' value must not silently substring-match instead of
-    being treated as absent."""
+    *string* 'properties' value must not silently substring-match. It is not
+    read as absent either: it is unreadable, so a refusal is withheld."""
     plan = {
         "Ghost": {
             "construction_type": "node",
@@ -683,8 +683,13 @@ def test_malformed_rule_field_types_do_not_raise_or_substring_match(survey_sourc
     problems, unverified = rr.check_reference_columns_are_reachable(
         string_properties_plan, APPROVED
     )
-    assert len(problems) == 1
-    assert "plot_id" in problems[0]
+    # A substring match would credit the rule with plot_id and say nothing at
+    # all; the note is what tells "matched by characters" from "withheld".
+    assert problems == []
+    assert any(
+        "declares 'properties' in a form that could not be read" in n
+        for n in unverified
+    )
 
 
 def test_a_read_failure_elsewhere_does_not_block_a_confirmed_reachable_candidate(
@@ -890,3 +895,60 @@ def test_a_failure_part_way_through_a_read_becomes_a_note_not_a_raise(
     assert evidence_complete is False
     assert len(notes) == 1
     assert "plots.csv" in notes[0]
+
+
+@pytest.mark.parametrize(
+    ("rule", "expected"),
+    [
+        ({}, []),
+        ({"properties": None}, []),
+        ({"properties": []}, []),
+        ({"properties": ["a", "b"]}, ["a", "b"]),
+        ({"properties": 5}, None),
+        ({"properties": 0}, None),
+        ({"properties": "plot_id"}, None),
+        ({"properties": ""}, None),
+        ({"properties": {"plot_id": 1}}, None),
+        ({"properties": {}}, None),
+        ({"properties": True}, None),
+        ({"properties": [1, "a"]}, None),
+        ({"properties": [{"a": 1}, "b"]}, None),
+        ({"properties": [["a"]]}, None),
+        ({"properties": [None]}, None),
+    ],
+    ids=repr,
+)
+def test_declared_properties_tells_unreadable_from_absent(rule, expected):
+    """None is 'said something unreadable'; [] is 'declares nothing'. The plan
+    consistency check and this module share the predicate, so they cannot
+    disagree about which is which."""
+    assert rr.declared_properties(rule) == expected
+
+
+@pytest.mark.parametrize("properties", [5, "plot_id", {"plot_id": 1}, ["canopy", 7]])
+def test_an_unreadable_properties_value_withholds_a_refusal(survey_source, properties):
+    """Catches reading an unreadable 'properties' as [] -- the same plan with
+    ['canopy'] is refused (test_a_key_that_strands_the_referencing_file...), but a
+    rule that might retain plot_id in a form nobody could read must not be
+    refused on that misreading."""
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_label", properties), APPROVED
+    )
+    assert problems == []
+    assert any(
+        "reachability of 'plot_id' was not verified" in note
+        and "'Plot' declares 'properties' in a form that could not be read" in note
+        for note in unverified
+    )
+
+
+def test_an_unreadable_properties_value_on_a_rule_keyed_by_the_column_is_not_in_doubt(
+    survey_source,
+):
+    """A rule keyed by plot_id carries it outright, so what its 'properties' say
+    cannot change the verdict and must not withhold one."""
+    problems, unverified = rr.check_reference_columns_are_reachable(
+        _plot_node("plot_id", 5), APPROVED
+    )
+    assert problems == []
+    assert unverified == []
