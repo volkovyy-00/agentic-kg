@@ -8,7 +8,8 @@ import pytest
 
 _SCRIPT = Path(__file__).parents[2] / ".github" / "scripts" / "check_pr_conventions.py"
 _spec = importlib.util.spec_from_file_location("check_pr_conventions", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
+assert _spec is not None
+assert _spec.loader is not None
 conventions = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = conventions
 _spec.loader.exec_module(conventions)
