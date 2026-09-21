@@ -91,8 +91,9 @@ After the merge, the *Tag release* workflow tags the merge commit `vX.Y.Z`. No s
 PRs that change nothing user-visible — docs, CI, refactors, test-only changes — take the `no-release`
 label and leave the version alone. The *PR conventions* check enforces all of the above.
 
-**Two open PRs claiming the same version:** whichever merges second conflicts on `pyproject.toml`;
-rebase it onto `main`, take the next version, and retitle its `CHANGELOG.md` section.
+**Two open PRs claiming the same version:** whichever merges second conflicts on `CHANGELOG.md` (the
+identical `pyproject.toml` and `uv.lock` bumps merge cleanly, so don't rely on them to flag it); rebase it
+onto `main`, take the next version, and retitle its `CHANGELOG.md` section.
 
 ## CHANGELOG entries
 

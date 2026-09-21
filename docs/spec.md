@@ -25,14 +25,11 @@ It began as a fork of the companion project to the deeplearning.ai short course 
 Construction* (GitHub lists it as forked from `neo4j-contrib/agentic-kg`), but it is now developed as a real
 program rather than a teaching artifact. What makes that true, concretely, rather than as a claim:
 
-- Six tagged releases (`v0.1.0` … `v0.5.0`) and sixteen merged PRs beyond the fork point (#1–#16); #17
-  (this document) is the only one currently open. `main` is 56 commits ahead of
-  `neo4j-contrib/agentic-kg`'s `main` and zero behind — checked via GitHub's compare API, since this
-  clone keeps no local `upstream` remote to diff against directly (see §5).
-- A substantially expanded test suite: 1,011 passing unit tests — over half of that count is one
-  heavily parametrised invariant-test file for typed-property coercion (`test_value_types_invariants.py`)
-  — plus 5 integration modules, each skipping itself without Docker rather than being unit tests that
-  need it, against upstream's 2 unit and 2 integration files.
+- A release history of its own beyond the fork point, one tagged release per changelog-worthy PR
+  (`CHANGELOG.md` and the `vX.Y.Z` tags hold the list).
+- A substantially expanded test suite — unit tests, including heavily parametrised invariant tests
+  such as `test_value_types_invariants.py`, plus Testcontainers integration tests that skip themselves
+  without Docker — against upstream's 2 unit and 2 integration files.
 - Capabilities built here that the course does not have: retrieval grounding (§4), client-side CSV
   loading that works against Aura, `fsspec`-based file sources, and per-job model selection.
 - A contributor workflow, changelog discipline, and a design-decision record.
