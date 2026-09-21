@@ -8,6 +8,16 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.7.1] - 2026-09-21
+
+### Fixed
+- **A failed "does the source exist?" check no longer breaks plan approval (#NN, KG-26)**: the column
+  readers behind the reachability check, `column_type_hint` and `column_type_hints` turned only one kind
+  of failure of that check into an error result. Any other, such as a transient error from a remote
+  source, escaped as an exception, so approval and plan presentation failed instead of showing the plan
+  with a "not verified" note. Such a failure now reads like a read failure ("Error reading CSV file …");
+  a source that genuinely does not exist is reported exactly as before.
+
 ## [0.7.0] - 2026-09-21
 
 ### Added
