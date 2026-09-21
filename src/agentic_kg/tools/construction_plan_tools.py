@@ -10,6 +10,7 @@ from agentic_kg.common.value_types import ALLOWED_TYPES
 graphdb = get_graphdb()
 
 from .file_tools import APPROVED_FILES, search_file
+from .join_property_check import check_joined_properties_hold_one_value
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -628,10 +629,18 @@ def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
         return [], []
 
     problems = check_construction_plan_consistency(construction_plan)
-    reachability_problems, unverified = check_reference_columns_are_reachable(
-        construction_plan, state.get(APPROVED_FILES) or []
+    joined_problems, joined_unverified = check_joined_properties_hold_one_value(
+        construction_plan
     )
-    return problems + reachability_problems, unverified
+    reachability_problems, reachability_unverified = (
+        check_reference_columns_are_reachable(
+            construction_plan, state.get(APPROVED_FILES) or []
+        )
+    )
+    return (
+        problems + joined_problems + reachability_problems,
+        joined_unverified + reachability_unverified,
+    )
 
 
 def _read_plan_for_approval(

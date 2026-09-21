@@ -12,6 +12,11 @@ import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
+from agentic_kg.tools.construction_plan_tools import (
+    PROPOSED_CONSTRUCTION_PLAN,
+    find_plan_problems,
+)
+from agentic_kg.tools.file_tools import APPROVED_FILES
 from agentic_kg.tools.join_property_check import (
     check_joined_properties_hold_one_value as check,
 )
@@ -385,3 +390,67 @@ def test_a_non_text_label_field_on_a_node_still_refuses_without_raising(source):
 )
 def test_a_plan_that_is_not_a_map_of_rules_gives_nothing(plan):
     assert check(plan) == ([], [])
+
+
+# --- through find_plan_problems: notes, order, and applying the fix (SC2) -----
+
+STATIONS = "station_id,station_name\nS-1,Alder\nS-2,Birch\nS-3,Cedar\n"
+CHECKS = "check_group,station_id,note_id\ng1,S-1,n1\ng1,S-2,n2\ng2,S-3,n3\ng2,S-3,n4\n"
+
+
+def _logged_plan():
+    """'Group' retains station_id, which its group g1 holds two values of, and
+    stations.csv's station_id is covered by no keyed node: reachability reads the
+    retained property too, so it reports the same fact from its side."""
+    return {
+        "Group": _node("Group", "checks.csv", "check_group", ["station_id"]),
+        "Note": _node("Note", "checks.csv", "note_id", []),
+        "LOGGED_AT": _rel("LOGGED_AT", "Group", "station_id", "Note", "note_id"),
+    }
+
+
+def _state(plan):
+    return {
+        PROPOSED_CONSTRUCTION_PLAN: plan,
+        APPROVED_FILES: ["stations.csv", "checks.csv"],
+    }
+
+
+def test_before_the_fix_both_this_check_and_reachability_speak_and_this_one_is_first(
+    source,
+):
+    source("stations.csv", STATIONS)
+    source("checks.csv", CHECKS)
+    problems, _ = find_plan_problems(_state(_logged_plan()))
+    new = [i for i, p in enumerate(problems) if "more than one value per node" in p]
+    collapse = [i for i, p in enumerate(problems) if "does not survive collapsing" in p]
+    assert len(new) == 1
+    assert len(collapse) == 1
+    assert new[0] < collapse[0]
+
+
+def test_applying_the_offered_fix_clears_both_lines(source):
+    source("stations.csv", STATIONS)
+    source("checks.csv", CHECKS)
+    plan = _logged_plan()
+    # The fix the refusal offers: a node keyed by the joined column, built from the
+    # node's own source, under a label of its own; the join moves to it.
+    plan["CheckedStation"] = _node("CheckedStation", "checks.csv", "station_id", [])
+    plan["LOGGED_AT"]["from_node_label"] = "CheckedStation"
+    problems, unverified = find_plan_problems(_state(plan))
+    assert problems == []
+    assert unverified == []
+
+
+def test_an_unreadable_source_reaches_the_caller_as_a_note_through_find_plan_problems(
+    source,
+):
+    """The wiring must forward this check's notes, not only its problems: without
+    it, SC5's "the plan can still be presented, with a note" holds for the module
+    and not for the path a user takes."""
+    problems, unverified = find_plan_problems(
+        {PROPOSED_CONSTRUCTION_PLAN: _several_values_plan()}  # walks.csv never written
+    )
+    assert problems == []
+    assert len(unverified) == 1
+    assert "walks.csv" in unverified[0]
