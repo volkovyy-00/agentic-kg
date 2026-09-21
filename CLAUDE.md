@@ -16,55 +16,19 @@ that mirrors the course. Reproducibility for students is not a design goal.
 See `CONTRIBUTING.md` for the PR workflow, testing expectations, and CHANGELOG conventions to follow when
 making changes here.
 
-## Current work: unstructured ingestion (3 sub-projects)
+## Where knowledge lives
 
-Adding ingestion of unstructured documents (PDF/Markdown) alongside the existing CSV path, generic
-rather than hardcoded to the bundled furniture example. Split into three sub-projects, built in order.
-Each gets its own spec, plan and implementation cycle.
+This file holds what stays true until the code changes — architecture, invariants, commands — and **no status**.
+Status, handoffs, release history, rationale and design notes each have one home, listed in `CONTRIBUTING.md`'s
+*Where project knowledge lives*; start a ticket from its Jira comments. `docs/spec.md` is the "what is this and
+why" document, including the longer-range roadmap (§6) — read it alongside this file, not instead of it.
 
-| | Scope | Status |
-|---|---|---|
-| **1. Foundation** | File sources via `fsspec`, driver-side CSV loading, OpenRouter + per-job models, `finished()` fix | **implemented** |
-| **2. Unstructured ingestion** | Entity/fact-type agents, chunking, PDF+Markdown loaders, extraction executor, resumability, scoped resolution | design settled, **spec not written** |
-| **3. Linking** | `CORRESPONDS_TO` correlation to reference tables; cross-tier retrieval | design settled, **spec not written** |
+The design decisions for that roadmap's unstructured-ingestion and linking sub-projects are settled in
+`docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md` (local private notes, absent from a fresh
+clone) — read it before writing either spec; do not re-derive them.
 
-- Foundation spec: `docs/superpowers/specs/2026-07-27-foundation-design.md`
-- Foundation plan: `docs/superpowers/plans/2026-07-27-foundation.md` (12 TDD tasks — self-contained, assumes no prior context)
-- **Decisions for sub-projects 2 and 3: `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`**
-- Foundation is merged to `main` (the `foundation-file-sources-and-models` branch is gone — deleted after merge); work continues directly on `main`.
-
-All three documents above live under `docs/superpowers/`, which is **gitignored** — they exist in this working
-copy, not in a fresh clone. `docs/spec.md` is the only tracked document under `docs/`.
-
-**All design decisions for sub-projects 2 and 3 are already settled** — chunking, extraction context,
-resumability, identity model, approval posture, models, and definition of done — and are recorded with their
-reasoning in the decisions document above. Read it before writing spec 2 or 3; do not re-derive them. Technical
-constraints found while fact-checking Foundation (PdfLoader's `fs`/path contract, missing
-`langchain-text-splitters`, `LongRunningFunctionTool`'s falsy-return behaviour, APOC Core-only on Aura) live in
-the Foundation spec's *Follow-on work* section.
-
-Target dataset for 2 and 3 is SEC 10-K filings plus `Company_Filings.csv` / `Asset_Manager_Holdings.csv`.
-**Those files are not in this repo and must be sourced.** The bundled furniture example must keep working throughout.
-
-**Write specs 2 and 3 against the post-Foundation codebase** — which now also includes graphrag grounding
-(below), merged after Foundation and before either spec was written.
-
-### Interleaved and already shipped: graphrag grounding
-
-Between Foundation and sub-projects 2/3, a separate effort — grounding `graphrag_agent` in the graph instead
-of conversational recall — was designed, implemented, and merged as `0.3.0` (2026-08-02, PR #4). It is **not**
-part of the 3-sub-project plan above; it jumped the queue. See Architecture's *`graphrag_agent_v2`* subsection
-for what shipped, and [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s `0.3.0`
-entry for the design record — the underlying spec/plan are gitignored local notes, not something a fresh
-clone has. Sub-projects 2 and 3 remain the actual next work and are still unstarted.
-
-Much else has been interleaved since — handoff gates, Neo4j connection self-heal, schema/construction-plan
-hardening, a CI/quality wave, dependency movement — none of it touching sub-projects 2/3. `main` is at PR #60,
-released through `0.6.0` (2026-08-17) and `0.6.1` (2026-09-18). **`CHANGELOG.md` is the entry-by-entry record;
-the *Architecture* sections below carry the reasoning behind whatever is still load-bearing.** Two pointers
-worth having up front: `docs/spec.md` is the living "what is this and why" document (read it alongside this
-file, not instead of it), and reachability is now judged by the values a node actually carries rather than by
-which file built it (#52, 2026-09-19) — the change the current work builds on.
+**Invariant:** the bundled furniture example (`data/bom`) must keep working — but it is one dataset, not the
+scope. Designs and fixes must hold for source files the program has never seen.
 
 ## Commands
 
@@ -106,16 +70,23 @@ uv run pyright        # must report 0 errors
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
 - Ruff config is `pyproject.toml`'s `[tool.ruff]`; pyright's is `[tool.pyright]` (`basic` mode, `src` only).
   Drop `--check` from `ruff format` to fix locally.
-- Two remotes are configured: `origin` (`volkovyy-00/agentic-kg`) and `upstream`
-  (`neo4j-contrib/agentic-kg`, the repo this was forked from). No `gh` default repo is set
-  (`gh repo set-default --view` reports none), so an unqualified `gh` command can resolve against
-  either — always pass `--repo volkovyy-00/agentic-kg` explicitly to keep it targeting this fork.
+- This repo is a GitHub fork of `neo4j-contrib/agentic-kg`; a clone may also carry an `upstream` remote
+  pointing there. Unless `gh repo set-default volkovyy-00/agentic-kg` has been run in the clone (check:
+  `gh repo set-default --view`), `gh` resolves commands against the parent — pass `--repo volkovyy-00/agentic-kg`.
 - Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
   nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
   has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with
   `SOURCE_URI=./data/bom` (ask the running agent "Where are my files?" to confirm what it resolved to).
 
 ## Architecture
+
+### Layout
+
+- `src/agentic_kg/` — `coordinators/{single_agent,multi_agent/sub_agents}` (what `adk web` loads) · `agents/`
+  (standalone `cypher_agent`, `user_intent_agent`) · `tools/` (ADK tool functions) · `common/` (Neo4j, LLM, file
+  sources, ADK callbacks) · `domain/` (typed shapes)
+- `tests/unit`, `tests/integration` (`integration` marker, Testcontainers) · `data/bom` (bundled example)
+- `prototype/` — notebooks and notes, not part of the package
 
 ### Two coordinators, one shared tool/agent library
 
@@ -146,29 +117,25 @@ used by either coordinator, but is still imported by `src/agentic_kg/agent.py` �
 left over from the original course backport, not reachable via the documented `adk web` command and not part of
 either coordinator) vs. `src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired
 into the full workflow, with richer instructions/tools). They are not interchangeable — check which coordinator
-you're editing before reusing code between them. `agents/file_suggestion_agent/` used to be a third standalone
-implementation here; Foundation deleted it (see the *variants* section below).
+you're editing before reusing code between them.
 
 ### The `variants` pattern
 
 Every agent's prompt/tool wiring lives in a sibling `variants.py`, not in `agent.py`. Each `variants.py` defines a
-`variants` dict keyed by version-suffixed agent names (e.g. `file_suggestion_agent_v1/_v2/_v3`), each holding an
+`variants` dict keyed by version-suffixed agent names (e.g. `graphrag_agent_v1/_v2`), each holding an
 `instruction` string and a `tools` list — these are successive course-chapter iterations of the same agent, growing
 more capable (more tools, more validation) at each version. `agent.py` just picks one:
 
 ```python
-AGENT_NAME = "file_suggestion_agent_v3"
+AGENT_NAME = "graphrag_agent_v2"
 Agent(name=AGENT_NAME, instruction=variants[AGENT_NAME]["instruction"], tools=variants[AGENT_NAME]["tools"], ...)
 ```
 
-When adding a new capability to an agent, prefer adding a new numbered variant (or editing the currently-selected
-one) over restructuring this dict shape — it mirrors the course's progressive-exercise structure. Some
+When adding a capability to an agent, edit the currently-selected variant; add a new numbered one only when an
+A/B comparison is wanted (as with `graphrag_agent`). Keep the dict shape. Some
 `variants.py` files reference tools/names that aren't imported into that file (leftover from course scaffolding) —
 if you hit a `NameError` there, check whether the referenced symbol exists elsewhere in `tools/` and add the import
-rather than assuming the whole file is broken. That advice does not apply to the standalone
-`agents/file_suggestion_agent/`: it was unreachable and referenced eight undefined names, and Foundation removed the
-directory outright rather than patching it — if you're looking for it, only the `multi_agent` implementation at
-`coordinators/multi_agent/sub_agents/file_suggestion_agent/` exists now.
+rather than assuming the whole file is broken.
 
 ### State passing: ADK session state, not return values
 
@@ -182,112 +149,90 @@ actually enforced. When tracing a bug across agents, look at which state keys a 
 control flow is the issue.
 
 `schema_proposal_agent`'s `schema_refinement_calls_this_turn` state key caps `schema_refinement_loop` to one
-invocation per user turn (deliberate, not an unexplained restriction): `reset_schema_refinement_turn_budget`
-(coordinator `before_agent_callback`) zeroes it once per turn, `prepare_refinement_loop_invocation` (`refinement_loop`
+invocation per user turn (deliberate): `reset_schema_refinement_turn_budget` (coordinator
+`before_agent_callback`) zeroes it, `prepare_refinement_loop_invocation` (`refinement_loop`
 `before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
 
-The current variant's plan-reading tool is `get_proposed_construction_plan_with_approval_check`
-(`tools/construction_plan_tools.py`, PR #20, `0.5.1`, 2026-08-14) — not the plain `get_proposed_construction_plan`,
-which still exists only because the older `v1`/`v2` variants in `variants.py` still call it (the `variants` pattern
-above). It runs the same checks `approve_proposed_construction_plan` runs — `check_construction_plan_consistency`
-and, since PR #21 (`0.5.2`), `check_reference_columns_are_reachable` — through a shared `_read_plan_for_approval`
-helper, so what the coordinator presents as approvable can never drift
-from what approval will then actually do — the bug this fixed was the coordinator judging a plan ready from its
-own reading of the critic's verdict, then `approve_proposed_construction_plan` refusing it anyway. Its error
-branch still returns the plan alongside the specific problems, so the coordinator has something to show even when
-approval isn't possible; its success branch is explicit that it only checked joins, endpoint labels, typed
-columns, and whether every approved file's reference columns can still be reached, not whether it's the *right*
-plan — accepting remaining critic objections stays the user's call. Reachability reads the approved sources and
-fails open: a file it cannot read yields a `not_verified` note, never a refusal.
+**Plan checks: one rule set, two enforcement points.** `check_construction_plan_consistency` (joins, endpoint
+labels, typed columns) and `check_reference_columns_are_reachable` (every approved file's reference columns can
+still be reached) run:
 
-Since KG-14 (PR #60) both of those checks — `check_construction_plan_consistency` and
-`check_reference_columns_are_reachable` — also run **inside** `schema_refinement_loop`, in its `StopChecker`,
-through the shared `find_plan_problems(state)`. A plan carrying either kind of problem is sent back for another
-iteration (the stop-check writes a `retry` composite to `feedback` via `state_delta`, never by mutating state —
-`AgentTool` forwards only the delta out of the loop's child session) instead of waiting for approval to refuse it
-a turn later. **Only while an iteration remains:** the loop runs at most two, so a problem the *second* round's
-revision introduces still surfaces at approval time and still costs a turn. Approval-time enforcement is
-unchanged and is still the thing that guarantees correctness: the loop's copy is fail-open behind one guard,
-while approval keeps propagating a crashed check so it fails closed. A *critic-side tool* was rejected rather
-than merely not chosen — a tool the critic may call depends on the model choosing to call it, and this check is
-mechanical precisely because the prose rule that used to answer the same question resolved the same file two
-different ways on two runs; a fact-only tool would put the guarantee back on untestable critic behaviour, and PR
-#20's rule keeps approval framing out of the critic's context anyway.
+- **At approval** — in `approve_proposed_construction_plan`, and in the read tool the current variant uses,
+  `get_proposed_construction_plan_with_approval_check` (`tools/construction_plan_tools.py`), through a shared
+  `_read_plan_for_approval`, so what the coordinator presents as approvable can't drift from what approval will
+  do. The plain `get_proposed_construction_plan` survives only because the older `v1`/`v2` variants still call
+  it. The read tool's error branch still returns the plan alongside the problems; its success branch says only
+  that those checks passed, not that it's the *right* plan — accepting remaining critic objections is the
+  user's call.
+- **Inside `schema_refinement_loop`** — its `StopChecker` runs both through `find_plan_problems(state)`, and a
+  plan with either problem goes back for another iteration. The stop-check writes a `retry` composite to
+  `feedback` via `state_delta`, never by mutating state (`AgentTool` forwards only the delta out of the loop's
+  child session). The loop runs at most two iterations, so a problem the second revision introduces still
+  surfaces at approval.
+
+Approval is the guarantee: the loop's copy is fail-open behind one guard, approval propagates a crashed check so
+it fails closed, and reachability itself fails open on an unreadable file (a `not_verified` note, never a
+refusal). Do not move the check into a critic-side tool: it would depend on the model choosing to call it, and
+the check is mechanical precisely because the prose rule it replaced resolved the same file two different ways
+on two runs. Approval framing also stays out of the critic's context. Reachability asks whether some node carries every value an
+identifying file holds, whichever file built that node (#52, KG-13) — never whether the node was built from that
+file.
 
 ### Handoff confirmation gates
 
-Three phase exits are gated. Two of them reuse the same state-gate shape as `schema_refinement_loop`'s turn
-cap above, gating a `finished` transfer behind an explicit tool call instead of the model's own reading of
-the conversation. **The third gates on durable state instead and is deliberately not the same shape** — read
-its entry below before assuming a fourth gate should copy either pattern:
+Three phase exits are gated so a `finished` transfer needs more than the model's own reading of the
+conversation. Two use a per-turn flag; the third deliberately does not — read its entry before assuming a fourth
+gate should copy either shape.
 
-- **Construction → retrieval** (PR #8): `graph_construction_agent`'s `finished` wrapper refuses to transfer
-  until `HANDOFF_CONFIRMED_KEY` (`tools/construction_handoff_tools.py`) is set by an explicit
-  `confirm_construction_handoff` tool call — never inferred from tone. `reset_construction_handoff_confirmation`
-  (a `before_agent_callback`) clears the flag every turn. On confirmation, transfer goes directly to
-  `graphrag_agent_v2`, not back through the coordinator — the numbered sequence above simplifies this one step.
-- **Retrieval → coordinator** (PR #9): the same shape on `graphrag_agent_v2`, so it stays in the retrieval
-  phase across multiple questions instead of ejecting the user after a single answer.
-  `GRAPHRAG_HANDOFF_CONFIRMED_KEY` (`tools/graphrag_handoff_tools.py`) is set by `confirm_graphrag_handoff`;
-  `finished` refuses to transfer without it; `reset_graphrag_handoff_confirmation` clears it every turn.
-  Deliberately not factored into a shared helper with the construction gate. The two `finished` bodies are
-  now identical modulo the state key, the tool name inside the refusal string, and the `make_finished`
-  argument — the transfer-topology difference (sideways to a live-imported sibling vs. up to a plain
-  constant) lives entirely inside that argument. What justifies the duplication is that each `finished`'s
-  **docstring is the model-visible tool description** (ADK reads `__doc__` when building the declaration), and
-  the two legitimately say different things: one hands the user to the retrieval agent, the other ends
-  retrieval and hands them back to the coordinator. A shared factory would have to synthesise that text.
-  `graphrag_agent_v1` has no gate and keeps its original single-answer-then-eject behavior, for the
-  A/B comparison described below.
-- **Intent → coordinator** (PR #12): `user_intent_agent_v2`'s `finished` refuses until the user's goal has
-  been approved *and* that approval is still current — `approved_user_goal` present **and equal to**
-  `perceived_user_goal`, both already written by `tools/user_goal_tools.py`. **No new state key, no new
-  tool, no reset callback, and no `before_agent_callback` at all.** That is the difference from the two
-  gates above, and it is load-bearing: they gate on something the user *said* ("yes, I'm done here"), which
-  is turn-scoped and must not go stale, so they need a per-turn flag and a reset. This phase gates on
-  something the user *did* — an approval already recorded durably by an existing tool — so a flag would
-  duplicate a fact `approved_user_goal` already carries and would need a reset to stay honest. **This is
-  therefore not copy #3 of the flag/reset/confirm-tool shape, and does not fire the extraction trigger the
-  retrieval-gate spec named.** Do not "notice the duplication" and factor the three together.
-  Equality rather than presence, because a goal approved and then revised leaves an approved key that no
-  longer describes what the user asked for; refusing on that is the same defect one route over.
-  `finished` branches three ways in code — nothing recorded / never approved / stale since approval — the
-  first gate here to do so; the construction gate's single `if` with one two-situation string is the
-  precedent for wording style, not structure. The branch messages are read by the model, not the user, and
-  each names the tool to call next; that is the entire recovery path, since there is no escape hatch.
-  The shared module-level `finished` object had to be split first: `_transfer_to_coordinator` (ungated,
-  `user_intent_agent_v1`'s, and its `__name__` must stay `"finished"` since ADK derives the tool name from
-  it) versus the gated `finished` (v2's). Gating in place would have left v1 — which uses `set_user_goal`
-  and never writes `approved_user_goal` — unable to exit at all, invisibly until someone flipped
-  `AGENT_NAME`.
+- **Construction → retrieval**: `graph_construction_agent`'s `finished` refuses until `HANDOFF_CONFIRMED_KEY`
+  (`tools/construction_handoff_tools.py`) is set by an explicit `confirm_construction_handoff` call — never
+  inferred from tone. `reset_construction_handoff_confirmation` (`before_agent_callback`) clears it every turn.
+  On confirmation, transfer goes directly to `graphrag_agent_v2`, not back through the coordinator (the numbered
+  sequence above simplifies this step).
+- **Retrieval → coordinator**: the same shape on `graphrag_agent_v2` (`GRAPHRAG_HANDOFF_CONFIRMED_KEY`,
+  `confirm_graphrag_handoff`, `reset_graphrag_handoff_confirmation` in `tools/graphrag_handoff_tools.py`), so it
+  stays in retrieval across several questions. Deliberately not factored into a helper shared with the
+  construction gate: each `finished`'s **docstring is the model-visible tool description** (ADK reads
+  `__doc__`), and the two legitimately say different things (hand the user to retrieval vs. hand them back), which
+  a shared factory would have to synthesise. `graphrag_agent_v1` has no gate and keeps its single-answer-then-eject
+  behavior, for the A/B comparison below.
+- **Intent → coordinator**: `user_intent_agent_v2`'s `finished` refuses until `approved_user_goal` is present
+  **and equal to** `perceived_user_goal` (both written by `tools/user_goal_tools.py`). No new state key, tool,
+  reset callback, or `before_agent_callback` — that is the point. The other gates guard something the user *said*
+  (turn-scoped, goes stale, needs a flag and a reset); this one guards something the user *did*, already recorded
+  durably. It is **not copy #3** of the flag/reset/confirm shape — do not factor the three together. Equality
+  rather than presence, because a goal approved and then revised leaves an approved key that no longer describes
+  what was asked. `finished` branches three ways (nothing recorded / never approved / stale since approval); the
+  messages are read by the model, not the user, and each names the next tool to call — there is no escape hatch.
+  The shared `finished` was split for this: `_transfer_to_coordinator` (ungated, `user_intent_agent_v1`'s; its
+  `__name__` must stay `"finished"` since ADK derives the tool name from it) vs. the gated `finished` (v2's). v1
+  uses `set_user_goal` and never writes `approved_user_goal`, so gating in place would leave it unable to exit.
 
-Both flag-based gates above guard only `finished`. ADK separately injects a `transfer_to_agent` tool (plus an
-advertising instruction block) into every sub-agent with a parent or peers, and that tool never consulted
-either gate — before PR #11 the model could leave a phase through it with the confirmation flag still
-unset, the exact defect the gates exist to prevent. The two agents gated at the time (`graph_construction_agent`
-and `graphrag_agent_v2` only, never `_v1`) started running `strip_transfer_to_agent` (`common/adk_transfer.py`) as a
-`before_model_callback`, stripping the tool from `tools_dict`, `config.tools`, and the system instruction
-before the model sees the request. `disallow_transfer_to_parent` was deliberately avoided instead, since it
-also kills phase stickiness (`Runner._find_agent_to_run` would re-arbitrate every new message through the
-coordinator). Instruction-block removal is bounded by two marker phrases matched forward from the block's
-start; if a future `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning
-rather than failing loudly — check logs after any ADK bump. `graph_construction_agent` also gained
-`drop_foreign_context` in this change, closing the same context-leak hole the *Grounding* section below
-documents for `graphrag_agent_v2`.
+One more gate guards a tool rather than an exit, and it **is** copy #3 of the flag/reset/confirm shape:
+`graphrag_agent_v2`'s gated read tool (`make_gated_read_neo4j_cypher` in its `variants.py`) refuses an
+aggregating query over a numeric `partitioned_by` property until `declare_partition_interpretation`
+(`tools/graphrag_partition_tools.py`) has set `PARTITION_INTERPRETATION_DECLARED_KEY` this turn;
+`reset_partition_interpretation_declaration` clears it. It exists because the prose instruction to state the
+sum-vs-split reading faded within a session (KG-5). It is deliberately not shared with the handoff gates — its
+own docstring defers extracting a helper until a fourth instance is needed, not before.
 
-`user_intent_agent_v2` carries both callbacks too (PR #12), for the same reason and as a pair:
-`before_model_callback=[drop_foreign_context, strip_transfer_to_agent]`. **The two belong together
-wherever the strip is used.** The strip removes the transfer *declaration*; every stripped agent is
-entered *by* someone else's `transfer_to_agent` call, which ADK rewrites into a `"For context:
-[kg_construction_agent_v1] called tool transfer_to_agent…"` turn that then sits in that agent's history —
-a worked *example* of the exact call and argument shape. Removing the declaration and leaving the example
-is half a fix: the model copies it, the strip has already popped it from `tools_dict`, and ADK raises
-`ValueError` mid-turn. That failure is not the "loud" one the refusal messages are — it is a dead turn
-with no response and no spinner, i.e. the swallowed-exception mode the *Two coordinators* section above
-tells you to debug from the `adk web` stdout. `user_intent_agent`'s exposure is the largest of the three,
-since the interview is the stickiest phase and the example sits in context on every turn of it. Only
-`drop_foreign_context` on the coordinator itself is absent by design — its transfer tool is never
-stripped, since that is how the workflow advances at all.
+**The `transfer_to_agent` bypass.** ADK injects a `transfer_to_agent` tool (plus an advertising instruction
+block) into every sub-agent with a parent or peers, and it never consulted the gates. `graph_construction_agent`,
+`graphrag_agent_v2` and `user_intent_agent_v2` (never `_v1`) therefore run `strip_transfer_to_agent`
+(`common/adk_transfer.py`) as a `before_model_callback`, removing the tool from `tools_dict`, `config.tools` and
+the system instruction. `disallow_transfer_to_parent` was avoided because it also kills phase stickiness
+(`Runner._find_agent_to_run` would re-arbitrate every message through the coordinator). Instruction-block removal
+matches two marker phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a
+warning rather than failing — check logs after any ADK bump.
+
+**Always pair the strip with `drop_foreign_context`**: `before_model_callback=[drop_foreign_context,
+strip_transfer_to_agent]`. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
+rewrites into a `"For context: [kg_construction_agent_v1] called tool transfer_to_agent…"` turn — a worked
+example of the call the model then copies, after the strip already removed the tool from `tools_dict`. ADK then
+raises `ValueError` mid-turn: a dead turn with no response and no spinner (the swallowed-exception mode; debug
+from the `adk web` stdout, per the *Two coordinators* section). `user_intent_agent` is the most exposed, since the
+interview is the stickiest phase. Only the coordinator lacks `drop_foreign_context`, by design: its transfer tool
+is never stripped, since that is how the workflow advances.
 
 ### Tool results
 
@@ -335,7 +280,7 @@ wrote, so a re-run against a non-empty graph will include prior data too.
 
 ### Grounding: `graphrag_agent_v2`
 
-`graphrag_agent_v2` (shipped as `0.3.0`, PR #4) answers only from graph queries made in the current turn, not
+`graphrag_agent_v2` answers only from graph queries made in the current turn, not
 from conversational recall. Three pieces make that possible:
 
 - `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
@@ -352,8 +297,7 @@ from conversational recall. Three pieces make that possible:
   `_physical_schema(include_data_profile: bool)`.
 
 `graphrag_agent_v1` is kept unchanged alongside v2 for an A/B comparison; `agent.py` selects v2 via
-`AGENT_NAME`. Design record: [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s
-`0.3.0` entry — the underlying spec/plan are gitignored local notes, not present in a fresh clone.
+`AGENT_NAME`.
 
 ### LLM selection
 
@@ -364,13 +308,10 @@ in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
 
-Current models: reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash-0731` (DeepSeek's
-official V4-Flash release, 2026-07-31, superseding the preview build previously pinned here). The reasoning
-slot moved off `openai/gpt-5` (2026-07-31) because its workload — `schema_proposal_agent`'s propose/critique/refine
-trio and `graph_construction_agent` — is many small tool-orchestration steps at `reasoning_effort="low"`, which is
-exactly Luna's target profile, at ~1/16th the output cost. LiteLLM has no `openrouter/openai/gpt-5.6-luna` entry in
-`model_cost`, so its own cost estimate is 0 for this model; OpenRouter returns real `cost` / `cost_details` on the
-response instead, which is what to read if you add cost tracking.
+The code default and `.env.example` are `openai/gpt-4o` / `openai/gpt-4o-mini`; the models actually used live
+only in each developer's untracked `.env`. LiteLLM's `model_cost` lacks some OpenRouter-only models and then
+estimates their cost as 0 — OpenRouter returns the real `cost` / `cost_details` on the response, which is what to
+read if you add cost tracking.
 
 `get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
 (e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
@@ -387,5 +328,5 @@ that pattern for new domain types.
 
 ## Differences from the deeplearning.ai course
 
-- Many agents use a `finished` tool (`tools/adk_tools.py`) to explicitly signal completion and transfer control back
+- Many agents use a `finished` tool (built by `make_finished` in `tools/adk_tools.py`) to explicitly signal completion and transfer control back
   to the parent agent, rather than relying on implicit turn-ending.
