@@ -895,6 +895,174 @@ def test_an_unknown_type_name_is_refused():
     assert any("decimal" in problem for problem in problems)
 
 
+UNREADABLE_PROPERTIES = [
+    5,
+    0,
+    "part_name",
+    "",
+    {"part_name": 1},
+    {},
+    True,
+    [1, "part_name"],
+    [{"a": 1}, "b"],
+    [["part_name"]],
+    [None],
+]
+
+# Warehouse is referenced by nothing, so its properties are read only by the
+# property-type block; Part is joined on; SUPPLIED_BY is a relationship.
+UNREADABLE_CONSTRUCTIONS = ["Part", "Warehouse", "SUPPLIED_BY"]
+
+
+def _plan_with_warehouse():
+    return _typed_plan(
+        Warehouse={
+            "construction_type": "node",
+            "source_file": "warehouses.csv",
+            "label": "Warehouse",
+            "unique_column_name": "warehouse_id",
+            "properties": ["city"],
+            "property_types": {},
+        }
+    )
+
+
+@pytest.mark.parametrize("declares_types", [False, True])
+@pytest.mark.parametrize("key", UNREADABLE_CONSTRUCTIONS)
+@pytest.mark.parametrize("properties", UNREADABLE_PROPERTIES, ids=repr)
+def test_an_unreadable_properties_value_is_reported_once_and_nothing_else(
+    properties, key, declares_types
+):
+    """A value that is not a list of text is neither iterated (a string would
+    give its characters, a dict its keys, a falsy value an empty list) nor
+    allowed to crash the check -- which, at approval, fails closed with no
+    explanation. The join on Part and the type declared on 'part_name' (a
+    substring-match hit against the text 'part_name') are not judged."""
+    plan = _plan_with_warehouse()
+    plan[key]["properties"] = properties
+    plan[key]["property_types"] = {"part_name": "integer"} if declares_types else {}
+    if key == "Part":
+        # A join on a column only the misread value could vouch for.
+        plan["SUPPLIED_BY"]["from_node_column"] = "part_name"
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 1
+    assert problems[0].startswith(f"{key}: ")
+    assert "properties" in problems[0]
+
+
+@pytest.mark.parametrize("properties", UNREADABLE_PROPERTIES, ids=repr)
+def test_an_unreadable_node_does_not_hide_a_problem_at_the_other_endpoint(
+    properties,
+):
+    plan = _typed_plan()
+    plan["Part"]["properties"] = properties
+    plan["SUPPLIED_BY"]["from_node_column"] = "part_name"
+    plan["SUPPLIED_BY"]["to_node_column"] = "supplier_name"
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 2
+    assert problems[0].startswith("Part: ")
+    assert "'supplier_name'" in problems[1]
+    assert "'Supplier'" in problems[1]
+
+
+@pytest.mark.parametrize("key", UNREADABLE_CONSTRUCTIONS)
+def test_an_unreadable_properties_value_does_not_hide_problems_elsewhere(key):
+    plan = _plan_with_warehouse()
+    plan[key]["properties"] = 5
+    plan["Supplier"]["property_types"] = {"rating": "float"}
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 2
+    assert any(p.startswith(f"{key}: ") for p in problems)
+    assert any(p.startswith("Supplier: ") and "'rating'" in p for p in problems)
+
+
+@pytest.mark.parametrize("key", UNREADABLE_CONSTRUCTIONS)
+@pytest.mark.parametrize("absent", ["missing", "null"])
+def test_a_missing_or_null_properties_value_declares_none(key, absent):
+    """Not unreadable: judged exactly as an empty list always has been."""
+    plan = _plan_with_warehouse()
+    if absent == "missing":
+        del plan[key]["properties"]
+    else:
+        plan[key]["properties"] = None
+    plan[key]["property_types"] = {}
+
+    assert check_construction_plan_consistency(plan) == []
+
+    plan[key]["property_types"] = {"part_name": "integer"}
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1
+    assert "not in the properties list []" in problems[0]
+
+
+def test_an_unreadable_relationship_still_has_its_endpoints_and_joins_checked():
+    """A relationship's own 'properties' is read only by the type block. Its
+    endpoint labels and join columns are judged against the nodes it references,
+    so hiding them would cost an extra approve/refine round trip per problem."""
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["properties"] = 5
+    plan["SUPPLIED_BY"]["from_node_label"] = "Prt"
+    plan["SUPPLIED_BY"]["to_node_column"] = "nope"
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 3
+    assert problems[0].startswith("SUPPLIED_BY: 'properties'")
+    assert any("'Prt' has no node construction" in p for p in problems)
+    assert any("'nope'" in p and "zero rows" in p for p in problems)
+
+
+def test_an_unreadable_relationship_still_makes_a_typed_join_refusable():
+    """The join is a fact about the referenced node's typed column, whatever the
+    relationship's own 'properties' say."""
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["properties"] = 5
+    plan["SUPPLIED_BY"]["from_node_column"] = "unit_cost"
+
+    problems = check_construction_plan_consistency(plan)
+
+    assert len(problems) == 2
+    assert problems[0].startswith("SUPPLIED_BY: 'properties'")
+    assert problems[1].startswith("Part: ")
+    assert "'unit_cost'" in problems[1]
+    assert "joins on it" in problems[1]
+
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days"]
+    assert len(check_construction_plan_consistency(plan)) == 1
+
+
+def test_the_unreadable_message_names_only_what_it_withholds():
+    node_plan = _typed_plan()
+    node_plan["Supplier"]["properties"] = 5
+    [node_problem] = check_construction_plan_consistency(node_plan)
+    assert "Joins onto it and its declared types are not checked" in node_problem
+
+    relationship_plan = _typed_plan()
+    relationship_plan["SUPPLIED_BY"]["properties"] = 5
+    [relationship_problem] = check_construction_plan_consistency(relationship_plan)
+    assert "Its declared types are not checked" in relationship_problem
+    assert "Joins" not in relationship_problem
+
+
+def test_the_offending_value_is_echoed_but_bounded():
+    plan = _typed_plan()
+    plan["Part"]["properties"] = 5
+    [short_problem] = check_construction_plan_consistency(plan)
+    assert "got 5." in short_problem
+
+    plan["Part"]["properties"] = {f"column_{i}": i for i in range(2000)}
+    [long_problem] = check_construction_plan_consistency(plan)
+    assert len(long_problem) < 600
+    assert "column_0" in long_problem
+    assert "characters)" in long_problem
+
+
 def test_approval_refuses_a_plan_with_an_illegal_type(ctx):
     """The rules are only worth anything if approval enforces them."""
     plan = _typed_plan()
@@ -1217,6 +1385,69 @@ def test_find_plan_problems_orders_structural_problems_first(stranding_state):
     assert structural, "expected the missing-endpoint-label problem"
     assert reachability, "expected the stranded-column problem"
     assert problems.index(structural[-1]) < problems.index(reachability[0])
+
+
+@pytest.fixture
+def supplier_state(monkeypatch):
+    """supplier_id identifies rows in suppliers.csv and is referenced by
+    orders.csv; the Supplier node is keyed by supplier_name, so only a declared
+    'supplier_id' property lets the reference be reached."""
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    with fs.open("/src/suppliers.csv", "w") as handle:
+        handle.write("supplier_id,supplier_name\nS-1,Acme\nS-2,Bolt\n")
+    with fs.open("/src/orders.csv", "w") as handle:
+        handle.write("order_id,supplier_id\nO-1,S-1\nO-2,S-2\n")
+    monkeypatch.setenv("SOURCE_URI", "memory://src")
+    reset_settings()
+    yield FakeToolContext(
+        {
+            PROPOSED_CONSTRUCTION_PLAN: {
+                "Supplier": {
+                    "construction_type": "node",
+                    "source_file": "suppliers.csv",
+                    "label": "Supplier",
+                    "unique_column_name": "supplier_name",
+                    "properties": ["supplier_id"],
+                }
+            },
+            APPROVED_FILES: ["suppliers.csv", "orders.csv"],
+        }
+    )
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+
+
+def test_a_readable_declaration_of_the_reference_column_is_accepted(supplier_state):
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    assert find_plan_problems(supplier_state.state) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "properties", ["supplier_id", 5, {"supplier_id": 1}, ["supplier_id", 7]], ids=repr
+)
+def test_an_unreadable_properties_value_is_not_refused_a_second_time_by_reachability(
+    supplier_state, properties
+):
+    """The approval path and the refinement loop's stop-check both run
+    find_plan_problems. The construction check reports the unreadable value
+    once; reachability must not then read it as 'declares nothing' and tell the
+    agent to fix a column that is fine. It withholds its verdict instead."""
+    from agentic_kg.tools.construction_plan_tools import find_plan_problems
+
+    supplier_state.state[PROPOSED_CONSTRUCTION_PLAN]["Supplier"]["properties"] = (
+        properties
+    )
+
+    problems, unverified = find_plan_problems(supplier_state.state)
+
+    assert len(problems) == 1
+    assert problems[0].startswith("Supplier: 'properties'")
+    assert any(
+        "'supplier_id'" in note and "could not be read" in note for note in unverified
+    )
 
 
 def test_find_plan_problems_has_no_guard_of_its_own(monkeypatch, stranding_state):

@@ -10,7 +10,10 @@ from agentic_kg.common.value_types import ALLOWED_TYPES
 graphdb = get_graphdb()
 
 from .file_tools import APPROVED_FILES, search_file
-from .reference_reachability import check_reference_columns_are_reachable
+from .reference_reachability import (
+    check_reference_columns_are_reachable,
+    declared_properties,
+)
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
@@ -353,6 +356,20 @@ def remove_relationship_construction(
     return tool_success("relationship_construction_removed", relationship_type)
 
 
+# The problem text is shown to the user and fed back to the agent, so an echoed
+# value is capped: a large map as 'properties' would otherwise become one
+# problem string of tens of kilobytes.
+MAX_ECHOED_VALUE_LENGTH = 200
+
+
+def _bounded_repr(value: Any) -> str:
+    """repr(value), cut to MAX_ECHOED_VALUE_LENGTH characters."""
+    text = repr(value)
+    if len(text) <= MAX_ECHOED_VALUE_LENGTH:
+        return text
+    return f"{text[:MAX_ECHOED_VALUE_LENGTH]}... ({len(text)} characters)"
+
+
 def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     """Find internal inconsistencies between relationship joins and node constructions.
 
@@ -383,6 +400,30 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     }
     problems = []
 
+    # A properties value that is not a list of text cannot be read as one: a
+    # string would contribute its characters, a dict its keys, a falsy value
+    # nothing at all, and anything unhashable or unordered would crash the
+    # checks below. Report it once and give no verdict that reads the value --
+    # a node's joins and declared types, a relationship's declared types -- until
+    # it is fixed, since any verdict would be about the misreading, not the plan.
+    # Missing or null declares no properties.
+    unreadable = set()
+    for key, rule in construction_plan.items():
+        if not isinstance(rule, dict) or declared_properties(rule) is not None:
+            continue
+        unreadable.add(key)
+        skipped = (
+            "Joins onto it and its declared types"
+            if rule.get("construction_type") == "node"
+            else "Its declared types"
+        )
+        problems.append(
+            f"{key}: 'properties' must be a list of property names, got "
+            f"{_bounded_repr(rule.get('properties'))}. Supply a list of column "
+            f"names (or an empty list). {skipped} are not checked until this is "
+            f"fixed."
+        )
+
     # Every column a relationship joins on, so a property can be checked against
     # the whole plan rather than only its own construction. This is what makes a
     # type retroactively invalid when a later relationship joins on it.
@@ -405,6 +446,8 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             problems.append(
                 f"{rel_key}: {side} node label '{label}' has no node construction in the plan."
             )
+            return
+        if label in unreadable:
             return
         unique_column = node_rule.get("unique_column_name")
         known_columns = {unique_column, *(node_rule.get("properties") or [])}
@@ -431,7 +474,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     # Declared property types. Three rules, all refusing at approval time rather
     # than failing much later at import time.
     for key, rule in construction_plan.items():
-        if not isinstance(rule, dict):
+        if not isinstance(rule, dict) or key in unreadable:
             continue
         property_types = rule.get("property_types") or {}
         if not isinstance(property_types, dict):

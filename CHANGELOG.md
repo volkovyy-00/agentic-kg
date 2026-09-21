@@ -57,6 +57,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   each node keeps one value and no two nodes share one; previously only the identifying file's own node
   counted. When a node holds only some of the values, the refusal says how many it is missing and gives
   examples, and every refusal names a new node's label as needing to be its own.
+- **An unreadable `properties` value is reported, not crashed on or misread (#63)**: when a node or
+  relationship in a construction plan declares `properties` as anything but a list of text — a number,
+  a piece of text, a map, or a list holding a non-text entry — the plan check now reports that once,
+  naming the construction, and gives no verdict that would read the value until it is fixed: a node's
+  joins and declared types, a relationship's declared types. Previously such a value
+  either crashed the check, so approval failed with no explanation, or was misread: text was matched
+  by its characters, so a correct join was refused as matching zero rows and a declared type was
+  accepted on a substring, and a map's keys were taken as property names, so a meaningless plan was
+  approved. Problems elsewhere in the plan are still reported alongside it, including a relationship's
+  own endpoints and joins, which its `properties` cannot affect. The reference-column reachability
+  check that approval and the refinement loop also run no longer reads such a value as "declares
+  nothing" either: instead of refusing a column the node may well retain, it withholds the verdict
+  as a "not verified" note. The value is quoted in the report up to 200 characters. A missing or
+  null `properties` still declares none.
 
 ## [0.6.1] - 2026-09-18
 
