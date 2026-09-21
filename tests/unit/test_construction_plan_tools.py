@@ -1152,6 +1152,57 @@ def test_approval_refuses_a_plan_that_strands_a_reference_column(stranding_state
     assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
 
 
+def _existence_check_fails(monkeypatch):
+    """Patched by dotted path: this module does not import file_tools."""
+
+    def failing(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("agentic_kg.tools.file_tools.source_exists", failing)
+
+
+def _has_existence_failure_note(notes):
+    return any("plot_id" in note and "Error reading CSV file" in note for note in notes)
+
+
+def test_approval_still_approves_when_an_existence_check_fails(
+    stranding_state, monkeypatch
+):
+    """KG-26, AC2. The stranding plan is refused when its files can be read; when
+    the existence check fails it cannot be shown to strand anything, so approval
+    goes ahead with the column listed as not verified. Before the fix the
+    PermissionError escaped find_plan_problems (which deliberately does not
+    catch) and approval raised."""
+    _existence_check_fails(monkeypatch)
+
+    result = approve_proposed_construction_plan(stranding_state)
+
+    assert result["status"] == "success"
+    assert (
+        stranding_state.state[APPROVED_CONSTRUCTION_PLAN]
+        == stranding_state.state[PROPOSED_CONSTRUCTION_PLAN]
+    )
+    assert _has_existence_failure_note(result["result"]["not_verified"])
+
+
+def test_presentation_still_shows_the_plan_when_an_existence_check_fails(
+    stranding_state, monkeypatch
+):
+    """KG-26, AC2. Presentation is the coordinator's only plan-reading tool; a raise
+    here leaves it nothing to show."""
+    _existence_check_fails(monkeypatch)
+
+    result = get_proposed_construction_plan_with_approval_check(stranding_state)
+
+    assert result["status"] == "success"
+    payload = result["result"]
+    assert (
+        payload["proposed_construction_plan"]
+        == stranding_state.state[PROPOSED_CONSTRUCTION_PLAN]
+    )
+    assert _has_existence_failure_note(payload["not_verified"])
+
+
 def test_unverified_notes_surface_on_the_success_path(monkeypatch):
     """Catches surfacing notes only on refusal: a plan approved with unverified
     reachability would then look identical to one fully checked."""
