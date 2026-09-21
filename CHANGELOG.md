@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.7.1] - 2026-09-21
 
 ### Fixed
-- **A failed "does the source exist?" check no longer breaks plan approval (#NN, KG-26)**: the column
+- **A failed "does the source exist?" check no longer breaks plan approval (#65, KG-26)**: the column
   readers behind the reachability check, `column_type_hint` and `column_type_hints` turned only one kind
   of failure of that check into an error result. Any other, such as a transient error from a remote
   source, escaped as an exception, so approval and plan presentation failed instead of showing the plan
