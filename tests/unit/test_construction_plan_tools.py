@@ -1030,7 +1030,8 @@ def test_an_unreadable_relationship_still_makes_a_typed_join_refusable():
     assert len(problems) == 2
     assert problems[0].startswith("SUPPLIED_BY: 'properties'")
     assert problems[1].startswith("Part: ")
-    assert "'unit_cost'" in problems[1] and "joins on it" in problems[1]
+    assert "'unit_cost'" in problems[1]
+    assert "joins on it" in problems[1]
 
     plan["SUPPLIED_BY"]["properties"] = ["lead_time_days"]
     assert len(check_construction_plan_consistency(plan)) == 1
