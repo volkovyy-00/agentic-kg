@@ -18,26 +18,14 @@ making changes here.
 
 ## Where knowledge lives
 
-This file holds what stays true until the code changes — architecture, invariants, commands. **It carries no
-status**: `CONTRIBUTING.md`'s *Where project knowledge lives* table says where everything else goes. In short:
+This file holds what stays true until the code changes — architecture, invariants, commands — and **no status**.
+Status, handoffs, release history, rationale and design notes each have one home, listed in `CONTRIBUTING.md`'s
+*Where project knowledge lives*; start a ticket from its Jira comments. `docs/spec.md` is the "what is this and
+why" document, including the longer-range roadmap (§6) — read it alongside this file, not instead of it.
 
-- **What's in progress / next / blocked, and session handoffs:** Jira project `KG`
-  (<https://stormdoc.atlassian.net/browse/KG>) — backlog rank is the agreed implementation order; read the
-  ticket's comments before starting on it.
-- **What shipped, per release:** `CHANGELOG.md` (each entry cites `#PR` and `KG-NN`). **Why it was done that
-  way:** the commit messages and PR description of that PR — `git log` / `gh pr view <n>`.
-- **What the program is and why:** `docs/spec.md` — read it alongside this file, not instead of it.
-- **Specs, plans, intents:** `docs/superpowers/`, a separate private git repo nested in the working copy
-  (gitignored here, absent from a fresh clone and from git worktrees). Cite paths there only as local notes.
-
-**Roadmap beyond the backlog:** ingestion of unstructured documents (PDF/Markdown) alongside the CSV path,
-generic rather than hardcoded to the bundled furniture example — sub-project 2 (entity/fact-type agents,
-chunking, loaders, extraction executor, resumability, scoped resolution) and sub-project 3 (`CORRESPONDS_TO`
-linking to reference tables, cross-tier retrieval). Sub-project 1, Foundation, shipped as `0.2.0`. **Every design
-decision for 2 and 3 is already settled** in `docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md`
-— read it before writing either spec; do not re-derive them. Technical constraints found while fact-checking
-Foundation live in `2026-07-27-foundation-design.md`'s *Follow-on work*. Their target dataset (SEC 10-K filings,
-`Company_Filings.csv`, `Asset_Manager_Holdings.csv`) is not in this repo and must be sourced.
+The design decisions for that roadmap's unstructured-ingestion and linking sub-projects are settled in
+`docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md` (local private notes, absent from a fresh
+clone) — read it before writing either spec; do not re-derive them.
 
 **Invariant:** the bundled furniture example (`data/bom`) must keep working — but it is one dataset, not the
 scope. Designs and fixes must hold for source files the program has never seen.
@@ -129,8 +117,7 @@ used by either coordinator, but is still imported by `src/agentic_kg/agent.py` �
 left over from the original course backport, not reachable via the documented `adk web` command and not part of
 either coordinator) vs. `src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired
 into the full workflow, with richer instructions/tools). They are not interchangeable — check which coordinator
-you're editing before reusing code between them. `agents/file_suggestion_agent/` used to be a third standalone
-implementation here; Foundation deleted it (see the *variants* section below).
+you're editing before reusing code between them.
 
 ### The `variants` pattern
 
@@ -144,14 +131,11 @@ AGENT_NAME = "graphrag_agent_v2"
 Agent(name=AGENT_NAME, instruction=variants[AGENT_NAME]["instruction"], tools=variants[AGENT_NAME]["tools"], ...)
 ```
 
-When adding a new capability to an agent, prefer adding a new numbered variant (or editing the currently-selected
-one) over restructuring this dict shape — it mirrors the course's progressive-exercise structure. Some
+When adding a capability to an agent, edit the currently-selected variant; add a new numbered one only when an
+A/B comparison is wanted (as with `graphrag_agent`). Keep the dict shape. Some
 `variants.py` files reference tools/names that aren't imported into that file (leftover from course scaffolding) —
 if you hit a `NameError` there, check whether the referenced symbol exists elsewhere in `tools/` and add the import
-rather than assuming the whole file is broken. That advice does not apply to the standalone
-`agents/file_suggestion_agent/`: it was unreachable and referenced eight undefined names, and Foundation removed the
-directory outright rather than patching it — if you're looking for it, only the `multi_agent` implementation at
-`coordinators/multi_agent/sub_agents/file_suggestion_agent/` exists now.
+rather than assuming the whole file is broken.
 
 ### State passing: ADK session state, not return values
 
@@ -224,6 +208,14 @@ gate should copy either shape.
   `__name__` must stay `"finished"` since ADK derives the tool name from it) vs. the gated `finished` (v2's). v1
   uses `set_user_goal` and never writes `approved_user_goal`, so gating in place would leave it unable to exit.
 
+One more gate guards a tool rather than an exit, and it **is** copy #3 of the flag/reset/confirm shape:
+`graphrag_agent_v2`'s gated read tool (`make_gated_read_neo4j_cypher` in its `variants.py`) refuses an
+aggregating query over a numeric `partitioned_by` property until `declare_partition_interpretation`
+(`tools/graphrag_partition_tools.py`) has set `PARTITION_INTERPRETATION_DECLARED_KEY` this turn;
+`reset_partition_interpretation_declaration` clears it. It exists because the prose instruction to state the
+sum-vs-split reading faded within a session (KG-5). It is deliberately not shared with the handoff gates — its
+own docstring defers extracting a helper until a fourth instance is needed, not before.
+
 **The `transfer_to_agent` bypass.** ADK injects a `transfer_to_agent` tool (plus an advertising instruction
 block) into every sub-agent with a parent or peers, and it never consulted the gates. `graph_construction_agent`,
 `graphrag_agent_v2` and `user_intent_agent_v2` (never `_v1`) therefore run `strip_transfer_to_agent`
@@ -288,7 +280,7 @@ wrote, so a re-run against a non-empty graph will include prior data too.
 
 ### Grounding: `graphrag_agent_v2`
 
-`graphrag_agent_v2` (shipped as `0.3.0`, PR #4) answers only from graph queries made in the current turn, not
+`graphrag_agent_v2` answers only from graph queries made in the current turn, not
 from conversational recall. Three pieces make that possible:
 
 - `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
@@ -305,8 +297,7 @@ from conversational recall. Three pieces make that possible:
   `_physical_schema(include_data_profile: bool)`.
 
 `graphrag_agent_v1` is kept unchanged alongside v2 for an A/B comparison; `agent.py` selects v2 via
-`AGENT_NAME`. Design record: [PR #4](https://github.com/volkovyy-00/agentic-kg/pull/4) / `CHANGELOG.md`'s
-`0.3.0` entry — the underlying spec/plan are gitignored local notes, not present in a fresh clone.
+`AGENT_NAME`.
 
 ### LLM selection
 
@@ -317,14 +308,10 @@ in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
 
-Models in the maintainer's local, gitignored `.env` (the code default and `.env.example` are `openai/gpt-4o` /
-`openai/gpt-4o-mini`): reasoning = `openai/gpt-5.6-luna`, conversational = `deepseek/deepseek-v4-flash-0731` (DeepSeek's
-official V4-Flash release, 2026-07-31, superseding the preview build previously pinned here). The reasoning
-slot moved off `openai/gpt-5` (2026-07-31) because its workload — `schema_proposal_agent`'s propose/critique/refine
-trio and `graph_construction_agent` — is many small tool-orchestration steps at `reasoning_effort="low"`, which is
-exactly Luna's target profile, at ~1/16th the output cost. LiteLLM has no `openrouter/openai/gpt-5.6-luna` entry in
-`model_cost`, so its own cost estimate is 0 for this model; OpenRouter returns real `cost` / `cost_details` on the
-response instead, which is what to read if you add cost tracking.
+The code default and `.env.example` are `openai/gpt-4o` / `openai/gpt-4o-mini`; the models actually used live
+only in each developer's untracked `.env`. LiteLLM's `model_cost` lacks some OpenRouter-only models and then
+estimates their cost as 0 — OpenRouter returns the real `cost` / `cost_details` on the response, which is what to
+read if you add cost tracking.
 
 `get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
 (e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
@@ -341,5 +328,5 @@ that pattern for new domain types.
 
 ## Differences from the deeplearning.ai course
 
-- Many agents use a `finished` tool (`tools/adk_tools.py`) to explicitly signal completion and transfer control back
+- Many agents use a `finished` tool (built by `make_finished` in `tools/adk_tools.py`) to explicitly signal completion and transfer control back
   to the parent agent, rather than relying on implicit turn-ending.
