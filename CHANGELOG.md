@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.7.2] - 2026-09-21
 
 ### Added
-- **A join on a property with several values per node is refused (KG-22)**: a relationship can join on a
+- **A join on a property with several values per node is refused (#66, KG-22)**: a relationship can join on a
   node property that the node's source file holds several values of per node. The build keeps one arbitrary
   value of it, so most relationship rows silently matched nothing, and approval accepted the plan. The plan
   checks now refuse it, with the same line when the plan is presented, at approval, and in the refinement
@@ -23,7 +23,7 @@ There is no `[Unreleased]` section.
   approval.
 
 ### Fixed
-- **A row with no cell for a property is no longer counted as a second value (KG-22)**: the loader skips
+- **A row with no cell for a property is no longer counted as a second value (#66, KG-22)**: the loader skips
   the write for a row too short to reach a column, so the node keeps an earlier value, but the key-group
   reading counted that row as a blank one. `collapse_check` and the reachability check therefore reported
   conflicts on files with short rows that the loader does not produce. A row with no cell now adds no value;
