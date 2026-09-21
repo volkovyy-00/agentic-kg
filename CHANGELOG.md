@@ -57,7 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   each node keeps one value and no two nodes share one; previously only the identifying file's own node
   counted. When a node holds only some of the values, the refusal says how many it is missing and gives
   examples, and every refusal names a new node's label as needing to be its own.
-- **An unreadable `properties` value is reported, not crashed on or misread (#TBD)**: when a node or
+- **An unreadable `properties` value is reported, not crashed on or misread (#63)**: when a node or
   relationship in a construction plan declares `properties` as anything but a list of text — a number,
   a piece of text, a map, or a list holding a non-text entry — the plan check now reports that once,
   naming the construction, and says nothing else about it until it is fixed. Previously such a value
