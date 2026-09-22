@@ -29,13 +29,16 @@ logger = logging.getLogger(__name__)
 # settled that approval framing has no business in their context ("not ready for
 # approval" is a readiness verdict even without the word "approval").
 #
-# It is also the marker that identifies this text later -- see _is_loop_authored
-# -- so tests build their fixtures from the constant rather than copying it.
+# Nothing keys on this wording, so rewording it changes no behaviour (KG-29);
+# tests still build their fixtures from the constant rather than copying it.
 PLAN_PROBLEM_HEADER = "retry: checks on the plan found problems that must be fixed:"
 CRITIC_PREAMBLE = "The critic also said:"
 
+# Never 'retry': it is returned only when the plan checks found nothing, and
+# the coordinator re-runs the loop on a result beginning 'retry' -- the very
+# thing this text tells it not to do (KG-29).
 EMPTY_VERDICT_SUMMARY = (
-    "retry: the critic produced no verdict. Call "
+    "no verdict: the critic produced no verdict. Call "
     "'get_proposed_construction_plan_with_approval_check' and judge the "
     "plan yourself rather than running the loop again on no feedback."
 )
@@ -62,7 +65,8 @@ class VerdictKind(StrEnum):
 # A sibling of 'feedback' rather than a structured value replacing it: the
 # critic writes 'feedback' through output_key, which stores a string because
 # the critic has no output_schema, and ADK renders {feedback} with str().
-# Written only by prepare_refinement_loop_invocation and CheckStatusAndEscalate.
+# Written only by prepare_refinement_loop_invocation, clear_verdict_before_critic
+# and CheckStatusAndEscalate.
 FEEDBACK_KIND_KEY = "feedback_kind"
 
 
@@ -74,27 +78,6 @@ def _normalized(text: str) -> str:
     rewording either cannot silently diverge from the other.
     """
     return text.strip().strip(":.,").lower()
-
-
-def _is_loop_authored(verdict: str) -> bool:
-    """Whether the feedback slot holds this loop's own composite, not a verdict.
-
-    ADK writes an agent's output_key only when its final response carries a text
-    part, so a critic that ends an iteration without text leaves the PREVIOUS
-    iteration's composite sitting in 'feedback'. Two things follow, and the
-    second is the reason this exists:
-
-    - composing on top of it would nest a second header; and
-    - if the plan has since been repaired, passing it through would hand the
-      coordinator 'retry: checks on the plan found problems...' for a plan with
-      nothing wrong. A stale opinion is the status quo; a stale assertion of
-      mechanical fact is worse.
-
-    Treating it as "no verdict this round" costs round 1's critic objections
-    when round 2's critic is silent, and keeps every mechanical problem. A
-    critic that parrots the header is treated the same way, which is safe.
-    """
-    return verdict.strip().startswith(PLAN_PROBLEM_HEADER)
 
 
 def _without_bare_valid(verdict: str) -> str:
@@ -211,6 +194,26 @@ def prepare_refinement_loop_invocation(
     return None
 
 
+def clear_verdict_before_critic(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
+    """Runs before the critic on every iteration, so each verdict is that
+    iteration's own (KG-29).
+
+    ADK writes the critic's output_key only when its final response carries a
+    text part, so a silent critic would otherwise leave the previous
+    iteration's verdict -- the critic's or the loop's composite -- standing as
+    this one's. Cleared here, a silent iteration is structurally no verdict.
+
+    On the critic, never on schema_proposal_agent: the proposal step runs
+    first in each iteration and must still read the previous one's feedback
+    (the 2026-07-29 regression in test_schema_refinement_loop_callbacks.py).
+    """
+    callback_context.state["feedback"] = ""
+    callback_context.state[FEEDBACK_KIND_KEY] = VerdictKind.NONE.value
+    return None
+
+
 def reset_schema_refinement_turn_budget(callback_context: CallbackContext) -> None:
     """Runs once per incoming user turn, on the coordinator itself, giving
     every fresh turn a new one-invocation budget for schema_refinement_loop."""
@@ -239,6 +242,7 @@ schema_critic_agent = LlmAgent(
     instruction=variants[CRITIC_NAME]["instruction"],
     tools=variants[CRITIC_NAME]["tools"],
     output_key="feedback",
+    before_agent_callback=clear_verdict_before_critic,
 )
 
 
@@ -272,13 +276,10 @@ class CheckStatusAndEscalate(BaseAgent):
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
-        raw = str(state.get("feedback", "valid")).strip()
-        # A slot still holding this loop's own composite is not a verdict --
-        # see _is_loop_authored. Discarding it here, before anything routes on
-        # it or composes with it, is what makes nesting impossible and keeps a
-        # repaired plan from being reported with the problems it no longer has.
-        stale = _is_loop_authored(raw)
-        text = "" if stale else raw
+        # This iteration's own critic text, or "" if the critic was silent:
+        # clear_verdict_before_critic emptied the slot before it ran, so
+        # nothing from an earlier iteration can be read here as this one's.
+        text = str(state.get("feedback", "valid")).strip()
 
         problems = _plan_problems(state)
         if problems:
@@ -332,15 +333,9 @@ class CheckStatusAndEscalate(BaseAgent):
         # iteration's own. Emptiness of the critic's text is the branch taken
         # above (should_stop, summary), not a reading of its wording.
         kind = VerdictKind.CRITIC if text else VerdictKind.NONE
-        delta: dict[str, str] = {FEEDBACK_KIND_KEY: kind.value}
-        if stale:
-            # The only pass-through that writes 'feedback' itself. Round 1's
-            # composite already reached the PARENT session through its own
-            # state_delta, so leaving it would let
-            # prepare_refinement_loop_invocation quote problems this plan no
-            # longer has in its 'stopped:' message.
-            delta["feedback"] = ""
-        actions = EventActions(escalate=should_stop, state_delta=delta)
+        actions = EventActions(
+            escalate=should_stop, state_delta={FEEDBACK_KIND_KEY: kind.value}
+        )
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=summary)]),
@@ -386,8 +381,8 @@ root_agent = LlmAgent(
       description and the tool result differ on any field, the tool result is correct and yours is wrong.
     - After calling 'schema_refinement_loop', do not assume the requested change was made, and do not
       report it as made. The loop returns only its final verdict ('valid' or 'retry' plus feedback, from
-      the critic or from the plan checks), never the plan itself and never raw tool output such as column
-      statistics — a verdict
+      the critic or from the plan checks, or 'no verdict:' when the critic said nothing), never the plan
+      itself and never raw tool output such as column statistics — a verdict
       is not evidence of what the plan says. Call 'get_proposed_construction_plan_with_approval_check'
       and compare the result against what the user asked for. If the change is missing, or if something
       the user previously approved has changed back or otherwise drifted, say so plainly and run the

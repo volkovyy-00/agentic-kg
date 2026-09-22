@@ -17,10 +17,12 @@ import pytest
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
     FEEDBACK_KIND_KEY,
     VerdictKind,
+    clear_verdict_before_critic,
     prepare_refinement_loop_invocation,
     refinement_loop,
     reset_schema_refinement_turn_budget,
     root_agent,
+    schema_critic_agent,
     schema_proposal_agent,
 )
 
@@ -100,8 +102,7 @@ def test_a_critic_verdict_is_quoted_as_the_critics_opinion():
 @pytest.mark.parametrize("kind", [VerdictKind.NONE.value, None])
 def test_no_verdict_is_said_plainly_and_nothing_is_quoted(kind):
     """None has its own wording; an absent key (a session from before KG-30)
-    reads as none. The slot may still hold text here -- KG-41's stale-branch
-    value is not this ticket's to fix -- but a none kind quotes nothing."""
+    reads as none. Whatever the slot holds, a none kind quotes nothing."""
     text = _stopped("leftover text", kind)
     assert "It recorded no verdict." in text
     assert "leftover text" not in text
@@ -113,6 +114,25 @@ def test_schema_proposal_agent_no_longer_resets_feedback_itself():
     carry none now -- the reset lives one level up, on refinement_loop,
     which fires only once per invocation."""
     assert schema_proposal_agent.before_agent_callback is None
+
+
+def test_the_critic_step_starts_every_round_with_an_empty_slot():
+    """KG-29: ADK writes the critic's output_key only when its final response
+    carries text, so a silent critic would otherwise inherit the previous
+    round's verdict. Cleared here, a silent round is structurally no verdict."""
+    state = {
+        "feedback": "retry\n- the previous round's objection",
+        FEEDBACK_KIND_KEY: VerdictKind.CRITIC.value,
+    }
+    assert clear_verdict_before_critic(_ctx(state)) is None
+    assert state["feedback"] == ""
+    assert state[FEEDBACK_KIND_KEY] == VerdictKind.NONE.value
+
+
+def test_the_per_round_reset_sits_on_the_critic():
+    """On the critic, which runs AFTER the proposal step has read {feedback}
+    -- never on schema_proposal_agent, the 2026-07-29 regression above."""
+    assert schema_critic_agent.before_agent_callback is clear_verdict_before_critic
 
 
 def test_refinement_loop_carries_the_new_callback():
