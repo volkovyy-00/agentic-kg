@@ -332,7 +332,7 @@ class CheckStatusAndEscalate(BaseAgent):
         # iteration's own. Emptiness of the critic's text is the branch taken
         # above (should_stop, summary), not a reading of its wording.
         kind = VerdictKind.CRITIC if text else VerdictKind.NONE
-        delta: dict[str, object] = {FEEDBACK_KIND_KEY: kind.value}
+        delta: dict[str, str] = {FEEDBACK_KIND_KEY: kind.value}
         if stale:
             # The only pass-through that writes 'feedback' itself. Round 1's
             # composite already reached the PARENT session through its own
