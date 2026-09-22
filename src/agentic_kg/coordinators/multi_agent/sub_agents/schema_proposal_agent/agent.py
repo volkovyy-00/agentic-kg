@@ -139,6 +139,32 @@ def _compose_feedback(verdict: str, problems: list[str]) -> str:
 from .variants import variants
 
 
+def _stopped_message(kind: str, feedback: str) -> str:
+    """The turn cap's short-circuit result, phrased by the slot's kind.
+
+    Begins 'stopped:' and never 'retry', which the coordinator routes on. An
+    unknown or absent kind reads as NONE, which quotes nothing: the slot is
+    empty on every path that tags it none.
+    """
+    head = "stopped: schema_refinement_loop already ran once this turn."
+    read = (
+        "Do not call it again this turn -- call "
+        "get_proposed_construction_plan_with_approval_check and present that plan"
+    )
+    if kind == VerdictKind.MECHANICAL:
+        return (
+            f"{head} Its last verdict is a mechanical check finding, which "
+            f"approval will refuse whatever the user decides:\n{feedback}\n"
+            f"{read} together with those problems, and ask the user what to change."
+        )
+    if kind == VerdictKind.CRITIC:
+        return (
+            f"{head} Its last verdict is the critic's opinion:\n{feedback}\n"
+            f"{read} together with that verdict, and let the user decide."
+        )
+    return f"{head} It recorded no verdict. {read}, and let the user decide."
+
+
 def prepare_refinement_loop_invocation(
     callback_context: CallbackContext,
 ) -> Optional[types.Content]:
@@ -151,8 +177,8 @@ def prepare_refinement_loop_invocation(
     Resets 'feedback' (and its kind, to none) for a fresh invocation, and
     enforces at most one invocation of this loop per user turn: increment
     the counter before checking it, and leave 'feedback' untouched on the
-    short-circuited path so the returned message can quote the critic's
-    actual last verdict.
+    short-circuited path so the returned message can quote the last verdict,
+    phrased by its kind.
 
     Scope caveat: the budget is per coordinator entry, not strictly per user
     message. reset_schema_refinement_turn_budget fires on every entry to
@@ -165,17 +191,17 @@ def prepare_refinement_loop_invocation(
     calls = callback_context.state.get("schema_refinement_calls_this_turn", 0) + 1
     callback_context.state["schema_refinement_calls_this_turn"] = calls
     if calls > 1:
-        last_feedback = callback_context.state.get("feedback", "")
         return types.Content(
             role="model",
             parts=[
                 types.Part(
-                    text=(
-                        "stopped: schema_refinement_loop already ran once this turn "
-                        f"(last verdict: {last_feedback}). Do not call it again this "
-                        "turn -- call get_proposed_construction_plan_with_approval_check "
-                        "and present that plan together with the verdict above, and let "
-                        "the user decide."
+                    text=_stopped_message(
+                        str(
+                            callback_context.state.get(
+                                FEEDBACK_KIND_KEY, VerdictKind.NONE.value
+                            )
+                        ),
+                        str(callback_context.state.get("feedback", "")),
                     )
                 )
             ],

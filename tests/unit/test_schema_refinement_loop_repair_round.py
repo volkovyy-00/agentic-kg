@@ -239,3 +239,7 @@ def test_a_second_loop_call_in_the_same_turn_quotes_the_composite(
     assert results[1].startswith("stopped:")
     assert "plot_id" in results[1]
     assert "last verdict: valid" not in results[1]
+
+    # KG-30: the kind travelled out of the loop's child session with the delta,
+    # so the short-circuit names it.
+    assert "mechanical check finding" in results[1]
