@@ -100,6 +100,20 @@ def test_a_missing_verdict_is_reported_as_no_verdict():
     assert "get_proposed_construction_plan_with_approval_check" in text
 
 
+def test_an_absent_slot_is_no_verdict_not_valid():
+    """The resets always set the key, but an absent one must still read as no
+    verdict rather than manufacture a 'valid' (KG-29 review)."""
+    checker = CheckStatusAndEscalate(name="StopChecker")
+    ctx = SimpleNamespace(session=SimpleNamespace(state={}))
+
+    async def collect():
+        return [event async for event in checker._run_async_impl(ctx)]
+
+    event = asyncio.run(collect())[0]
+    assert _event_text(event).startswith("no verdict:")
+    assert event.actions.state_delta == {FEEDBACK_KIND_KEY: VerdictKind.NONE.value}
+
+
 def test_a_missing_verdict_still_escalates():
     """A missing verdict must stop the *internal* loop immediately, not spend
     another schema_proposal_agent/schema_critic_agent iteration first: the

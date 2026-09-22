@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 # settled that approval framing has no business in their context ("not ready for
 # approval" is a readiness verdict even without the word "approval").
 #
-# Nothing keys on this wording, so rewording it changes no behaviour (KG-29);
-# tests still build their fixtures from the constant rather than copying it.
+# Its leading 'retry' is load-bearing: the coordinator re-runs the loop on a
+# result beginning with it. Nothing keys on the rest of the wording, so
+# rewording that changes no behaviour (KG-29); tests still build their
+# fixtures from the constant rather than copying it.
 PLAN_PROBLEM_HEADER = "retry: checks on the plan found problems that must be fixed:"
 CRITIC_PREAMBLE = "The critic also said:"
 
@@ -194,9 +196,7 @@ def prepare_refinement_loop_invocation(
     return None
 
 
-def clear_verdict_before_critic(
-    callback_context: CallbackContext,
-) -> Optional[types.Content]:
+def clear_verdict_before_critic(callback_context: CallbackContext) -> None:
     """Runs before the critic on every iteration, so each verdict is that
     iteration's own (KG-29).
 
@@ -211,7 +211,6 @@ def clear_verdict_before_critic(
     """
     callback_context.state["feedback"] = ""
     callback_context.state[FEEDBACK_KIND_KEY] = VerdictKind.NONE.value
-    return None
 
 
 def reset_schema_refinement_turn_budget(callback_context: CallbackContext) -> None:
@@ -279,7 +278,7 @@ class CheckStatusAndEscalate(BaseAgent):
         # This iteration's own critic text, or "" if the critic was silent:
         # clear_verdict_before_critic emptied the slot before it ran, so
         # nothing from an earlier iteration can be read here as this one's.
-        text = str(state.get("feedback", "valid")).strip()
+        text = str(state.get("feedback", "")).strip()
 
         problems = _plan_problems(state)
         if problems:
