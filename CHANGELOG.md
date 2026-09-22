@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.7.3] - 2026-09-22
 
 ### Fixed
-- **A mechanical plan problem is no longer offered as the user's call (KG-30)**: the refinement loop's
+- **A mechanical plan problem is no longer offered as the user's call (#67, KG-30)**: the refinement loop's
   verdict slot holds either the critic's opinion or the plan checks' findings, and the coordinator described
   both as the critic's. After a second retry it could therefore offer a plan that approval will refuse as one
   the user may approve as it stands. The loop now tags the slot with its kind (mechanical, critic or none),
