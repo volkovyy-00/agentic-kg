@@ -8,6 +8,18 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.7.3] - 2026-09-22
+
+### Fixed
+- **A mechanical plan problem is no longer offered as the user's call (KG-30)**: the refinement loop's
+  verdict slot holds either the critic's opinion or the plan checks' findings, and the coordinator described
+  both as the critic's. After a second retry it could therefore offer a plan that approval will refuse as one
+  the user may approve as it stands. The loop now tags the slot with its kind (mechanical, critic or none),
+  set from the branch that wrote it rather than read off the text. The message returned when the loop is
+  called twice in a turn names that kind, the proposal step is told it, and the coordinator offers a plan for
+  approval as it stands only when its plan-reading tool reports no problems. A critic objection is still the
+  user's call, exactly as before.
+
 ## [0.7.2] - 2026-09-21
 
 ### Added

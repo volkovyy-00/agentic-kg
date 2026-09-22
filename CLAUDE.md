@@ -167,9 +167,13 @@ may not join on a node property that holds several values per node) and `check_r
   user's call.
 - **Inside `schema_refinement_loop`** — its `StopChecker` runs all three through `find_plan_problems(state)`, and a
   plan with any of these problems goes back for another iteration. The stop-check writes a `retry` composite to
-  `feedback` via `state_delta`, never by mutating state (`AgentTool` forwards only the delta out of the loop's
-  child session). The loop runs at most two iterations, so a problem the second revision introduces still
-  surfaces at approval.
+  `feedback` via `state_delta`, never by mutating state (`AgentTool` forwards only the delta out of the loop's child
+  session). Next to it the stop-check writes `feedback_kind` (`VerdictKind`: `mechanical` when any problem was found,
+  whatever the critic said; `critic`; `none`), chosen from the branch that ran and never read off the text;
+  `prepare_refinement_loop_invocation` resets it to `none`. The `'stopped:'` message and the proposal prompt read it;
+  the coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
+  `get_proposed_construction_plan_with_approval_check` returns an error. The loop runs at most two iterations, so a
+  problem the second revision introduces still surfaces at approval.
 
 Approval is the guarantee: the loop's copy is fail-open behind one guard, approval propagates a crashed check so
 it fails closed, and the joined-property check and reachability fail open on an unreadable file (a
