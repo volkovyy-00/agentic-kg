@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.7.4] - 2026-09-22
 
 ### Fixed
-- **A silent critic round no longer inherits the previous round's verdict (KG-29)**: the refinement loop kept
+- **A silent critic round no longer inherits the previous round's verdict (#68, KG-29)**: the refinement loop kept
   each round's verdict in a slot nothing cleared between rounds, so a round in which the critic said nothing
   reported the previous round's text as its own. The loop recognised only its own wording and discarded that,
   so a stale critic objection still stood, and a plan repaired in the second round was reported as a retry.
