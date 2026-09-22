@@ -88,12 +88,30 @@ def test_the_verdict_is_returned_verbatim(feedback):
     assert _event_text(_run(feedback)[0]) == feedback
 
 
-def test_a_missing_verdict_reads_as_retry_not_as_valid():
-    """The text must say retry, not valid, and must send the coordinator to
-    the plan rather than inventing one from memory."""
+def test_a_missing_verdict_is_reported_as_no_verdict():
+    """The text must not say valid, and must send the coordinator to the plan
+    rather than inventing one from memory. Nor may it say retry (KG-29): the
+    coordinator re-runs the loop on a result beginning 'retry', so a plan that
+    passed both checks would go back into the loop this same text tells it not
+    to re-run."""
     text = _event_text(_run("")[0])
-    assert text.lower().startswith("retry")
+    assert text.lower().startswith("no verdict:")
+    assert not text.lower().startswith(("retry", "valid"))
     assert "get_proposed_construction_plan_with_approval_check" in text
+
+
+def test_an_absent_slot_is_no_verdict_not_valid():
+    """The resets always set the key, but an absent one must still read as no
+    verdict rather than manufacture a 'valid' (KG-29 review)."""
+    checker = CheckStatusAndEscalate(name="StopChecker")
+    ctx = SimpleNamespace(session=SimpleNamespace(state={}))
+
+    async def collect():
+        return [event async for event in checker._run_async_impl(ctx)]
+
+    event = asyncio.run(collect())[0]
+    assert _event_text(event).startswith("no verdict:")
+    assert event.actions.state_delta == {FEEDBACK_KIND_KEY: VerdictKind.NONE.value}
 
 
 def test_a_missing_verdict_still_escalates():

@@ -170,7 +170,11 @@ may not join on a node property that holds several values per node) and `check_r
   `feedback` via `state_delta`, never by mutating state (`AgentTool` forwards only the delta out of the loop's child
   session). Next to it the stop-check writes `feedback_kind` (`VerdictKind`: `mechanical` when any problem was found,
   whatever the critic said; `critic`; `none`), chosen from the branch that ran and never read off the text;
-  `prepare_refinement_loop_invocation` resets it to `none`. The `'stopped:'` message and the proposal prompt read it;
+  `prepare_refinement_loop_invocation` resets it to `none`, and so does `clear_verdict_before_critic` (the critic's
+  `before_agent_callback`), which also empties `feedback` before every critic run. ADK writes an `output_key` only
+  when the agent's final response carries a non-thought text part, so a silent run leaves the key's previous value
+  standing — the pre-clear is what makes a silent critic mean no verdict rather than the last round's, and any new
+  `output_key` whose silence must mean "nothing" needs the same. The `'stopped:'` message and the proposal prompt read it;
   the coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
   `get_proposed_construction_plan_with_approval_check` returns an error. The loop runs at most two iterations, so a
   problem the second revision introduces still surfaces at approval.

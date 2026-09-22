@@ -21,7 +21,6 @@ from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent 
     CheckStatusAndEscalate,
     VerdictKind,
     _compose_feedback,
-    _is_loop_authored,
     _normalized,
 )
 from agentic_kg.tools.construction_plan_tools import check_construction_plan_consistency
@@ -79,17 +78,6 @@ def test_an_empty_verdict_gives_header_and_bullets_only():
     composite = _compose_feedback("", [PROBLEM])
     assert composite == f"{PLAN_PROBLEM_HEADER}\n- {PROBLEM}"
     assert "judge the plan yourself" not in composite
-
-
-def test_loop_authored_text_is_recognised_and_never_recomposed():
-    """ADK writes output_key only when the critic's final response has a text
-    part, so a critic that ends a round silently leaves the previous round's
-    composite in the slot. Recognising it is what makes nesting impossible."""
-    composite = _compose_feedback("valid", [PROBLEM])
-    assert _is_loop_authored(composite)
-    assert not _is_loop_authored("retry\n- a genuine critic objection")
-    assert not _is_loop_authored("valid")
-    assert not _is_loop_authored("")
 
 
 def test_the_loop_authored_wording_carries_no_approval_framing():
@@ -255,47 +243,6 @@ def test_unverified_only_findings_pass_the_verdict_through(stranding_plan_state)
     }
 
 
-def test_a_stale_composite_is_not_recomposed(stranding_plan_state):
-    """Built from the composer's own output, never a copied literal: a
-    hand-written header would stay green if the real one were reworded and the
-    detector thereby broken."""
-    stale = _compose_feedback("valid", ["an earlier problem"])
-    stranding_plan_state["feedback"] = stale
-    events = _run(stranding_plan_state)
-
-    composite = events[0].actions.state_delta["feedback"]
-    assert composite.count(PLAN_PROBLEM_HEADER) == 1
-    assert "an earlier problem" not in composite
-    assert CRITIC_PREAMBLE not in composite
-    assert (
-        events[0].actions.state_delta[FEEDBACK_KIND_KEY] == VerdictKind.MECHANICAL.value
-    )
-
-
-def test_a_repaired_plan_clears_the_stale_composite(stranding_plan_state):
-    """The one pass-through path that emits a delta, and it is not optional:
-    round 1's composite already reached the PARENT session via its own delta,
-    so emitting nothing here would leave it for prepare_refinement_loop_invocation
-    to quote in its 'stopped:' message -- stale mechanical problems for a plan
-    that no longer has them. Pins the emitted delta itself; see
-    test_the_cleared_slot_is_not_quoted_by_the_second_loop_call below for the
-    downstream consumer reading it after the delta is applied."""
-    stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
-        "plot_id"
-    )
-    stranding_plan_state["feedback"] = _compose_feedback(
-        "valid", ["an earlier problem"]
-    )
-    events = _run(stranding_plan_state)
-
-    assert events[0].actions.state_delta == {
-        "feedback": "",
-        FEEDBACK_KIND_KEY: VerdictKind.NONE.value,
-    }
-    assert _text(events[0]) == EMPTY_VERDICT_SUMMARY
-    assert events[0].actions.escalate is True
-
-
 def test_a_crashing_check_leaves_the_verdict_alone(
     monkeypatch, caplog, stranding_plan_state
 ):
@@ -335,39 +282,6 @@ def test_a_real_adk_state_object_works(stranding_plan_state):
     events = _run(state)
 
     assert "plot_id" in events[0].actions.state_delta["feedback"]
-
-
-def test_the_cleared_slot_is_not_quoted_by_the_second_loop_call(stranding_plan_state):
-    """End-to-end on the clearing path: apply the delta the stop-check emitted,
-    then run the turn-cap callback that short-circuits a second loop call in
-    the same turn. Its 'stopped:' message quotes whatever is in the slot, so a
-    slot left holding the old composite would hand the coordinator mechanical
-    problems for a plan that has since been repaired. See
-    test_a_repaired_plan_clears_the_stale_composite above for the delta this
-    consumes, pinned on its own."""
-    from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
-        prepare_refinement_loop_invocation,
-    )
-
-    stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
-        "plot_id"
-    )
-    stranding_plan_state["feedback"] = _compose_feedback(
-        "valid", ["an earlier problem"]
-    )
-
-    events = _run(stranding_plan_state)
-    stranding_plan_state.update(events[0].actions.state_delta)
-
-    # calls == 1 already spent this turn, so the next invocation short-circuits
-    stranding_plan_state["schema_refinement_calls_this_turn"] = 1
-    callback_context = SimpleNamespace(state=stranding_plan_state)
-    content = prepare_refinement_loop_invocation(callback_context)
-
-    message = content.parts[0].text
-    assert message.startswith("stopped:")
-    assert PLAN_PROBLEM_HEADER not in message
-    assert "an earlier problem" not in message
 
 
 def test_the_check_authored_wording_carries_no_approval_framing(stranding_plan_state):

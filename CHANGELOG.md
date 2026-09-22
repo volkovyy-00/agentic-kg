@@ -8,6 +8,18 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.7.4] - 2026-09-22
+
+### Fixed
+- **A silent critic round no longer inherits the previous round's verdict (#68, KG-29)**: the refinement loop kept
+  each round's verdict in a slot nothing cleared between rounds, so a round in which the critic said nothing
+  reported the previous round's text as its own. The loop recognised only its own wording and discarded that,
+  so a stale critic objection still stood, and a plan repaired in the second round was reported as a retry.
+  The slot is now cleared before the critic runs in each round, so a silent round has no verdict whatever came
+  before. When the critic says nothing and the plan checks find nothing, the loop reports that no verdict was
+  produced instead of starting with 'retry', which would have sent the coordinator back into the loop.
+  Problems found in one round still reach the proposal step in the next.
+
 ## [0.7.3] - 2026-09-22
 
 ### Fixed
