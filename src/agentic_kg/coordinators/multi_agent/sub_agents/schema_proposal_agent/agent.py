@@ -1,4 +1,5 @@
 import logging
+from enum import StrEnum
 from typing import AsyncGenerator, Optional
 
 from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
@@ -38,6 +39,31 @@ EMPTY_VERDICT_SUMMARY = (
     "'get_proposed_construction_plan_with_approval_check' and judge the "
     "plan yourself rather than running the loop again on no feedback."
 )
+
+
+class VerdictKind(StrEnum):
+    """Which kind of claim the 'feedback' slot holds (KG-30).
+
+    Set from the branch that wrote the slot, never read off its text:
+    recognising a kind by wording is what this exists to stop.
+
+    - MECHANICAL: find_plan_problems found problems. A surviving critic
+      remainder may ride along, but the whole is mechanical -- no user
+      decision clears it, since approval refuses the plan regardless.
+    - CRITIC: no mechanical problem; the critic's own, non-empty verdict.
+    - NONE: no mechanical problem and no critic text.
+    """
+
+    MECHANICAL = "mechanical"
+    CRITIC = "critic"
+    NONE = "none"
+
+
+# A sibling of 'feedback' rather than a structured value replacing it: the
+# critic writes 'feedback' through output_key, which stores a string because
+# the critic has no output_schema, and ADK renders {feedback} with str().
+# Written only by prepare_refinement_loop_invocation and CheckStatusAndEscalate.
+FEEDBACK_KIND_KEY = "feedback_kind"
 
 
 def _normalized(text: str) -> str:
@@ -122,10 +148,11 @@ def prepare_refinement_loop_invocation(
     LoopAgent.run_async, while each sub-agent's before_agent_callback would
     refire on every internal iteration).
 
-    Resets 'feedback' for a fresh invocation, and enforces at most one
-    invocation of this loop per user turn: increment the counter before
-    checking it, and leave 'feedback' untouched on the short-circuited path
-    so the returned message can quote the critic's actual last verdict.
+    Resets 'feedback' (and its kind, to none) for a fresh invocation, and
+    enforces at most one invocation of this loop per user turn: increment
+    the counter before checking it, and leave 'feedback' untouched on the
+    short-circuited path so the returned message can quote the critic's
+    actual last verdict.
 
     Scope caveat: the budget is per coordinator entry, not strictly per user
     message. reset_schema_refinement_turn_budget fires on every entry to
@@ -154,6 +181,7 @@ def prepare_refinement_loop_invocation(
             ],
         )
     callback_context.state["feedback"] = ""
+    callback_context.state[FEEDBACK_KIND_KEY] = VerdictKind.NONE.value
     return None
 
 
@@ -235,7 +263,13 @@ class CheckStatusAndEscalate(BaseAgent):
             yield Event(
                 author=self.name,
                 content=types.Content(role="model", parts=[types.Part(text=summary)]),
-                actions=EventActions(escalate=False, state_delta={"feedback": summary}),
+                actions=EventActions(
+                    escalate=False,
+                    state_delta={
+                        "feedback": summary,
+                        FEEDBACK_KIND_KEY: VerdictKind.MECHANICAL.value,
+                    },
+                ),
             )
             return
 
@@ -268,13 +302,19 @@ class CheckStatusAndEscalate(BaseAgent):
         # the critic did not answer, not that it found problems, so point the
         # coordinator at the plan rather than at another blind re-run.
         summary = text if text else EMPTY_VERDICT_SUMMARY
-        actions = EventActions(escalate=should_stop)
+        # Every pass-through tags the slot, so the kind is always this
+        # iteration's own. Emptiness of the critic's text is the branch taken
+        # above (should_stop, summary), not a reading of its wording.
+        kind = VerdictKind.CRITIC if text else VerdictKind.NONE
+        delta: dict[str, object] = {FEEDBACK_KIND_KEY: kind.value}
         if stale:
-            # The only pass-through that writes state. Round 1's composite
-            # already reached the PARENT session through its own state_delta,
-            # so leaving it would let prepare_refinement_loop_invocation quote
-            # problems this plan no longer has in its 'stopped:' message.
-            actions.state_delta = {"feedback": ""}
+            # The only pass-through that writes 'feedback' itself. Round 1's
+            # composite already reached the PARENT session through its own
+            # state_delta, so leaving it would let
+            # prepare_refinement_loop_invocation quote problems this plan no
+            # longer has in its 'stopped:' message.
+            delta["feedback"] = ""
+        actions = EventActions(escalate=should_stop, state_delta=delta)
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=summary)]),

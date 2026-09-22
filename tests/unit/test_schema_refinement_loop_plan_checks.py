@@ -16,8 +16,10 @@ from agentic_kg.common.config import reset_settings
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
     CRITIC_PREAMBLE,
     EMPTY_VERDICT_SUMMARY,
+    FEEDBACK_KIND_KEY,
     PLAN_PROBLEM_HEADER,
     CheckStatusAndEscalate,
+    VerdictKind,
     _compose_feedback,
     _is_loop_authored,
     _normalized,
@@ -191,11 +193,21 @@ def test_problems_do_not_escalate_whatever_the_verdict(stranding_plan_state):
         assert _text(events[0]).startswith("retry")
 
 
+def test_problems_tag_the_whole_slot_mechanical(stranding_plan_state):
+    """A mechanical problem labels the whole composite, even with a critic
+    remainder riding along: no user decision clears it, so the composite is
+    never approvable as it stands. The remainder stays as context."""
+    stranding_plan_state["feedback"] = "retry\n- the relationship names read badly"
+    delta = _run(stranding_plan_state)[0].actions.state_delta
+
+    assert delta[FEEDBACK_KIND_KEY] == VerdictKind.MECHANICAL.value
+    assert CRITIC_PREAMBLE in delta["feedback"]
+    assert "the relationship names read badly" in delta["feedback"]
+
+
 def test_a_clean_plan_passes_the_verdict_through_untouched(stranding_plan_state):
-    """Nothing found must change nothing -- including emitting no delta. Pinned
-    against both a non-empty verdict (a 'valid' plus a Warnings block survives
-    verbatim) and an empty one (which still yields no delta, and surfaces
-    EMPTY_VERDICT_SUMMARY rather than the empty string itself)."""
+    """Nothing found must change nothing but the kind tag: the delta carries
+    only 'feedback_kind', never 'feedback'."""
     stranding_plan_state["proposed_construction_plan"]["Plot"]["unique_column_name"] = (
         "plot_id"
     )
@@ -204,14 +216,16 @@ def test_a_clean_plan_passes_the_verdict_through_untouched(stranding_plan_state)
 
     assert _text(events[0]) == "valid\nWarnings:\n- partial join coverage"
     assert events[0].actions.escalate is True
-    assert not events[0].actions.state_delta
+    assert events[0].actions.state_delta == {
+        FEEDBACK_KIND_KEY: VerdictKind.CRITIC.value
+    }
 
     stranding_plan_state["feedback"] = ""
     events = _run(stranding_plan_state)
 
     assert _text(events[0]) == EMPTY_VERDICT_SUMMARY
     assert events[0].actions.escalate is True
-    assert not events[0].actions.state_delta
+    assert events[0].actions.state_delta == {FEEDBACK_KIND_KEY: VerdictKind.NONE.value}
 
 
 def test_an_absent_plan_passes_through(stranding_plan_state):
@@ -221,7 +235,9 @@ def test_an_absent_plan_passes_through(stranding_plan_state):
     events = _run(stranding_plan_state)
 
     assert _text(events[0]) == "valid"
-    assert not events[0].actions.state_delta
+    assert events[0].actions.state_delta == {
+        FEEDBACK_KIND_KEY: VerdictKind.CRITIC.value
+    }
 
 
 def test_unverified_only_findings_pass_the_verdict_through(stranding_plan_state):
@@ -234,7 +250,9 @@ def test_unverified_only_findings_pass_the_verdict_through(stranding_plan_state)
 
     assert _text(events[0]) == "valid"
     assert events[0].actions.escalate is True
-    assert not events[0].actions.state_delta
+    assert events[0].actions.state_delta == {
+        FEEDBACK_KIND_KEY: VerdictKind.CRITIC.value
+    }
 
 
 def test_a_stale_composite_is_not_recomposed(stranding_plan_state):
@@ -249,6 +267,9 @@ def test_a_stale_composite_is_not_recomposed(stranding_plan_state):
     assert composite.count(PLAN_PROBLEM_HEADER) == 1
     assert "an earlier problem" not in composite
     assert CRITIC_PREAMBLE not in composite
+    assert (
+        events[0].actions.state_delta[FEEDBACK_KIND_KEY] == VerdictKind.MECHANICAL.value
+    )
 
 
 def test_a_repaired_plan_clears_the_stale_composite(stranding_plan_state):
@@ -267,7 +288,10 @@ def test_a_repaired_plan_clears_the_stale_composite(stranding_plan_state):
     )
     events = _run(stranding_plan_state)
 
-    assert events[0].actions.state_delta == {"feedback": ""}
+    assert events[0].actions.state_delta == {
+        "feedback": "",
+        FEEDBACK_KIND_KEY: VerdictKind.NONE.value,
+    }
     assert _text(events[0]) == EMPTY_VERDICT_SUMMARY
     assert events[0].actions.escalate is True
 
@@ -295,7 +319,9 @@ def test_a_crashing_check_leaves_the_verdict_alone(
 
     assert _text(events[0]) == "valid"
     assert events[0].actions.escalate is True
-    assert not events[0].actions.state_delta
+    assert events[0].actions.state_delta == {
+        FEEDBACK_KIND_KEY: VerdictKind.CRITIC.value
+    }
     assert "PermissionError" in caplog.text
 
 

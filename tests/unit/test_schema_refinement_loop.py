@@ -19,7 +19,9 @@ from types import SimpleNamespace
 import pytest
 
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+    FEEDBACK_KIND_KEY,
     CheckStatusAndEscalate,
+    VerdictKind,
 )
 
 
@@ -102,3 +104,20 @@ def test_a_missing_verdict_still_escalates():
     escalate=False here would keep looping despite the text saying not to."""
     events = _run("")
     assert events[0].actions.escalate is True
+
+
+@pytest.mark.parametrize(
+    "feedback,kind",
+    [
+        ("valid", VerdictKind.CRITIC),
+        ("valid\nWarnings:\n- partial join coverage", VerdictKind.CRITIC),
+        ("retry\n- Component identifier is not unique", VerdictKind.CRITIC),
+        ("", VerdictKind.NONE),
+    ],
+)
+def test_a_pass_through_tags_the_slot_by_whether_the_critic_spoke(feedback, kind):
+    """KG-30: with no mechanical problem, the kind is the critic's whenever it
+    said anything, and none when it said nothing -- chosen from the branch,
+    written as a delta so it leaves the loop's child session."""
+    delta = _run(feedback)[0].actions.state_delta
+    assert delta[FEEDBACK_KIND_KEY] == kind.value

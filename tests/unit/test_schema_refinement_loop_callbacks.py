@@ -13,6 +13,8 @@ See docs/superpowers/specs/2026-07-29-schema-refinement-loop-latency-design.md.
 from types import SimpleNamespace
 
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+    FEEDBACK_KIND_KEY,
+    VerdictKind,
     prepare_refinement_loop_invocation,
     refinement_loop,
     reset_schema_refinement_turn_budget,
@@ -29,10 +31,12 @@ def test_first_invocation_this_turn_resets_feedback_and_proceeds():
     state = {
         "schema_refinement_calls_this_turn": 0,
         "feedback": "stale text from a previous turn",
+        "feedback_kind": "mechanical",
     }
     result = prepare_refinement_loop_invocation(_ctx(state))
     assert result is None
     assert state["feedback"] == ""
+    assert state[FEEDBACK_KIND_KEY] == VerdictKind.NONE.value
     assert state["schema_refinement_calls_this_turn"] == 1
 
 
