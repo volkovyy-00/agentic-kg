@@ -160,6 +160,11 @@ def test_the_proposal_step_is_told_the_problems_in_the_second_round(
     assert "plot_id" in instruction
     assert PLAN_PROBLEM_HEADER in instruction
 
+    # KG-30 AC3: the kind reaches the proposal step through its own
+    # placeholder -- none in round 1 (the reset), mechanical in round 2.
+    assert "Kind of feedback: none" in str(requests[0].config.system_instruction)
+    assert "Kind of feedback: mechanical" in instruction
+
     # AC2: the problem persists (the scripted proposal never changes the plan),
     # so what the coordinator gets back is a retry, not the critic's 'valid'.
     results = [
@@ -239,3 +244,7 @@ def test_a_second_loop_call_in_the_same_turn_quotes_the_composite(
     assert results[1].startswith("stopped:")
     assert "plot_id" in results[1]
     assert "last verdict: valid" not in results[1]
+
+    # KG-30: the kind travelled out of the loop's child session with the delta,
+    # so the short-circuit names it.
+    assert "mechanical check finding" in results[1]

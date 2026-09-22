@@ -1,4 +1,5 @@
 import logging
+from enum import StrEnum
 from typing import AsyncGenerator, Optional
 
 from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
@@ -38,6 +39,31 @@ EMPTY_VERDICT_SUMMARY = (
     "'get_proposed_construction_plan_with_approval_check' and judge the "
     "plan yourself rather than running the loop again on no feedback."
 )
+
+
+class VerdictKind(StrEnum):
+    """Which kind of claim the 'feedback' slot holds (KG-30).
+
+    Set from the branch that wrote the slot, never read off its text:
+    recognising a kind by wording is what this exists to stop.
+
+    - MECHANICAL: find_plan_problems found problems. A surviving critic
+      remainder may ride along, but the whole is mechanical -- no user
+      decision clears it, since approval refuses the plan regardless.
+    - CRITIC: no mechanical problem; the critic's own, non-empty verdict.
+    - NONE: no mechanical problem and no critic text.
+    """
+
+    MECHANICAL = "mechanical"
+    CRITIC = "critic"
+    NONE = "none"
+
+
+# A sibling of 'feedback' rather than a structured value replacing it: the
+# critic writes 'feedback' through output_key, which stores a string because
+# the critic has no output_schema, and ADK renders {feedback} with str().
+# Written only by prepare_refinement_loop_invocation and CheckStatusAndEscalate.
+FEEDBACK_KIND_KEY = "feedback_kind"
 
 
 def _normalized(text: str) -> str:
@@ -113,6 +139,32 @@ def _compose_feedback(verdict: str, problems: list[str]) -> str:
 from .variants import variants
 
 
+def _stopped_message(kind: str, feedback: str) -> str:
+    """The turn cap's short-circuit result, phrased by the slot's kind.
+
+    Begins 'stopped:' and never 'retry', which the coordinator routes on. An
+    unknown or absent kind reads as NONE, which quotes nothing: the slot is
+    empty on every path that tags it none.
+    """
+    head = "stopped: schema_refinement_loop already ran once this turn."
+    read = (
+        "Do not call it again this turn -- call "
+        "get_proposed_construction_plan_with_approval_check and present that plan"
+    )
+    if kind == VerdictKind.MECHANICAL:
+        return (
+            f"{head} Its last verdict is a mechanical check finding, which "
+            f"approval will refuse whatever the user decides:\n{feedback}\n"
+            f"{read} together with those problems, and ask the user what to change."
+        )
+    if kind == VerdictKind.CRITIC:
+        return (
+            f"{head} Its last verdict is the critic's opinion:\n{feedback}\n"
+            f"{read} together with that verdict, and let the user decide."
+        )
+    return f"{head} It recorded no verdict. {read}, and let the user decide."
+
+
 def prepare_refinement_loop_invocation(
     callback_context: CallbackContext,
 ) -> Optional[types.Content]:
@@ -122,10 +174,11 @@ def prepare_refinement_loop_invocation(
     LoopAgent.run_async, while each sub-agent's before_agent_callback would
     refire on every internal iteration).
 
-    Resets 'feedback' for a fresh invocation, and enforces at most one
-    invocation of this loop per user turn: increment the counter before
-    checking it, and leave 'feedback' untouched on the short-circuited path
-    so the returned message can quote the critic's actual last verdict.
+    Resets 'feedback' (and its kind, to none) for a fresh invocation, and
+    enforces at most one invocation of this loop per user turn: increment
+    the counter before checking it, and leave 'feedback' untouched on the
+    short-circuited path so the returned message can quote the last verdict,
+    phrased by its kind.
 
     Scope caveat: the budget is per coordinator entry, not strictly per user
     message. reset_schema_refinement_turn_budget fires on every entry to
@@ -138,22 +191,23 @@ def prepare_refinement_loop_invocation(
     calls = callback_context.state.get("schema_refinement_calls_this_turn", 0) + 1
     callback_context.state["schema_refinement_calls_this_turn"] = calls
     if calls > 1:
-        last_feedback = callback_context.state.get("feedback", "")
         return types.Content(
             role="model",
             parts=[
                 types.Part(
-                    text=(
-                        "stopped: schema_refinement_loop already ran once this turn "
-                        f"(last verdict: {last_feedback}). Do not call it again this "
-                        "turn -- call get_proposed_construction_plan_with_approval_check "
-                        "and present that plan together with the verdict above, and let "
-                        "the user decide."
+                    text=_stopped_message(
+                        str(
+                            callback_context.state.get(
+                                FEEDBACK_KIND_KEY, VerdictKind.NONE.value
+                            )
+                        ),
+                        str(callback_context.state.get("feedback", "")),
                     )
                 )
             ],
         )
     callback_context.state["feedback"] = ""
+    callback_context.state[FEEDBACK_KIND_KEY] = VerdictKind.NONE.value
     return None
 
 
@@ -235,7 +289,13 @@ class CheckStatusAndEscalate(BaseAgent):
             yield Event(
                 author=self.name,
                 content=types.Content(role="model", parts=[types.Part(text=summary)]),
-                actions=EventActions(escalate=False, state_delta={"feedback": summary}),
+                actions=EventActions(
+                    escalate=False,
+                    state_delta={
+                        "feedback": summary,
+                        FEEDBACK_KIND_KEY: VerdictKind.MECHANICAL.value,
+                    },
+                ),
             )
             return
 
@@ -268,13 +328,19 @@ class CheckStatusAndEscalate(BaseAgent):
         # the critic did not answer, not that it found problems, so point the
         # coordinator at the plan rather than at another blind re-run.
         summary = text if text else EMPTY_VERDICT_SUMMARY
-        actions = EventActions(escalate=should_stop)
+        # Every pass-through tags the slot, so the kind is always this
+        # iteration's own. Emptiness of the critic's text is the branch taken
+        # above (should_stop, summary), not a reading of its wording.
+        kind = VerdictKind.CRITIC if text else VerdictKind.NONE
+        delta: dict[str, str] = {FEEDBACK_KIND_KEY: kind.value}
         if stale:
-            # The only pass-through that writes state. Round 1's composite
-            # already reached the PARENT session through its own state_delta,
-            # so leaving it would let prepare_refinement_loop_invocation quote
-            # problems this plan no longer has in its 'stopped:' message.
-            actions.state_delta = {"feedback": ""}
+            # The only pass-through that writes 'feedback' itself. Round 1's
+            # composite already reached the PARENT session through its own
+            # state_delta, so leaving it would let
+            # prepare_refinement_loop_invocation quote problems this plan no
+            # longer has in its 'stopped:' message.
+            delta["feedback"] = ""
+        actions = EventActions(escalate=should_stop, state_delta=delta)
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=summary)]),
@@ -319,26 +385,37 @@ root_agent = LlmAgent(
       relationship_type, unique_column_name, from/to node labels and columns, and properties. If your
       description and the tool result differ on any field, the tool result is correct and yours is wrong.
     - After calling 'schema_refinement_loop', do not assume the requested change was made, and do not
-      report it as made. The loop returns only the critic's final verdict ('valid' or 'retry' plus
-      feedback), never the plan itself and never raw tool output such as column statistics — a verdict
+      report it as made. The loop returns only its final verdict ('valid' or 'retry' plus feedback, from
+      the critic or from the plan checks), never the plan itself and never raw tool output such as column
+      statistics — a verdict
       is not evidence of what the plan says. Call 'get_proposed_construction_plan_with_approval_check'
       and compare the result against what the user asked for. If the change is missing, or if something
       the user previously approved has changed back or otherwise drifted, say so plainly and run the
       loop again with feedback naming both the requested change and the regression — do not present the
       plan as if it were correct.
-    - If the verdict the loop returns begins with 'retry', the critic found problems that are still in
-      the plan: call 'schema_refinement_loop' again, passing that retry feedback, instead of presenting a
+    - If the verdict the loop returns begins with 'retry', the loop found problems that are still in the
+      plan: call 'schema_refinement_loop' again, passing that retry feedback, instead of presenting a
       plan with known problems for approval (the loop only runs once per turn -- if you have already run
       it this turn, present the plan instead). Do this at most once for a given problem. If the loop
-      returns 'retry' a second time, stop calling it: some objections cannot be fixed by changing the
-      schema, because they are properties of the data. Call
-      'get_proposed_construction_plan_with_approval_check', show the user that plan together with the
-      critic's remaining objections, and let them decide whether to approve it as it stands.
+      returns 'retry' a second time, stop calling it and call
+      'get_proposed_construction_plan_with_approval_check'. What you tell the user depends on that call:
+      - If it returns an error saying there is no proposed construction plan, nothing has been proposed
+        yet: tell the user so plainly, and do not describe any plan or any problems with one.
+      - If it returns any other error, the problems it lists are mechanical: approval will refuse this
+        plan whatever the user decides. Show the plan and those problems, say plainly that it cannot be
+        approved as it stands, and ask the user what to change. Never offer it for approval.
+      - If it succeeds, the remaining objections are the critic's: some cannot be fixed by changing the
+        schema, because they are properties of the data. Show the plan together with those objections,
+        and let the user decide whether to approve it as it stands.
     - If the verdict the loop returns begins with 'stopped:', 'schema_refinement_loop' has already run once
       this turn and refused to run again -- do not call it again this turn no matter what. Call
-      'get_proposed_construction_plan_with_approval_check' and present that plan together with the
-      verdict's last-known feedback (quoted in the 'stopped:' message), and let the user decide whether to
-      approve it or ask for another change, which will run in a fresh turn with a new budget.
+      'get_proposed_construction_plan_with_approval_check'. If it returns an error saying there is no
+      proposed construction plan, tell the user nothing has been proposed yet. If the 'stopped:' message
+      calls its verdict a mechanical check finding, or the call returns any other error, show the plan with
+      those problems, say plainly that it cannot be approved as it stands, and ask the user what to change,
+      which will run in a fresh turn with a new budget. Otherwise present that plan together with the
+      verdict quoted in the 'stopped:' message, and let the user decide whether to approve it or ask for
+      another change, which will run in a fresh turn with a new budget.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.

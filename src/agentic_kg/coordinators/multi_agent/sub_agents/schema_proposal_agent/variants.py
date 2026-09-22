@@ -152,6 +152,10 @@ variants = {
             <feedback>
             {feedback}
             </feedback>
+            Kind of feedback: {feedback_kind?}
+            - mechanical: the plan checks found these problems; every one must be fixed.
+            - critic: the critic's review of the plan; weigh it.
+            - none: there is no feedback this round.
 
             When feedback refers to an existing construction, identify that construction and remove or
             replace it using the 'remove_node_construction' or 'remove_relationship_construction' tool

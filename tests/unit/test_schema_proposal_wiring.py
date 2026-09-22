@@ -8,8 +8,10 @@ reachable, and the revision paragraph not naming property_types.
 import asyncio
 import inspect
 import re
+from types import SimpleNamespace
 
 import pytest
+from google.adk.utils.instructions_utils import inject_session_state
 
 from agentic_kg.common.value_types import ALLOWED_TYPES
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
@@ -372,3 +374,81 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
         f"the coordinator names {sorted(missing)}, which it cannot call. "
         f"Either wire the tool in or stop advertising it."
     )
+
+
+def _render_proposal_instruction(state):
+    """Render the proposal instruction the way ADK does, against a bare state."""
+    ctx = SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            session=SimpleNamespace(state=state), artifact_service=None
+        )
+    )
+    template = variants["schema_proposal_agent_v1"]["instruction"]
+    return asyncio.run(inject_session_state(template, ctx))
+
+
+def test_the_proposal_instruction_renders_without_a_kind():
+    """The placeholder is optional: a state with no 'feedback_kind' yet must
+    render, not raise KeyError and kill the turn."""
+    rendered = _render_proposal_instruction({"feedback": ""})
+    assert "Kind of feedback: \n" in rendered
+
+
+def test_the_proposal_instruction_renders_the_kind():
+    rendered = _render_proposal_instruction(
+        {"feedback": "x", "feedback_kind": "critic"}
+    )
+    assert "Kind of feedback: critic" in rendered
+
+
+def test_the_kind_gloss_carries_no_approval_framing():
+    """PR #20: the proposal step's context holds no approval or readiness
+    framing. Scoped to the lines this ticket added."""
+    template = variants["schema_proposal_agent_v1"]["instruction"]
+    start = template.index("Kind of feedback:")
+    gloss = template[start : template.index("no feedback this round", start)]
+    assert "approv" not in gloss.lower()
+    assert "ready" not in gloss.lower()
+
+
+def _instruction_words():
+    """root_agent's instruction with whitespace collapsed, so a phrase may
+    wrap across source lines."""
+    return " ".join(root_agent.instruction.split())
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "the critic's final verdict",
+        "the critic found problems that are still in the plan",
+        "together with the critic's remaining objections",
+    ],
+)
+def test_the_coordinator_no_longer_calls_every_verdict_the_critics(phrase):
+    """KG-30: the three sentences that attributed a retry to the critic
+    whichever writer filled the slot."""
+    assert phrase not in _instruction_words()
+
+
+def test_the_coordinator_splits_a_second_retry_on_the_read_tool():
+    """KG-30 AC1/AC4. The coordinator never sees session state, so its signal
+    is the read tool's status: no plan, mechanical problems, or success. The
+    no-plan branch uses the read tool's own wording."""
+    words = _instruction_words()
+    no_plan = "error saying there is no proposed construction plan"
+    mechanical = "cannot be approved as it stands"
+    critic = "let the user decide whether to approve it as it stands"
+    assert no_plan in words
+    assert mechanical in words
+    assert critic in words
+    assert "no proposed construction plan" in (
+        construction_plan_tools.NO_PROPOSED_PLAN_MESSAGE.lower()
+    )
+    # The mechanical branch comes first, so it is read before the critic one.
+    assert words.index(mechanical) < words.index("properties of the data")
+
+
+def test_the_coordinator_reads_the_stopped_kind():
+    words = _instruction_words()
+    assert "calls its verdict a mechanical check finding" in words
