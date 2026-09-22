@@ -409,3 +409,46 @@ def test_the_kind_gloss_carries_no_approval_framing():
     gloss = template[start : template.index("no feedback this round", start)]
     assert "approv" not in gloss.lower()
     assert "ready" not in gloss.lower()
+
+
+def _instruction_words():
+    """root_agent's instruction with whitespace collapsed, so a phrase may
+    wrap across source lines."""
+    return " ".join(root_agent.instruction.split())
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "the critic's final verdict",
+        "the critic found problems that are still in the plan",
+        "together with the critic's remaining objections",
+    ],
+)
+def test_the_coordinator_no_longer_calls_every_verdict_the_critics(phrase):
+    """KG-30: the three sentences that attributed a retry to the critic
+    whichever writer filled the slot."""
+    assert phrase not in _instruction_words()
+
+
+def test_the_coordinator_splits_a_second_retry_on_the_read_tool():
+    """KG-30 AC1/AC4. The coordinator never sees session state, so its signal
+    is the read tool's status: no plan, mechanical problems, or success. The
+    no-plan branch uses the read tool's own wording."""
+    words = _instruction_words()
+    no_plan = "error saying there is no proposed construction plan"
+    mechanical = "cannot be approved as it stands"
+    critic = "let the user decide whether to approve it as it stands"
+    assert no_plan in words
+    assert mechanical in words
+    assert critic in words
+    assert "no proposed construction plan" in (
+        construction_plan_tools.NO_PROPOSED_PLAN_MESSAGE.lower()
+    )
+    # The mechanical branch comes first, so it is read before the critic one.
+    assert words.index(mechanical) < words.index("properties of the data")
+
+
+def test_the_coordinator_reads_the_stopped_kind():
+    words = _instruction_words()
+    assert "calls its verdict a mechanical check finding" in words
