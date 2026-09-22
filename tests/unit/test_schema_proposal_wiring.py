@@ -8,8 +8,10 @@ reachable, and the revision paragraph not naming property_types.
 import asyncio
 import inspect
 import re
+from types import SimpleNamespace
 
 import pytest
+from google.adk.utils.instructions_utils import inject_session_state
 
 from agentic_kg.common.value_types import ALLOWED_TYPES
 from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent import (
@@ -372,3 +374,38 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
         f"the coordinator names {sorted(missing)}, which it cannot call. "
         f"Either wire the tool in or stop advertising it."
     )
+
+
+def _render_proposal_instruction(state):
+    """Render the proposal instruction the way ADK does, against a bare state."""
+    ctx = SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            session=SimpleNamespace(state=state), artifact_service=None
+        )
+    )
+    template = variants["schema_proposal_agent_v1"]["instruction"]
+    return asyncio.run(inject_session_state(template, ctx))
+
+
+def test_the_proposal_instruction_renders_without_a_kind():
+    """The placeholder is optional: a state with no 'feedback_kind' yet must
+    render, not raise KeyError and kill the turn."""
+    rendered = _render_proposal_instruction({"feedback": ""})
+    assert "Kind of feedback: \n" in rendered
+
+
+def test_the_proposal_instruction_renders_the_kind():
+    rendered = _render_proposal_instruction(
+        {"feedback": "x", "feedback_kind": "critic"}
+    )
+    assert "Kind of feedback: critic" in rendered
+
+
+def test_the_kind_gloss_carries_no_approval_framing():
+    """PR #20: the proposal step's context holds no approval or readiness
+    framing. Scoped to the lines this ticket added."""
+    template = variants["schema_proposal_agent_v1"]["instruction"]
+    start = template.index("Kind of feedback:")
+    gloss = template[start : template.index("no feedback this round", start)]
+    assert "approv" not in gloss.lower()
+    assert "ready" not in gloss.lower()
