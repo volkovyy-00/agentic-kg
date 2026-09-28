@@ -122,8 +122,12 @@ def strip_transfer_to_agent(
     is never what a strip wants.
 
     All three surfaces matter. tools_dict is ADK's dispatch table, so removing
-    it makes a call the model remembers from an earlier turn a hard error
-    (functions._get_tool raises ValueError) rather than a working exit.
+    it turns a call the model remembers from an earlier turn into a tool error
+    rather than a working exit: google-adk 2.9 answers an unknown tool with
+    build_tool_not_found_response (flows/llm_flows/_tool_error_handler.py),
+    which lists the tools the agent can call, and the agent keeps the turn.
+    Nothing but RunConfig.max_llm_calls (default 500) bounds a model that keeps
+    calling it anyway.
     config.tools is the schema the provider actually receives, so leaving it
     would keep offering the model the tool. system_instruction is where ADK
     tells the model the tool exists at all.

@@ -242,11 +242,12 @@ warning rather than failing — check logs after any ADK bump.
 
 **Always pair the strip with `drop_foreign_context`**: `before_model_callback=[drop_foreign_context,
 strip_transfer_to_agent]`. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
-rewrites into a `"For context: [kg_construction_agent_v1] called tool transfer_to_agent…"` turn — a worked
-example of the call the model then copies, after the strip already removed the tool from `tools_dict`. ADK then
-raises `ValueError` mid-turn: a dead turn with no response and no spinner (the swallowed-exception mode; debug
-from the `adk web` stdout, per the *Two coordinators* section). `user_intent_agent` is the most exposed, since the
-interview is the stickiest phase. Only the coordinator lacks `drop_foreign_context`, by design: its transfer tool
+rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with parameters:`` — a
+worked example of the call the model then copies, after the strip already removed the tool from `tools_dict`.
+On google-adk 2.9 that call no longer kills the turn: ADK answers it with an error listing the agent's own tools
+(`build_tool_not_found_response`), so the model can recover. But every copied call still costs a model call, and
+nothing but `RunConfig.max_llm_calls` (500) bounds a model that keeps copying it. `user_intent_agent` is the most
+exposed, since the interview is the stickiest phase. Only the coordinator lacks `drop_foreign_context`, by design: its transfer tool
 is never stripped, since that is how the workflow advances.
 
 ### Tool results

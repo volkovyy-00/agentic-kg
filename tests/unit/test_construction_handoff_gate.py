@@ -10,7 +10,6 @@ unit-testable and is verified by hand (see the plan's Task 5).
 import asyncio
 import inspect
 
-import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
@@ -331,27 +330,79 @@ def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     assert "read_neo4j_cypher" in names
 
 
-@pytest.mark.xfail(
-    run=False,
-    reason="KG-25 Task 4: ADK 2.9 answers an unknown tool with an error, not a raise",
-)
-def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
+    monkeypatch,
+):
     """Pins what happens if a model emits the call from memory of an earlier
-    turn. The strip pops it from tools_dict, so ADK raises
-    (functions.py:565-568) rather than silently transferring."""
+    turn. The strip pops it from tools_dict, so google-adk 2.9 answers an
+    unknown tool with an error the model reads (build_tool_not_found_response,
+    which lists the tools it can call), so no transfer happens and the agent
+    keeps the turn. Structure only, not ADK's wording, which is private."""
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
         CapturingLlm(
             model="scripted",
             responses=[
-                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"}),
+                _text("still here"),
             ],
         ),
     )
-    turn = _run_one_turn(graph_construction_agent, "construction_hard_error_test")
-    with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(turn)
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_transfer_error_test")
+    )
+
+    replies = [
+        part.function_response
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response and part.function_response.name == "transfer_to_agent"
+    ]
+    assert len(replies) == 1
+    assert "finished" in (replies[0].response or {})["error"]
+    assert not any(event.actions.transfer_to_agent for event in events)
+    # The error went back to this agent's own model, which answered it.
+    assert len(graph_construction_agent.model.requests) == 2
+
+
+def test_transfer_and_finished_in_one_reply_neither_transfers_nor_exits(
+    monkeypatch,
+):
+    """Both exits in one reply, without a confirmation: the hidden tool gets
+    ADK's error and the gated 'finished' refuses, so the agent keeps the turn."""
+    both = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="transfer_to_agent",
+                        args={"agent_name": "kg_construction_agent_v1"},
+                    )
+                ),
+                types.Part(function_call=types.FunctionCall(name="finished", args={})),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(model="scripted", responses=[both, _text("still here")]),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_both_exits_test")
+    )
+
+    replies = {
+        part.function_response.name: part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response
+    }
+    assert "error" in replies["transfer_to_agent"]
+    assert is_error(replies["finished"])
+    assert not any(event.actions.transfer_to_agent for event in events)
 
 
 def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
