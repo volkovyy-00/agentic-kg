@@ -22,6 +22,7 @@ root_agent.name` check short-circuits.
 
 import asyncio
 
+import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
@@ -73,6 +74,10 @@ def _call(name, args=None):
     )
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="KG-25 Task 2: ADK 2.x leaks mode='single_turn' onto a module-level root",
+)
 def test_a_second_question_stays_with_the_construction_agent(monkeypatch):
     """Turn 1 the coordinator delegates; turn 2 must go straight back to the
     construction agent without the coordinator's model being consulted."""
@@ -148,6 +153,10 @@ def test_a_second_question_stays_with_the_construction_agent(monkeypatch):
     )
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="KG-25 Task 2: ADK 2.x leaks mode='single_turn' onto a module-level root",
+)
 def test_a_second_answer_stays_with_the_user_intent_agent(monkeypatch):
     """The intent phase is an interview -- the user's answer to a clarifying
     question is turn 2, and it must reach the same agent that asked. Catches

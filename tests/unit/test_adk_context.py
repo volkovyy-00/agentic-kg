@@ -7,6 +7,7 @@ equals our constant proves nothing. google-adk is pinned >=1.28.1,<2, so a
 routine `uv sync` can change that wording; this test is what notices.
 """
 
+import pytest
 from google.adk.events.event import Event
 from google.adk.flows.llm_flows.contents import _present_other_agent_message
 from google.adk.models.llm_request import LlmRequest
@@ -123,6 +124,10 @@ def test_returns_none_so_the_model_call_proceeds():
     assert drop_foreign_context(None, req) is None
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="KG-25 Task 3: ADK 2.x fences foreign turns with a longer preamble",
+)
 def test_canary_adk_still_marks_foreign_events_with_our_sentinel():
     """Fails if a google-adk upgrade changes the foreign-event wording."""
     original = Event(

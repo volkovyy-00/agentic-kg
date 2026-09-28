@@ -7,12 +7,15 @@ updates:
     labels:
       - "dependencies"
     ignore:
-      # pyproject.toml pins these below their next major for documented compatibility
-      # reasons (google-adk 2.x is a breaking rewrite; litellm/openai are coupled to a
-      # specific reasoning-model streaming fix) -- Dependabot's default "library" handling
-      # can otherwise widen a manifest's upper bound itself to admit a new major release.
+      # pyproject.toml pins these below their next release line for documented
+      # compatibility reasons (litellm/openai are coupled to a specific reasoning-model
+      # streaming fix) -- Dependabot's default "library" handling can otherwise widen a
+      # manifest's upper bound itself to admit it.
+      # google-adk's pin is a single minor-version window (>=2.9.2,<2.10): 2.x minors
+      # change behaviour this code relies on, so each move is its own ticket (KG-25,
+      # KG-42) -- ignore minor too, not just major. Patches inside the window still arrive.
       - dependency-name: "google-adk"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "openai"
         update-types: ["version-update:semver-major"]
       # litellm's pin is a single minor-version window (>=1.83.9,<1.84), tied to a hard

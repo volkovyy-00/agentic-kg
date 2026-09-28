@@ -65,6 +65,7 @@ def _transfer_setup(*, transfer_to_parent=True, description="proposes a schema")
     agent = SimpleNamespace(
         name="graph_construction_agent_v1",
         sub_agents=[],
+        mode="chat",
         disallow_transfer_to_parent=not transfer_to_parent,
         disallow_transfer_to_peers=False,
     )

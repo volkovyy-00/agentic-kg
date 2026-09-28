@@ -107,18 +107,18 @@ def test_proposed_property_types_stays_optional_in_the_declaration(fn):
 
     History: google-adk 1.10.0 validated that a parameter's default is an
     instance of its annotation, so 'dict = None' raised ValueError at toolset
-    construction and took down the entire schema-proposal phase. The pinned
-    minimum, 1.28.1, no longer raises for 'dict = None' and still declares the
-    field optional, so this test no longer guards a crash. It still guards the
-    declaration contract. Keep the 'Optional[dict] = None' annotation: it is
-    the honest type, and it stays safe on any 1.x release that restores the
-    check. Building the declaration here reproduces that construction step as
-    a unit test."""
+    construction and took down the entire schema-proposal phase. Later releases
+    stopped raising, and google-adk 2.x declares tools as a JSON schema
+    (parameters_json_schema; declaration.parameters is None), where the field is
+    anyOf[object, null] with default null and not required. The test guards that
+    declaration contract, not a crash. Keep the 'Optional[dict] = None'
+    annotation: it is the honest type. Building the declaration here reproduces
+    that construction step as a unit test."""
     from google.adk.tools.function_tool import FunctionTool
 
-    declared = FunctionTool(fn)._get_declaration()
-    props = (declared.parameters.properties or {}) if declared.parameters else {}
-    required = declared.parameters.required or [] if declared.parameters else []
+    schema = FunctionTool(fn)._get_declaration().parameters_json_schema or {}
+    props = schema.get("properties", {})
+    required = schema.get("required", [])
 
     assert "proposed_property_types" in props
     assert "proposed_property_types" not in required
