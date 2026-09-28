@@ -109,10 +109,11 @@ When a turn in the dev UI produces no visible response and no spinner, the UI al
 tool call, routing bug, and swallowed exception all look identical from the browser). Cheapest checks first:
 poll `GET /apps/{app}/users/{user}/sessions/{id}` directly (frozen event count = nothing happened), then the
 undocumented `GET /dev/apps/{app}/debug/trace/session/{id}` (spans have `start_time`/`end_time`; a model call that
-raises still gets its `call_llm` span, with error status but no request/response attributes, which ADK sets only per
-response), then the `adk web` server's own log output, which is the only place a swallowed exception actually
-surfaces. An exception that escapes the run is not swallowed: on google-adk 2.9 `/run_sse` sends it to the browser,
-which shows its one-line message in a snackbar. Never reload the tab while a turn is genuinely streaming.
+raises still gets a `call_llm` span, but with no attributes at all — ADK sets them only per response — and this
+endpoint's span JSON carries no status field at all), then the `adk web` server's own log output, which is the only
+place a swallowed exception actually surfaces. An exception that escapes the run is not swallowed: on google-adk 2.9
+`/run_sse` sends it to the browser, which shows the escaped exception as a red error event in the chat plus a
+one-line snackbar. Never reload the tab while a turn is genuinely streaming.
 
 Note there are **two separate implementations of similarly-named agents**: `src/agentic_kg/agents/` (standalone
 versions, e.g. `cypher_agent` — the one actually wired into `single_agent` — plus `user_intent_agent`, which is not
@@ -341,9 +342,10 @@ read if you add cost tracking.
 `get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
 (e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
 exceeds the balance, the call fails with a 402. On google-adk 1.x the dev UI showed that as an indistinguishable
-hang; on 2.9 the error reaches the browser only as a one-line snackbar, and its trace span carries error status but
-no response. If reasoning-model calls stop working, check account balance and the `adk web` server's own log output
-(it logs the real exception) before assuming a code regression.
+hang; on 2.9 the error shows as a red error event in the chat plus a one-line snackbar, and its `call_llm` span has
+no request/response attributes at all (ADK sets them only per response). If reasoning-model calls stop working,
+check account balance and the `adk web` server's own log output (it logs the real exception) before assuming a
+code regression.
 
 ### Domain models
 
