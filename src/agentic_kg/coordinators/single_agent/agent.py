@@ -19,6 +19,7 @@ from .variants import variants
 AGENT_NAME = SINGLE_AGENT_COORDINATOR
 single_agent_agent = Agent(
     name=AGENT_NAME,
+    mode="chat",
     model=get_llm(LlmKind.conversational),
     description="Knowledge graph construction using Neo4j and cypher.",  # Crucial for delegation later
     instruction=variants[AGENT_NAME]["instruction"],

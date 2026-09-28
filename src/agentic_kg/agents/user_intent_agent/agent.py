@@ -11,6 +11,7 @@ AGENT_NAME = "user_intent_agent_v1"
 def build_user_intent_agent() -> Agent:
     return Agent(
         name=AGENT_NAME,
+        mode="chat",
         model=get_llm(LlmKind.reasoning),
         description="Knowledge graph use case ideation.",
         instruction=variants[AGENT_NAME]["instruction"],

@@ -21,6 +21,7 @@ from .sub_agents import (
 
 full_workflow_agent = LlmAgent(
     name=MULTI_AGENT_COORDINATOR,
+    mode="chat",
     description="""Knowledge graph construction using Neo4j.""",
     model=get_llm(LlmKind.conversational),
     instruction="""You are an expert in knowledge graph construction using Neo4j.
