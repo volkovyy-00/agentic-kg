@@ -58,9 +58,9 @@ graph_construction_agent = Agent(
     #
     # If the model emits the call anyway, refuse_transfer_to_agent (its
     # before_tool_callback) answers it before ADK's generic not-found
-    # reply, naming 'finished' as the way out. If the model keeps calling
-    # it, the turn ends with a short reply to the user after the third try
-    # -- pinned by
+    # reply, naming 'finished' as the way out. If the model does nothing but
+    # retry it, the turn ends with a short reply to the user after the third
+    # such reply in a row -- pinned by
     # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase
     # and test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly.
     #

@@ -35,7 +35,7 @@ from google.genai import types
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
     HIDDEN_TRANSFER_TURN_END,
-    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
+    MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
     TRANSFER_TOOL_NAME,
     _without_transfer_block,
     count_hidden_transfer_replies,
@@ -399,7 +399,9 @@ def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
     """The model call after the capped reply is replaced by a text reply, so
     the user gets an answer and the turn ends without another model call."""
     context = _callback_context()
-    replies = [_reply(TRANSFER_TOOL_NAME)] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
+    replies = [_reply(TRANSFER_TOOL_NAME)] * (
+        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1
+    )
 
     assert _run_replies(context, replies) is None
 
@@ -407,6 +409,30 @@ def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
     assert ended is not None
     assert not ended.get_function_calls()
     assert ended.content.parts[0].text == HIDDEN_TRANSFER_TURN_END
+
+
+def test_a_model_that_recovers_after_each_slip_keeps_its_turn():
+    """The cap counts replies in a row. A model that takes each refusal and
+    goes back to work is not stuck, however many times it slips in a long
+    turn."""
+    context = _callback_context()
+    slip_then_work = [_reply(TRANSFER_TOOL_NAME), _reply("read_neo4j_cypher")]
+
+    replies = slip_then_work * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    assert _run_replies(context, replies) is None
+
+
+def test_a_reply_that_also_calls_a_real_tool_resets_the_count():
+    """So the reply that reaches the cap has run nothing but refusals, and no
+    real tool result goes unreported when the turn ends."""
+    context = _callback_context()
+    replies = [_reply(TRANSFER_TOOL_NAME)] * (
+        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1
+    )
+    replies.append(_reply(TRANSFER_TOOL_NAME, "confirm_construction_handoff"))
+
+    assert _run_replies(context, replies) is None
+    assert list(context.state.values()) == [0]
 
 
 def test_parallel_calls_in_one_reply_count_once():
@@ -440,7 +466,7 @@ def test_each_agent_keeps_its_own_count():
     construction = _callback_context(state)
     _run_replies(
         construction,
-        [_reply(TRANSFER_TOOL_NAME)] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1),
+        [_reply(TRANSFER_TOOL_NAME)] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1),
     )
 
     retrieval = _callback_context(state, agent="graphrag_agent_v2")

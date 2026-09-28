@@ -257,18 +257,21 @@ parameters:`` — a worked example of the call the model then copies, after the 
 coordinator lacks `drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the
 workflow advances.
 
-**A call made anyway is refused, and capped per turn**: the three agents take all their transfer-related callbacks
-from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the turn end, the strip and
-`drop_foreign_context` as before-model callbacks, the reply counter as the after-model callback, and
-`refuse_transfer_to_agent` as the tool callback. They only work as a set; wire a fourth gated agent the same way.
-ADK runs before-tool callbacks ahead of its own not-found reply (`build_tool_not_found_response`), which invites a
-retry and is bounded only by `RunConfig.max_llm_calls` (500). The refusal answers every call instead, with a
-`tool_error` naming `finished` as the exit. The counter counts model *replies* that call the hidden tool, per agent,
-in `temp:` state (invocation-scoped, never persisted, so no reset callback). Past the third such reply in a turn, the
-before-model callback returns a short text reply for the user in place of the next model call, which ends the turn.
-Never end that turn by raising, or with `skip_summarization`: raising leaves the call unanswered in history, which
-providers reject on every later turn, and `skip_summarization` ends the turn on a bare function response with no
-reply to the user.
+**A call made anyway is refused, and a model stuck retrying it is stopped**: the three agents take all their
+transfer-related callbacks from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the
+turn end, the strip and `drop_foreign_context` as before-model callbacks, the reply counter as the after-model
+callback, and `refuse_transfer_to_agent` as the tool callback. They only work as a set; wire a fourth gated agent
+the same way. If a gated agent needs its own callback of one of those three kinds, extend the helper to take it and
+merge it in: passing the same keyword beside the spread is a `TypeError` at import, and hand-wiring the lists drops
+the set. ADK runs before-tool callbacks ahead of its own not-found reply (`build_tool_not_found_response`), which
+invites a retry and is bounded only by `RunConfig.max_llm_calls` (500). The refusal answers every call instead, with
+a `tool_error` naming `finished` as the exit. The counter counts model *replies in a row* that call nothing but the
+hidden tool, per agent, in `temp:` state (invocation-scoped, never persisted, so no reset callback). Any other
+complete reply resets it, including one that also calls a real tool, so a model that recovers keeps its turn and no
+real tool result goes unreported. After the third such reply in a row, the before-model callback returns a short
+text reply for the user in place of the next model call, which ends the turn. Never end that turn by raising, or
+with `skip_summarization`: raising leaves the call unanswered in history, which providers reject on every later
+turn, and `skip_summarization` ends the turn on a bare function response with no reply to the user.
 
 ### Tool results
 

@@ -19,7 +19,7 @@ from pydantic import Field
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
     HIDDEN_TRANSFER_TURN_END,
-    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
+    MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
     strip_transfer_to_agent,
 )
 from agentic_kg.common.tool_result import is_error, is_success
@@ -458,7 +458,7 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
     model that keeps retrying. The reply past the cap is still answered, and
     the turn ends with a reply to the user instead of another model call, so
     the next turn starts from a complete history and a fresh count."""
-    cap = MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+    cap = MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
@@ -486,12 +486,12 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
     assert not _unanswered_calls(requests[-1])
 
 
-def test_a_real_tool_in_the_capped_reply_still_runs_and_the_user_gets_a_reply(
+def test_a_reply_that_also_runs_a_real_tool_lets_the_model_report_it(
     monkeypatch,
 ):
-    """The capped reply also confirms the handoff: the confirmation is still
-    recorded and answered, and the turn still ends with text for the user
-    rather than on a bare function response."""
+    """The reply that would reach the cap also confirms the handoff. It is not
+    a pure retry, so the count resets: the confirmation is recorded, and the
+    model, not the canned turn end, tells the user what happened."""
     both = LlmResponse(
         content=types.Content(
             role="model",
@@ -510,8 +510,8 @@ def test_a_real_tool_in_the_capped_reply_still_runs_and_the_user_gets_a_reply(
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
-            + [both, _text("never reached")],
+            responses=[_TRANSFER] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1)
+            + [both, _text("your handoff is confirmed")],
         ),
     )
     events = asyncio.run(
@@ -526,9 +526,9 @@ def test_a_real_tool_in_the_capped_reply_still_runs_and_the_user_gets_a_reply(
     }
     assert is_success(responses["confirm_construction_handoff"])
     assert len(graph_construction_agent.model.requests) == (
-        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES + 1
     )
-    assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
+    assert _final_text(events) == "your handoff is confirmed"
 
 
 def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):
@@ -562,14 +562,15 @@ def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):
 
 def test_retrieval_does_not_inherit_constructions_refusals(monkeypatch):
     """A confirmed handoff runs the retrieval agent inside the same turn; its
-    first hidden call is refused, not treated as the construction agent's
-    third."""
+    first hidden call is refused and the turn goes on. Construction's own
+    handoff reply resets its count, and each agent counts under its own key
+    anyway."""
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
+            responses=[_TRANSFER] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1)
             + [_call("confirm_construction_handoff"), _call("finished")],
         ),
     )
