@@ -11,6 +11,7 @@ AGENT_NAME = "user_intent_agent_v1"
 def build_user_intent_agent() -> Agent:
     return Agent(
         name=AGENT_NAME,
+        # Explicit, so ADK 2.x never assigns one: see tests/unit/test_agent_modes.py.
         mode="chat",
         model=get_llm(LlmKind.reasoning),
         description="Knowledge graph use case ideation.",
