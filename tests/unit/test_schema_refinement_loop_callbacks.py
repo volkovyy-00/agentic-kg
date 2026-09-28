@@ -117,9 +117,10 @@ def test_schema_proposal_agent_no_longer_resets_feedback_itself():
 
 
 def test_the_critic_step_starts_every_round_with_an_empty_slot():
-    """KG-29: ADK writes the critic's output_key only when its final response
-    carries text, so a silent critic would otherwise inherit the previous
-    round's verdict. Cleared here, a silent round is structurally no verdict."""
+    """KG-29: the critic's verdict is written only when a model reply arrives
+    (record_critic_verdict), so a critic whose model call fails would otherwise
+    inherit the previous round's verdict. Cleared here, such a round is
+    structurally no verdict."""
     state = {
         "feedback": "retry\n- the previous round's objection",
         FEEDBACK_KIND_KEY: VerdictKind.CRITIC.value,
