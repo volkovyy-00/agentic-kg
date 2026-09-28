@@ -203,9 +203,10 @@ def clear_verdict_before_critic(callback_context: CallbackContext) -> None:
     iteration's own (KG-29).
 
     record_critic_verdict writes the slot only when a model reply arrives, so a
-    critic whose model call fails would otherwise leave the previous
-    iteration's verdict -- the critic's or the loop's composite -- standing as
-    this one's. Cleared here, such an iteration is structurally no verdict.
+    critic whose model call fails or yields no reply would otherwise leave the
+    previous iteration's verdict -- the critic's or the loop's composite --
+    standing as this one's. Cleared here, such an iteration is structurally no
+    verdict.
 
     On the critic, never on schema_proposal_agent: the proposal step runs
     first in each iteration and must still read the previous one's feedback

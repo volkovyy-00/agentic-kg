@@ -177,10 +177,10 @@ may not join on a node property that holds several values per node) and `check_r
   `before_agent_callback`), which also empties `feedback` before every critic run. The critic's verdict is written by
   `record_critic_verdict` (its `after_model_callback`): every complete reply overwrites `feedback`, with `""` if it
   calls a tool, so the run's final answer has the last word and text written beside a tool call never survives. The
-  pre-clear covers a critic whose model call fails, which gets no reply to record. Never use `output_key` for a
-  value code parses: on google-adk 2.x it also stores text an agent writes alongside tool calls, accumulated over
-  its run (KG-25). The `'stopped:'` message and the proposal prompt read it;
-  the coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
+  pre-clear covers a critic whose model call fails or yields no reply, either way leaving nothing to record. Never
+  use `output_key` for a value code parses: on google-adk 2.x it also stores text an agent writes alongside tool
+  calls, accumulated over its run (KG-25). The `'stopped:'` message and the proposal prompt read it; the
+  coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
   `get_proposed_construction_plan_with_approval_check` returns an error. The loop runs at most two iterations, so a
   problem the second revision introduces still surfaces at approval.
 
@@ -241,19 +241,22 @@ block) into every sub-agent with a parent or peers, and it never consulted the g
 `graphrag_agent_v2` and `user_intent_agent_v2` (never `_v1`) therefore run `strip_transfer_to_agent`
 (`common/adk_transfer.py`) as a `before_model_callback`, removing the tool from `tools_dict`, `config.tools` and
 the system instruction. `disallow_transfer_to_parent` was avoided because it also kills phase stickiness
-(`Runner._find_agent_to_run` would re-arbitrate every message through the coordinator). Instruction-block removal
-matches two marker phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a
-warning rather than failing — check logs after any ADK bump.
+(`Runner._find_agent_to_run` would re-arbitrate every message through the coordinator). On google-adk 2.9 either
+disallow flag also makes a blocked `finished` call raise `ValueError`
+(`workflow/utils/_transfer_utils.resolve_and_derive_transfer_context`), so a `make_finished` target must be the
+agent's parent or a peer — one more reason to leave both flags unset. Instruction-block removal matches two marker
+phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning rather than
+failing — check logs after any ADK bump.
 
 **Always pair the strip with `drop_foreign_context`**: `before_model_callback=[drop_foreign_context,
 strip_transfer_to_agent]`. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
-rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with parameters:`` — a
-worked example of the call the model then copies, after the strip already removed the tool from `tools_dict`.
-On google-adk 2.9 that call no longer kills the turn: ADK answers it with an error listing the agent's own tools
-(`build_tool_not_found_response`), so the model can recover. But every copied call still costs a model call, and
-nothing but `RunConfig.max_llm_calls` (500) bounds a model that keeps copying it. `user_intent_agent` is the most
-exposed, since the interview is the stickiest phase. Only the coordinator lacks `drop_foreign_context`, by design: its transfer tool
-is never stripped, since that is how the workflow advances.
+rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with
+parameters:`` — a worked example of the call the model then copies, after the strip already removed the tool from
+`tools_dict`. On google-adk 2.9 that call no longer kills the turn: ADK answers it with an error listing the
+agent's own tools (`build_tool_not_found_response`), so the model can recover. But every copied call still costs a
+model call, and nothing but `RunConfig.max_llm_calls` (500) bounds a model that keeps copying it.
+`user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the coordinator lacks
+`drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the workflow advances.
 
 ### Tool results
 

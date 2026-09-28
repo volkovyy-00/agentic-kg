@@ -70,7 +70,9 @@ graph_construction_agent = Agent(
     # (agents/_agent_router.py find_agent_to_run) from returning this agent
     # for the user's second message, so every follow-up question in the
     # post-construction window would be re-arbitrated by the coordinator.
-    # See adk_transfer.py.
+    # On google-adk 2.9 either flag also makes a blocked 'finished' call
+    # raise ValueError, so a make_finished target must be this agent's
+    # parent or a peer. See adk_transfer.py.
     #
     # 'finished' is unaffected -- it writes actions.transfer_to_agent
     # directly, which ADK acts on after the tool returns and no

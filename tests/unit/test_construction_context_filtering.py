@@ -75,9 +75,9 @@ def _foreign_event():
     """One event shaped exactly as ADK reshapes another agent's turn.
 
     _present_other_agent_message (flows/llm_flows/_fencing.py) sets role and
-    author to 'user' and prepends the sentinel as its own part, so role cannot distinguish this from
-    a real human turn -- which is why drop_foreign_context keys on the sentinel
-    text sitting at parts[0].
+    author to 'user' and prepends the sentinel as its own part, so role cannot
+    distinguish this from a real human turn -- which is why drop_foreign_context
+    keys on the sentinel text sitting at parts[0].
     """
     return Event(
         author="user",

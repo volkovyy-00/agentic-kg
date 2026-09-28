@@ -75,7 +75,9 @@ graphrag_agent = Agent(
     # the door, and would also stop Runner._find_agent_to_run
     # (agents/_agent_router.py find_agent_to_run) from returning this agent
     # for the user's second message, so every follow-up question would be
-    # re-arbitrated by the coordinator. See adk_transfer.py.
+    # re-arbitrated by the coordinator. On google-adk 2.9 either flag also
+    # makes a blocked 'finished' call raise ValueError, so a make_finished
+    # target must be this agent's parent or a peer. See adk_transfer.py.
     #
     # Conditional for the same reason as the reset callback below. v1 is the
     # ungated A/B baseline -- its 'finished' transfers unconditionally, so it

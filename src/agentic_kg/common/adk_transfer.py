@@ -13,7 +13,11 @@ through `_is_transferable_across_agent_tree` when choosing who handles each NEW
 user message, so setting it sends every in-phase follow-up question back
 through the coordinator to be re-arbitrated. A multi-question window is what
 the construction phase is for. Stripping the request instead leaves the flag
-unset, and `_find_agent_to_run` never inspects request contents.
+unset, and `_find_agent_to_run` never inspects request contents. On
+google-adk 2.9 either flag also makes a blocked `finished` call raise
+ValueError (`_transfer_utils.resolve_and_derive_transfer_context`), so a
+`make_finished` target must be the agent's parent or a peer -- one more
+reason not to set it.
 
 The cost is coupling: we remove something ADK built, so we depend on the shape
 it built it in -- marker phrases in an interpolated instruction block, and the

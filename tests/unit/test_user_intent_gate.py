@@ -329,7 +329,8 @@ def test_the_agent_does_not_disallow_transfers():
     disallow_transfer_to_parent would also close the door -- and would make
     Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every mid-interview reply back
-    through the coordinator to be re-arbitrated."""
+    through the coordinator to be re-arbitrated. On google-adk 2.9 either
+    flag also makes a blocked 'finished' call raise ValueError."""
     assert user_intent_agent.disallow_transfer_to_parent is False
     assert user_intent_agent.disallow_transfer_to_peers is False
 
@@ -366,8 +367,8 @@ def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkey
     BY the coordinator's transfer_to_agent call, which ADK rewrites into a
     'For context: ...' turn (flows/llm_flows/_fencing.py) that would otherwise
     sit in history for the whole interview: a worked example of the exact call
-    the strip removes the declaration for. Catches drop_foreign_context being dropped, or
-    being wired somewhere it never runs.
+    the strip removes the declaration for. Catches drop_foreign_context being
+    dropped, or being wired somewhere it never runs.
     """
     monkeypatch.setattr(
         full_workflow_agent,

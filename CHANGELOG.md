@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.8.0] - 2026-09-28
 
 ### Changed
-- **Runs on google-adk 2.9.x (KG-25)**: moved from the 1.x line, which has had no release since 1.39.1, to
+- **Moved to google-adk 2.9.x (KG-25)**: left the 1.x line, which has had no release since 1.39.1, for
   2.9.x, pinned `>=2.9.2,<2.10`; 2.10 follows separately. The agents, their tools and the graph schema
   conventions are unchanged.
 - **Upgrade: delete your local `adk web` session stores (KG-25)**: sessions saved by 1.x are not supported on
@@ -19,7 +19,7 @@ There is no `[Unreleased]` section.
   `adk web` keeps one store per agent, in a `.adk/` folder inside the agents directory; delete them all before
   the first run with `find src -name .adk -type d -prune -exec rm -rf {} +`. Past conversations are lost;
   nothing else is.
-- **A phase agent that tries the hidden transfer tool keeps the turn (KG-25)**: the intent, construction and
+- **Calling the hidden transfer tool stopped ending a phase agent's turn (KG-25)**: the intent, construction and
   retrieval agents cannot hand the user on without the user's confirmation, so ADK's own transfer tool is
   removed from them. On 1.x, a model that called it anyway ended the turn with an error; now it gets an error
   listing the tools it can call and stays in its phase.

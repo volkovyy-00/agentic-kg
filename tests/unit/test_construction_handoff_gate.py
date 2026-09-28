@@ -281,7 +281,9 @@ def test_the_agent_does_not_disallow_transfers():
     disallow_transfer_to_parent would also close the door -- and would make
     Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every in-phase follow-up back
-    through the coordinator. See the spec's 'Why not' section."""
+    through the coordinator. On google-adk 2.9 either flag also makes a
+    blocked 'finished' call raise ValueError. See the spec's 'Why not'
+    section."""
     assert graph_construction_agent.disallow_transfer_to_parent is False
     assert graph_construction_agent.disallow_transfer_to_peers is False
 
@@ -466,8 +468,8 @@ def test_both_model_callbacks_are_present_on_the_construction_agent():
     removes the coordinator's own delegating call, which ADK rewrites into a
     'For context: ... called tool `transfer_to_agent` with parameters: ...'
     message (_present_other_agent_message, flows/llm_flows/_fencing.py) and
-    then keeps in history for every later turn. Either one alone leaves the model a standing worked example of a
-    door it is not supposed to use.
+    then keeps in history for every later turn. Either one alone leaves the
+    model a standing worked example of a door it is not supposed to use.
     """
     callbacks = graph_construction_agent.canonical_before_model_callbacks
     assert drop_foreign_context in callbacks

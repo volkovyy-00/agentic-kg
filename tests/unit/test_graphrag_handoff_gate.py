@@ -297,7 +297,9 @@ def test_the_agent_does_not_disallow_transfers():
     disallow_transfer_to_parent would also close the door -- and would make
     Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every follow-up question back
-    through the coordinator. See the spec's 'Why not' section."""
+    through the coordinator. On google-adk 2.9 either flag also makes a
+    blocked 'finished' call raise ValueError. See the spec's 'Why not'
+    section."""
     assert graphrag_agent.disallow_transfer_to_parent is False
     assert graphrag_agent.disallow_transfer_to_peers is False
 

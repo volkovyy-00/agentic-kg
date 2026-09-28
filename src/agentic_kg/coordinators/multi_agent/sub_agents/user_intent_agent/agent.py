@@ -53,7 +53,9 @@ user_intent_agent = Agent(
     # (agents/_agent_router.py find_agent_to_run) from returning this agent
     # for the user's second message, so every mid-interview reply would be
     # re-arbitrated by the coordinator. An interview is multi-turn by nature.
-    # See adk_transfer.py.
+    # On google-adk 2.9 either flag also makes a blocked 'finished' call
+    # raise ValueError, so a make_finished target must be this agent's
+    # parent or a peer. See adk_transfer.py.
     before_model_callback=(
         [drop_foreign_context, strip_transfer_to_agent] if IS_GATED_VARIANT else None
     ),
