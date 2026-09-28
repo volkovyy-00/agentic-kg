@@ -322,9 +322,9 @@ def test_both_model_callbacks_are_wired_in_order():
     costs a model call answered by a refusal. Same pairing as
     graph_construction_agent, plus the per-turn cap on those refusals."""
     assert user_intent_agent.canonical_before_model_callbacks == [
+        end_turn_past_hidden_transfer_cap,
         drop_foreign_context,
         strip_transfer_to_agent,
-        end_turn_past_hidden_transfer_cap,
     ]
 
 

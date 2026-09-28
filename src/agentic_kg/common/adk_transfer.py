@@ -57,7 +57,8 @@ TRANSFER_TOOL_NAME = "transfer_to_agent"
 # message) and is never persisted, so each turn starts at zero without a reset
 # callback.
 HIDDEN_TRANSFER_REPLIES_KEY_PREFIX = "temp:hidden_transfer_replies:"
-MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN = 2
+# The turn ends after this many such replies, without another model call.
+MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN = 3
 
 HIDDEN_TRANSFER_REFUSAL = (
     "transfer_to_agent is not available to this agent. It hands the user on "
@@ -66,10 +67,12 @@ HIDDEN_TRANSFER_REFUSAL = (
 )
 
 # What the user reads when the cap ends a turn. Written for the user, not the
-# model: it is the turn's last word.
+# model: it is the turn's last word. Direction-neutral, because a model calls
+# the hidden tool to go back as well as forward, and the retrieval agent has
+# no next step at all.
 HIDDEN_TRANSFER_TURN_END = (
-    "I tried to move you to the next step before this one was finished, and "
-    "stopped. Please tell me how you would like to continue."
+    "I couldn't hand you over to another step from here, so I stopped. "
+    "Please tell me how you would like to continue."
 )
 
 
@@ -241,9 +244,11 @@ def count_hidden_transfer_replies(
 def end_turn_past_hidden_transfer_cap(
     callback_context: Any, llm_request: Any
 ) -> Optional[LlmResponse]:
-    """before_model_callback: past the cap, reply to the user instead of the model.
+    """before_model_callback: at the cap, reply to the user instead of the model.
 
-    Runs before the model call that would follow the refusals. Returning a
+    Runs before the model call that would follow the refusals, and first in the
+    list: it does not read the request, and when it answers, ADK skips the
+    callbacks after it, so nothing rewrites a request that is never sent. Returning a
     text response skips that call, and a reply with no function calls ends the
     turn, so the user gets an answer and every call in history already has
     its refusal. The next turn starts at zero.
@@ -251,7 +256,7 @@ def end_turn_past_hidden_transfer_cap(
     del llm_request  # Part of ADK's keyword contract.
     key = HIDDEN_TRANSFER_REPLIES_KEY_PREFIX + callback_context.agent_name
     replies = callback_context.state.get(key, 0)
-    if replies <= MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN:
+    if replies < MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN:
         return None
     logger.warning(
         "%s called %s in %d replies this turn; ending the turn",
@@ -280,9 +285,9 @@ def transfer_guard_callbacks(gated: bool) -> dict[str, Any]:
         return {}
     return {
         "before_model_callback": [
+            end_turn_past_hidden_transfer_cap,
             drop_foreign_context,
             strip_transfer_to_agent,
-            end_turn_past_hidden_transfer_cap,
         ],
         "after_model_callback": count_hidden_transfer_replies,
         "before_tool_callback": refuse_transfer_to_agent,

@@ -399,7 +399,7 @@ def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
     """The model call after the capped reply is replaced by a text reply, so
     the user gets an answer and the turn ends without another model call."""
     context = _callback_context()
-    replies = [_reply(TRANSFER_TOOL_NAME)] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+    replies = [_reply(TRANSFER_TOOL_NAME)] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
 
     assert _run_replies(context, replies) is None
 
@@ -440,7 +440,7 @@ def test_each_agent_keeps_its_own_count():
     construction = _callback_context(state)
     _run_replies(
         construction,
-        [_reply(TRANSFER_TOOL_NAME)] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
+        [_reply(TRANSFER_TOOL_NAME)] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1),
     )
 
     retrieval = _callback_context(state, agent="graphrag_agent_v2")
@@ -485,9 +485,9 @@ def test_the_guard_wires_all_its_callbacks_together_or_none():
 
     assert wired == {
         "before_model_callback": [
+            end_turn_past_hidden_transfer_cap,
             drop_foreign_context,
             strip_transfer_to_agent,
-            end_turn_past_hidden_transfer_cap,
         ],
         "after_model_callback": count_hidden_transfer_replies,
         "before_tool_callback": refuse_transfer_to_agent,

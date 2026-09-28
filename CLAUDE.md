@@ -249,8 +249,8 @@ agent's parent or a peer — one more reason to leave both flags unset. Instruct
 phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning rather than
 failing — check logs after any ADK bump.
 
-**Always pair the strip with `drop_foreign_context`** (`transfer_guard_callbacks` wires
-`before_model_callback=[drop_foreign_context, strip_transfer_to_agent]`). Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
+**Always pair the strip with `drop_foreign_context`**: take both from `**transfer_guard_callbacks(gated=...)`, never
+hand-wired. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
 rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with
 parameters:`` — a worked example of the call the model then copies, after the strip already removed the tool from
 `tools_dict`. `user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the
@@ -258,8 +258,8 @@ coordinator lacks `drop_foreign_context`, by design: its transfer tool is never 
 workflow advances.
 
 **A call made anyway is refused, and capped per turn**: the three agents take all their transfer-related callbacks
-from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the strip, `drop_foreign_context`
-and the turn end as before-model callbacks, the reply counter as the after-model callback, and
+from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the turn end, the strip and
+`drop_foreign_context` as before-model callbacks, the reply counter as the after-model callback, and
 `refuse_transfer_to_agent` as the tool callback. They only work as a set; wire a fourth gated agent the same way.
 ADK runs before-tool callbacks ahead of its own not-found reply (`build_tool_not_found_response`), which invites a
 retry and is bounded only by `RunConfig.max_llm_calls` (500). The refusal answers every call instead, with a

@@ -464,7 +464,7 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * (cap + 2) + [_text("back to work")],
+            responses=[_TRANSFER] * (cap + 1) + [_text("back to work")],
         ),
     )
     first, second = asyncio.run(
@@ -477,11 +477,11 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
 
     requests = graph_construction_agent.model.requests
     first_replies = _hidden_transfer_replies(first)
-    assert len(first_replies) == cap + 1
+    assert len(first_replies) == cap
     assert all(is_error(reply) for reply in first_replies)
     assert _final_text(first) == HIDDEN_TRANSFER_TURN_END
     # Turn 2: one refused call (the count restarted), then an answer.
-    assert len(requests) == cap + 3
+    assert len(requests) == cap + 2
     assert all(is_error(reply) for reply in _hidden_transfer_replies(second))
     assert not _unanswered_calls(requests[-1])
 
@@ -510,7 +510,7 @@ def test_a_real_tool_in_the_capped_reply_still_runs_and_the_user_gets_a_reply(
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+            responses=[_TRANSFER] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
             + [both, _text("never reached")],
         ),
     )
@@ -526,7 +526,7 @@ def test_a_real_tool_in_the_capped_reply_still_runs_and_the_user_gets_a_reply(
     }
     assert is_success(responses["confirm_construction_handoff"])
     assert len(graph_construction_agent.model.requests) == (
-        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN + 1
+        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
     )
     assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
 
@@ -569,7 +569,7 @@ def test_retrieval_does_not_inherit_constructions_refusals(monkeypatch):
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+            responses=[_TRANSFER] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
             + [_call("confirm_construction_handoff"), _call("finished")],
         ),
     )
