@@ -44,9 +44,22 @@ from typing import Any, Optional
 
 from google.adk.models.llm_response import LlmResponse
 
+from agentic_kg.common.tool_result import ToolResult, tool_error
+
 logger = logging.getLogger(__name__)
 
 TRANSFER_TOOL_NAME = "transfer_to_agent"
+
+# Per-turn bookkeeping for refuse_transfer_to_agent: {"invocation_id", "count"}.
+HIDDEN_TRANSFER_CALLS_KEY = "hidden_transfer_calls"
+MAX_HIDDEN_TRANSFER_CALLS_PER_TURN = 2
+
+HIDDEN_TRANSFER_REFUSAL = (
+    "transfer_to_agent is not available to this agent. It hands the user on "
+    "only by calling `finished`, and only after the user has explicitly "
+    "confirmed; `finished` says what is still missing. Do not call "
+    "transfer_to_agent again."
+)
 
 
 def _phrase(text: str) -> "re.Pattern[str]":
@@ -130,11 +143,9 @@ def strip_transfer_to_agent(
 
     All three surfaces matter. tools_dict is ADK's dispatch table, so removing
     it turns a call the model remembers from an earlier turn into a tool error
-    rather than a working exit: google-adk 2.9 answers an unknown tool with
-    build_tool_not_found_response (flows/llm_flows/_tool_error_handler.py),
-    which lists the tools the agent can call, and the agent keeps the turn.
-    Nothing but RunConfig.max_llm_calls (default 500) bounds a model that keeps
-    calling it anyway.
+    rather than a working exit, and the agent keeps the turn. Pair with
+    refuse_transfer_to_agent, which answers that call before ADK's generic
+    not-found reply and caps it per turn.
     config.tools is the schema the provider actually receives, so leaving it
     would keep offering the model the tool. system_instruction is where ADK
     tells the model the tool exists at all.
@@ -167,6 +178,50 @@ def strip_transfer_to_agent(
         )
 
     return None
+
+
+class HiddenTransferLoopError(RuntimeError):
+    """A gated agent kept calling the stripped transfer tool in one turn."""
+
+
+def refuse_transfer_to_agent(
+    tool: Any, args: dict[str, Any], tool_context: Any
+) -> Optional[ToolResult]:
+    """Answer a call to the stripped transfer tool before ADK does.
+
+    The strip removes the tool, but a model can still call it from memory.
+    ADK 2.9 would answer with build_tool_not_found_response, which invites a
+    retry, and nothing but RunConfig.max_llm_calls (default 500) would stop a
+    model that keeps retrying. ADK runs before-tool callbacks ahead of that
+    reply (_tool_caller.py _execute_single_prepared_call), so this one answers
+    first: with this agent's real exit on the first
+    MAX_HIDDEN_TRANSFER_CALLS_PER_TURN calls of a turn, and by raising
+    HiddenTransferLoopError on the next, which ends the turn with an error the
+    Dev UI shows.
+
+    The count is keyed on tool_context.invocation_id -- one invocation per user
+    message -- so each turn starts at zero without a reset callback.
+
+    Returns None for every other tool, so ADK runs it as usual. The parameter
+    NAMES are load-bearing: ADK passes tool=, args= and tool_context= by
+    keyword.
+    """
+    if tool.name != TRANSFER_TOOL_NAME:
+        return None
+    previous = tool_context.state.get(HIDDEN_TRANSFER_CALLS_KEY) or {}
+    count = 1
+    if previous.get("invocation_id") == tool_context.invocation_id:
+        count += previous.get("count", 0)
+    tool_context.state[HIDDEN_TRANSFER_CALLS_KEY] = {
+        "invocation_id": tool_context.invocation_id,
+        "count": count,
+    }
+    if count > MAX_HIDDEN_TRANSFER_CALLS_PER_TURN:
+        raise HiddenTransferLoopError(
+            f"{tool_context.agent_name} called {TRANSFER_TOOL_NAME} {count} "
+            "times in one turn after being told it is not available"
+        )
+    return tool_error(HIDDEN_TRANSFER_REFUSAL)
 
 
 def _extend_past_trailing_paragraphs(instruction: str, end: int) -> int:

@@ -22,6 +22,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
+import pytest
 from google.adk.flows.llm_flows.agent_transfer import (
     _build_transfer_instructions,
     _get_transfer_targets,
@@ -31,10 +32,14 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
 
 from agentic_kg.common.adk_transfer import (
+    MAX_HIDDEN_TRANSFER_CALLS_PER_TURN,
     TRANSFER_TOOL_NAME,
+    HiddenTransferLoopError,
     _without_transfer_block,
+    refuse_transfer_to_agent,
     strip_transfer_to_agent,
 )
+from agentic_kg.common.tool_result import is_error
 
 _PARENT = "kg_construction_agent_v1"
 
@@ -340,3 +345,63 @@ def test_a_peer_description_cannot_shadow_the_blocks_end_marker():
     assert "transfer to your parent agent" not in instruction
     # ...and the agent's own instruction is still there.
     assert instruction == "You are an expert at knowledge graph construction."
+
+
+def _tool_context(invocation_id, state=None):
+    return SimpleNamespace(
+        invocation_id=invocation_id,
+        agent_name="graph_construction_agent_v1",
+        state={} if state is None else state,
+    )
+
+
+def test_refusal_leaves_every_other_tool_alone():
+    context = _tool_context("inv-1")
+
+    assert (
+        refuse_transfer_to_agent(SimpleNamespace(name="finished"), {}, context) is None
+    )
+    assert context.state == {}
+
+
+def test_refusal_answers_the_hidden_tool_and_names_the_real_exit():
+    """Answered before ADK's generic not-found reply, which invites a retry:
+    the model is told which exit this agent really has."""
+    reply = refuse_transfer_to_agent(
+        SimpleNamespace(name=TRANSFER_TOOL_NAME),
+        {"agent_name": _PARENT},
+        _tool_context("inv-1"),
+    )
+
+    assert is_error(reply)
+    assert "finished" in reply["error_message"]
+
+
+def test_refusal_ends_the_turn_once_the_model_keeps_calling_it():
+    tool = SimpleNamespace(name=TRANSFER_TOOL_NAME)
+    context = _tool_context("inv-1")
+    for _ in range(MAX_HIDDEN_TRANSFER_CALLS_PER_TURN):
+        assert is_error(refuse_transfer_to_agent(tool, {}, context))
+
+    with pytest.raises(HiddenTransferLoopError):
+        refuse_transfer_to_agent(tool, {}, context)
+
+
+def test_refusal_counts_each_turn_afresh():
+    """The count is keyed on the invocation (one per user message), so a new
+    turn starts at zero without a reset callback."""
+    tool = SimpleNamespace(name=TRANSFER_TOOL_NAME)
+    state = {}
+    for _ in range(MAX_HIDDEN_TRANSFER_CALLS_PER_TURN):
+        refuse_transfer_to_agent(tool, {}, _tool_context("inv-1", state))
+
+    assert is_error(refuse_transfer_to_agent(tool, {}, _tool_context("inv-2", state)))
+
+
+def test_refusal_parameter_names_are_the_ones_adk_passes():
+    """ADK invokes before_tool_callback purely by keyword (tool=, args=,
+    tool_context=; _tool_caller.py _execute_single_prepared_call)."""
+    import inspect
+
+    parameters = list(inspect.signature(refuse_transfer_to_agent).parameters)
+    assert parameters == ["tool", "args", "tool_context"]

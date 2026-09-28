@@ -56,8 +56,8 @@ uv run pyright        # must report 0 errors
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
-- Pinned to `google-adk>=2.9.2,<2.10` (`pyproject.toml`) — one minor window on purpose; 2.10 is its own ticket
-  (KG-42). ADK docs, samples and blog posts describe 1.x, or a 2.x newer than ours, as often as 2.9, and the
+- Pinned to `google-adk>=2.9.2,<2.10` (`pyproject.toml`) — one minor window on purpose: each minor moves
+  separately. ADK docs, samples and blog posts describe 1.x, or a 2.x newer than ours, as often as 2.9, and the
   lines differ in behaviour this code depends on; check which version a source describes before trusting it.
 - The floor is not what you run: the committed `uv.lock` resolves `google-adk 2.9.2` (and `neo4j 6.3.1`),
   so `uv sync` installs those. Check the lock, not `pyproject.toml`, when a behaviour looks version-dependent.
@@ -253,11 +253,17 @@ failing — check logs after any ADK bump.
 strip_transfer_to_agent]`. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
 rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with
 parameters:`` — a worked example of the call the model then copies, after the strip already removed the tool from
-`tools_dict`. On google-adk 2.9 that call no longer kills the turn: ADK answers it with an error listing the
-agent's own tools (`build_tool_not_found_response`), so the model can recover. But every copied call still costs a
-model call, and nothing but `RunConfig.max_llm_calls` (500) bounds a model that keeps copying it.
-`user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the coordinator lacks
-`drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the workflow advances.
+`tools_dict`. `user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the
+coordinator lacks `drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the
+workflow advances.
+
+**A call made anyway is refused, and capped per turn**: the same three agents carry
+`before_tool_callback=refuse_transfer_to_agent` (`common/adk_transfer.py`). ADK runs before-tool callbacks ahead
+of its own not-found reply (`build_tool_not_found_response`), which invites a retry and is bounded only by
+`RunConfig.max_llm_calls` (500). The callback answers instead with a `tool_error` naming `finished` as the exit, and
+on the third call in one turn raises `HiddenTransferLoopError`, ending the turn. Its count is keyed on the
+invocation id (one per user message), so it needs no reset callback; its `hidden_transfer_calls` state key belongs
+to this guard, not to any handoff gate.
 
 ### Tool results
 
@@ -341,11 +347,10 @@ read if you add cost tracking.
 
 `get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
 (e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
-exceeds the balance, the call fails with a 402. On google-adk 1.x the dev UI showed that as an indistinguishable
-hang; on 2.9 the error shows as a red error event in the chat plus a one-line snackbar, and its `call_llm` span has
-no request/response attributes at all (ADK sets them only per response). If reasoning-model calls stop working,
-check account balance and the `adk web` server's own log output (it logs the real exception) before assuming a
-code regression.
+exceeds the balance, the call fails with a 402. The dev UI shows that as a red error event in the chat plus a
+one-line snackbar, and its `call_llm` span has no request/response attributes at all (ADK sets them only per
+response). If reasoning-model calls stop working, check account balance and the `adk web` server's own log output
+(it logs the real exception) before assuming a code regression.
 
 ### Domain models
 

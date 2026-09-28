@@ -1,7 +1,10 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    refuse_transfer_to_agent,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED_KEY
 from agentic_kg.tools.graphrag_partition_tools import (
@@ -89,6 +92,9 @@ graphrag_agent = Agent(
         if IS_GATED_VARIANT
         else variants[AGENT_NAME].get("before_model_callback")
     ),
+    # Answers a call to the stripped tool with the real exit, and ends the
+    # turn if the model keeps calling it. See refuse_transfer_to_agent.
+    before_tool_callback=refuse_transfer_to_agent if IS_GATED_VARIANT else None,
     # Conditional because only v2 is gated. Attaching unconditionally would
     # write inert flags every turn under v1, read by nobody -- harmless, but
     # untrue to "v1 is untouched" and avoidable in one line. Same None-default

@@ -1,7 +1,10 @@
 from google.adk.agents import Agent
 
 from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    refuse_transfer_to_agent,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 
 # variants are pairs of instructions with tools
@@ -32,17 +35,18 @@ user_intent_agent = Agent(
     # strip_transfer_to_agent removes the declaration.
     #
     # drop_foreign_context removes the matching example. This agent is
-    # entered BY the coordinator's own transfer_to_agent call, which ADK
-    # rewrites into a "For context: [kg_construction_agent_v1] called tool
-    # `transfer_to_agent`..." turn that then sits in this agent's history
-    # for the whole interview -- a worked example of the exact tool name
-    # and argument shape, on every turn of the stickiest phase there is.
-    # Removing the declaration and leaving the example is half a fix: the
-    # model copies it, the strip has popped it from tools_dict, and
-    # google-adk 2.9 answers with a not-found error -- recoverable, but every
-    # copied call costs a model call and nothing but RunConfig.max_llm_calls
-    # bounds a model that keeps copying it. Same pairing, same reason, as
-    # graph_construction_agent/agent.py.
+    # entered BY the coordinator's own transfer_to_agent call, which
+    # _present_other_agent_message (flows/llm_flows/_fencing.py) rewrites
+    # into a "For context: ..." turn quoting "[kg_construction_agent_v1]
+    # called tool `transfer_to_agent` with parameters:" and its arguments,
+    # which then sits in this agent's history for the whole interview -- a
+    # worked example of the exact tool name and argument shape, on every
+    # turn of the stickiest phase there is. Removing the declaration and
+    # leaving the example is half a fix: the model copies it, and every
+    # copied call costs a model call. Same pairing, same reason, as
+    # graph_construction_agent/agent.py. A call made anyway is answered by
+    # refuse_transfer_to_agent (the before_tool_callback below), which names
+    # the real exit and ends the turn if the model keeps calling it.
     #
     # Still NO before_agent_callback: graphrag_agent/agent.py carries one
     # because it gates on a per-turn boolean that must be reset; this gate
@@ -59,6 +63,7 @@ user_intent_agent = Agent(
     before_model_callback=(
         [drop_foreign_context, strip_transfer_to_agent] if IS_GATED_VARIANT else None
     ),
+    before_tool_callback=refuse_transfer_to_agent if IS_GATED_VARIANT else None,
 )
 
 root_agent = user_intent_agent

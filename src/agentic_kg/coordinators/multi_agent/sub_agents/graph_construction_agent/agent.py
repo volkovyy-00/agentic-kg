@@ -2,7 +2,10 @@ from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
 from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    refuse_transfer_to_agent,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.construction_handoff_tools import HANDOFF_CONFIRMED_KEY
 
@@ -57,13 +60,12 @@ graph_construction_agent = Agent(
     # declaration itself is stripped. Removing the declaration and leaving
     # the example is half a fix.
     #
-    # If the model emits the call anyway, tools_dict no longer holds it, so
-    # google-adk 2.9 answers it with a not-found error listing this agent's
-    # own tools (build_tool_not_found_response) and the agent keeps the
-    # turn, pinned by
-    # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase.
-    # There is no stub; this callback only removes the standing invitation
-    # to try.
+    # If the model emits the call anyway, refuse_transfer_to_agent (the
+    # before_tool_callback below) answers it before ADK's generic not-found
+    # reply, naming 'finished' as the way out, and ends the turn with an
+    # error if the model keeps calling it -- pinned by
+    # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase
+    # and test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn.
     #
     # Deliberately NOT disallow_transfer_to_parent: that flag would also
     # close the door, and would also stop Runner._find_agent_to_run
@@ -78,6 +80,7 @@ graph_construction_agent = Agent(
     # directly, which ADK acts on after the tool returns and no
     # request-level strip touches.
     before_model_callback=[drop_foreign_context, strip_transfer_to_agent],
+    before_tool_callback=refuse_transfer_to_agent,
 )
 
 root_agent = graph_construction_agent

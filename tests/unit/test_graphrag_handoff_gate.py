@@ -357,10 +357,9 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
     monkeypatch,
 ):
     """Pins what happens if a model emits the call from memory of an earlier
-    turn. The strip pops it from tools_dict, so google-adk 2.9 answers an
-    unknown tool with an error the model reads (build_tool_not_found_response,
-    which lists the tools it can call), so no transfer happens and the agent
-    keeps the turn. Structure only, not ADK's wording, which is private."""
+    turn. The strip pops it from tools_dict, and refuse_transfer_to_agent
+    answers the call before ADK's generic not-found reply, naming the real
+    exit: no transfer happens and the agent keeps the turn."""
     monkeypatch.setattr(
         graphrag_agent,
         "model",
@@ -381,7 +380,8 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
         if part.function_response and part.function_response.name == "transfer_to_agent"
     ]
     assert len(replies) == 1
-    assert "finished" in (replies[0].response or {})["error"]
+    assert is_error(replies[0].response or {})
+    assert "finished" in (replies[0].response or {})["error_message"]
     assert not any(event.actions.transfer_to_agent for event in events)
     # The error went back to this agent's own model, which answered it.
     assert len(graphrag_agent.model.requests) == 2

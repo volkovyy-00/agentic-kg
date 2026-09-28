@@ -10,6 +10,7 @@ unit-testable and is verified by hand (see the plan's Task 5).
 import asyncio
 import inspect
 
+import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
@@ -17,7 +18,11 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    MAX_HIDDEN_TRANSFER_CALLS_PER_TURN,
+    HiddenTransferLoopError,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.agent import (
@@ -338,10 +343,9 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
     monkeypatch,
 ):
     """Pins what happens if a model emits the call from memory of an earlier
-    turn. The strip pops it from tools_dict, so google-adk 2.9 answers an
-    unknown tool with an error the model reads (build_tool_not_found_response,
-    which lists the tools it can call), so no transfer happens and the agent
-    keeps the turn. Structure only, not ADK's wording, which is private."""
+    turn. The strip pops it from tools_dict, and refuse_transfer_to_agent
+    answers the call before ADK's generic not-found reply, naming the real
+    exit: no transfer happens and the agent keeps the turn."""
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
@@ -364,7 +368,8 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
         if part.function_response and part.function_response.name == "transfer_to_agent"
     ]
     assert len(replies) == 1
-    assert "finished" in (replies[0].response or {})["error"]
+    assert is_error(replies[0].response or {})
+    assert "finished" in (replies[0].response or {})["error_message"]
     assert not any(event.actions.transfer_to_agent for event in events)
     # The error went back to this agent's own model, which answered it.
     assert len(graph_construction_agent.model.requests) == 2
@@ -373,8 +378,8 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
 def test_transfer_and_finished_in_one_reply_neither_transfers_nor_exits(
     monkeypatch,
 ):
-    """Both exits in one reply, without a confirmation: the hidden tool gets
-    ADK's error and the gated 'finished' refuses, so the agent keeps the turn."""
+    """Both exits in one reply, without a confirmation: the hidden tool is
+    refused and the gated 'finished' refuses, so the agent keeps the turn."""
     both = LlmResponse(
         content=types.Content(
             role="model",
@@ -404,9 +409,34 @@ def test_transfer_and_finished_in_one_reply_neither_transfers_nor_exits(
         for part in (event.content.parts if event.content else None) or []
         if part.function_response
     }
-    assert "error" in replies["transfer_to_agent"]
+    assert is_error(replies["transfer_to_agent"])
     assert is_error(replies["finished"])
     assert not any(event.actions.transfer_to_agent for event in events)
+
+
+def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn(monkeypatch):
+    """Without a per-turn cap, only RunConfig.max_llm_calls (500) would stop a
+    model that keeps retrying. After MAX_HIDDEN_TRANSFER_CALLS_PER_TURN refused
+    calls, the next one ends the turn with an error instead of another call."""
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[
+                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+            ],
+        ),
+    )
+    with pytest.raises(HiddenTransferLoopError):
+        asyncio.run(
+            _run_one_turn(graph_construction_agent, "construction_transfer_loop_test")
+        )
+
+    assert (
+        len(graph_construction_agent.model.requests)
+        == MAX_HIDDEN_TRANSFER_CALLS_PER_TURN + 1
+    )
 
 
 def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
