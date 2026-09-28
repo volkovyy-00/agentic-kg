@@ -172,8 +172,9 @@ def test_confirm_tool_is_wired_into_the_construction_variant():
 
 
 def test_finished_succeeds_on_retry_after_an_out_of_order_refusal():
-    """Catches a gate that latches its refusal. ADK runs the tool calls in one
-    model reply in the order the model emitted them, so a reply ordering
+    """Catches a gate that latches its refusal. ADK starts the tool calls in
+    one model reply in the order the model emitted them, and these synchronous
+    tools finish in that order too, so a reply ordering
     'finished' before 'confirm_construction_handoff' refuses even though the
     user did agree. The confirmation is recorded by the time the model reads
     that error, so calling 'finished' again in the same turn must then

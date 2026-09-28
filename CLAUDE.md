@@ -95,8 +95,9 @@ uv run pyright        # must report 0 errors
 - **`single_agent`** (`coordinators/single_agent/`) — one agent that talks to Neo4j directly via Cypher, delegating
   to `agents/cypher_agent` as a sub-agent for query execution.
 - **`multi_agent`** (`coordinators/multi_agent/`) — a hierarchical `LlmAgent` (`full_workflow_agent`),
-  registered as `kg_construction_agent_v1` (`MULTI_AGENT_COORDINATOR` in `common/agent_names.py` — this is the
-  name to use when polling the ADK API, per the debugging steps below), that delegates,
+  registered as `kg_construction_agent_v1` (`MULTI_AGENT_COORDINATOR` in `common/agent_names.py` — the author
+  on its events; the `{app}` in the ADK API paths of the debugging steps below is the directory, `multi_agent`),
+  that delegates,
   in strict sequence, through five sub-agents defined in `coordinators/multi_agent/sub_agents/`:
   1. `user_intent_agent` — establishes `kind_of_graph` / `graph_description`
   2. `file_suggestion_agent` — requires an approved user goal; suggests input files

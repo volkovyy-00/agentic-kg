@@ -73,8 +73,10 @@ def _model_name(kind: LlmKind) -> str:
 def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
     """Return the LiteLlm instance for a kind of work.
 
-    Returns an instance, never a bare model string: ADK registers only Gemini
-    in its LLMRegistry, so `Agent(model="openrouter/...")` fails to resolve.
+    Returns an instance, never a bare model string: google-adk 2.9's
+    LLMRegistry does resolve "openrouter/..." to LiteLlm, but only with default
+    arguments -- none of the timeout, retry, max_tokens and reasoning settings
+    this instance carries.
     """
     if kind not in _llm_instances:
         model = _model_name(kind)

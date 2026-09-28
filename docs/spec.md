@@ -220,7 +220,7 @@ These compose in `graphrag_agent`'s `variants.py`, which is the only place all f
 that look like accidents and are not: the profiled schema payload deliberately discards the library's
 raw property lists (passing both would let the raw copy assert exactly what the profile exists to deny,
 and appear first), and the profile flag is exposed as two separate zero-argument tools rather than one
-parameterised tool, because ADK would advertise the parameter as required and a model guessing `true`
+parameterised tool, because ADK would advertise the parameter to the model and a model guessing `true`
 would trigger a full scan per label on the latency-sensitive construction path.
 
 `graphrag_agent_v1` is retained unchanged for A/B comparison. The comparison's outcome is not recorded
