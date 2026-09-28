@@ -31,9 +31,10 @@ from agentic_kg.tools.user_goal_tools import (
 # Imported live rather than copied: only the selected variant is built into an
 # Agent and registered in the tree, and this project already runs two A/B
 # sub-agents on different generations (cypher_agent on v1, graphrag_agent on
-# v2). A duplicated name that went stale would make find_agent raise inside the
-# transfer chain -- no trace span, indistinguishable from a hang. One
-# definition, imported. This is the first sub-agent -> sub-agent import in the
+# v2). A duplicated name that went stale would break the handoff: find_agent
+# returns None for it, so ADK's transfer loop (Context._run_node_internal)
+# raises ValueError and the turn ends with only a one-line error in adk web.
+# One definition, imported. This is the first sub-agent -> sub-agent import in the
 # tree; graphrag_agent/agent.py imports nothing that leads back here.
 from ..graphrag_agent.agent import AGENT_NAME as GRAPHRAG_AGENT_NAME
 

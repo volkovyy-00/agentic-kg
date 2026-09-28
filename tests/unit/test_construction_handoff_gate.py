@@ -117,8 +117,9 @@ def test_the_retrieval_agent_resolves_in_the_agent_tree():
     It does NOT guard against a stale copy of the name -- the live import made
     that structurally impossible, since there is only one definition to read.
     Do not delete this as redundant with that: the failure it catches is a
-    correct name pointing at an agent no longer in the tree, which makes
-    find_agent raise inside a transfer chain with no trace span.
+    correct name pointing at an agent no longer in the tree: find_agent
+    returns None for it, so ADK's transfer loop (Context._run_node_internal)
+    raises ValueError and the turn ends with only a one-line error.
     """
     assert full_workflow_agent.find_agent(GRAPHRAG_AGENT_NAME) is not None
 

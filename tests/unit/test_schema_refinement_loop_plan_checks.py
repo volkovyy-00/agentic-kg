@@ -247,8 +247,9 @@ def test_a_crashing_check_leaves_the_verdict_alone(
     monkeypatch, caplog, stranding_plan_state
 ):
     """Fail-open in the loop, because approval still refuses the plan. A raise
-    here would instead abort the loop mid-turn: a dead turn with no response
-    and no spinner, to protect an optimisation approval backstops."""
+    here would instead abort the loop mid-turn: the turn ends with no reply,
+    only a one-line error in adk web, to protect an optimisation approval
+    backstops."""
     # NOT `import ...schema_proposal_agent.agent as module`: sub_agents/__init__.py
     # rebinds the name `schema_proposal_agent` to the LlmAgent, so that form
     # raises ImportError.
