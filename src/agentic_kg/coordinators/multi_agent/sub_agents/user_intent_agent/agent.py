@@ -20,44 +20,20 @@ user_intent_agent = Agent(
     description="Knowledge graph use case ideation.",
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
-    # transfer_guard_callbacks (model and tool callbacks that only work as a
-    # set), and deliberately NO before_agent_callback. ADK
-    # injects its own 'transfer_to_agent' tool, plus an instruction
-    # advertising it, into any LlmAgent with a parent or peers, and it does
-    # not consult the approval gate in variants.py. That tool is the exit
-    # the agent actually took in the reported session
-    # (docs/backlog/user-goal-approval-never-recorded.md): it asked its
-    # clarifying questions and transferred in the same reply, so the user's
-    # agreement was heard by the coordinator, which has no approval tool.
-    # strip_transfer_to_agent removes the declaration.
+    # ADK gives this agent its own 'transfer_to_agent', which does not consult
+    # the approval gate in variants.py. It is the exit the agent actually took
+    # in the reported session (docs/backlog/user-goal-approval-never-recorded.md):
+    # it asked its clarifying questions and transferred in the same reply, so
+    # the user's agreement was heard by the coordinator, which has no approval
+    # tool. transfer_guard_callbacks removes the tool and the worked example of
+    # it in this agent's history, which matters most here: the interview is
+    # the stickiest phase. The mechanism, and why disallow_transfer_to_parent
+    # is NOT used, are in common/adk_transfer.py and CLAUDE.md, once. Here it
+    # would send every mid-interview reply back to the coordinator.
     #
-    # drop_foreign_context removes the matching example. This agent is
-    # entered BY the coordinator's own transfer_to_agent call, which
-    # _present_other_agent_message (flows/llm_flows/_fencing.py) rewrites
-    # into a "For context: ..." turn quoting "[kg_construction_agent_v1]
-    # called tool `transfer_to_agent` with parameters:" and its arguments,
-    # which then sits in this agent's history for the whole interview -- a
-    # worked example of the exact tool name and argument shape, on every
-    # turn of the stickiest phase there is. Removing the declaration and
-    # leaving the example is half a fix: the model copies it, and every
-    # copied call costs a model call. Same pairing, same reason, as
-    # graph_construction_agent/agent.py. A call made anyway is answered by
-    # refuse_transfer_to_agent (wired by transfer_guard_callbacks), which names
-    # the real exit; a model that does nothing but retry it has its turn
-    # ended with a short reply to the user.
-    #
-    # Still NO before_agent_callback: graphrag_agent/agent.py carries one
-    # because it gates on a per-turn boolean that must be reset; this gate
+    # Deliberately NO before_agent_callback: graphrag_agent/agent.py carries
+    # one because it gates on a per-turn boolean that must be reset; this gate
     # compares two durable state keys and has no flag to reset.
-    #
-    # Deliberately NOT disallow_transfer_to_parent: that flag would also
-    # close the door, and would also stop Runner._find_agent_to_run
-    # (agents/_agent_router.py find_agent_to_run) from returning this agent
-    # for the user's second message, so every mid-interview reply would be
-    # re-arbitrated by the coordinator. An interview is multi-turn by nature.
-    # On google-adk 2.9 either flag also makes a blocked 'finished' call
-    # raise ValueError, so a make_finished target must be this agent's
-    # parent or a peer. See adk_transfer.py.
     **transfer_guard_callbacks(gated=IS_GATED_VARIANT),
 )
 

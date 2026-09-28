@@ -41,10 +41,11 @@ from agentic_kg.common.adk_transfer import (
     count_hidden_transfer_replies,
     end_turn_past_hidden_transfer_cap,
     refuse_transfer_to_agent,
+    reset_on_real_progress,
     strip_transfer_to_agent,
     transfer_guard_callbacks,
 )
-from agentic_kg.common.tool_result import is_error
+from agentic_kg.common.tool_result import is_error, tool_error
 
 _PARENT = "kg_construction_agent_v1"
 
@@ -356,6 +357,8 @@ _HIDDEN = SimpleNamespace(name=TRANSFER_TOOL_NAME)
 
 
 def _callback_context(state=None, agent="graph_construction_agent_v1"):
+    """Stands in for both a CallbackContext and a ToolContext: the callbacks
+    read only agent_name and state from either."""
     return SimpleNamespace(agent_name=agent, state={} if state is None else state)
 
 
@@ -370,15 +373,24 @@ def _reply(*names, partial=None):
     )
 
 
-def _run_replies(context, replies):
-    """Each reply as ADK runs it: the model callback before it, the counter
-    after it. Returns what the before-model callback returned last."""
+def _run_replies(context, replies, failing=()):
+    """Each reply as ADK runs it: the turn-end check before it, the counter
+    after it, then each call's after-tool callback on its result. The hidden
+    tool gets its refusal, a tool named in `failing` an error, any other tool
+    a success. Returns what the turn-end check returned last."""
     ended = None
     for reply in replies:
         ended = end_turn_past_hidden_transfer_cap(context, None)
         if ended is not None:
             return ended
         count_hidden_transfer_replies(context, reply)
+        for call in reply.get_function_calls():
+            tool = SimpleNamespace(name=call.name)
+            result = refuse_transfer_to_agent(tool, {}, context)
+            if result is None:
+                failed = call.name in failing
+                result = tool_error("no") if failed else {"status": "success"}
+            reset_on_real_progress(tool, {}, context, result)
     return end_turn_past_hidden_transfer_cap(context, None)
 
 
@@ -389,10 +401,25 @@ def test_refusal_leaves_every_other_tool_alone():
 def test_refusal_answers_the_hidden_tool_and_names_the_real_exit():
     """Answered before ADK's generic not-found reply, which invites a retry:
     the model is told which exit this agent really has, and keeps the turn."""
-    reply = refuse_transfer_to_agent(_HIDDEN, {"agent_name": _PARENT}, None)
+    reply = refuse_transfer_to_agent(
+        _HIDDEN, {"agent_name": _PARENT}, _callback_context()
+    )
 
     assert is_error(reply)
     assert "finished" in reply["error_message"]
+
+
+def test_the_refusal_names_the_agent_and_does_not_forbid_the_tool():
+    """The refusal stays in the session, and the coordinator later reads it as
+    another agent's output. Its own transfer_to_agent is real, so the refusal
+    names whose tool is missing and gives no bare order not to call it."""
+    reply = refuse_transfer_to_agent(
+        _HIDDEN, {}, _callback_context(agent="user_intent_agent_v2")
+    )
+
+    message = reply["error_message"]
+    assert message.startswith("user_intent_agent_v2 cannot use transfer_to_agent")
+    assert "do not call" not in message.lower()
 
 
 def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
@@ -412,8 +439,8 @@ def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
 
 
 def test_a_model_that_recovers_after_each_slip_keeps_its_turn():
-    """The cap counts replies in a row. A model that takes each refusal and
-    goes back to work is not stuck, however many times it slips in a long
+    """A tool that succeeds resets the count. A model that takes each refusal
+    and goes back to work is not stuck, however many times it slips in a long
     turn."""
     context = _callback_context()
     slip_then_work = [_reply(TRANSFER_TOOL_NAME), _reply("read_neo4j_cypher")]
@@ -423,8 +450,7 @@ def test_a_model_that_recovers_after_each_slip_keeps_its_turn():
 
 
 def test_a_reply_that_also_calls_a_real_tool_resets_the_count():
-    """So the reply that reaches the cap has run nothing but refusals, and no
-    real tool result goes unreported when the turn ends."""
+    """So the turn never ends on a real result the model has not reported."""
     context = _callback_context()
     replies = [_reply(TRANSFER_TOOL_NAME)] * (
         MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1
@@ -433,6 +459,28 @@ def test_a_reply_that_also_calls_a_real_tool_resets_the_count():
 
     assert _run_replies(context, replies) is None
     assert list(context.state.values()) == [0]
+
+
+def test_retrying_both_exits_together_is_still_capped():
+    """A refused `finished` beside the hidden call is not progress: a model
+    that keeps sending both is the same loop, and must not run to ADK's
+    500-call limit."""
+    context = _callback_context()
+    both = _reply(TRANSFER_TOOL_NAME, "finished")
+
+    replies = [both] * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    assert _run_replies(context, replies, failing={"finished"}) is not None
+
+
+def test_a_text_reply_between_retries_does_not_reset_the_count():
+    """A streamed reply can arrive as a text-only response followed by the
+    call-only one. Counting that text as progress would let a narrating model
+    retry forever."""
+    context = _callback_context()
+    narrated = [_reply(), _reply(TRANSFER_TOOL_NAME)]
+
+    replies = narrated * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    assert _run_replies(context, replies) is not None
 
 
 def test_parallel_calls_in_one_reply_count_once():
@@ -485,9 +533,9 @@ def test_the_count_lives_in_invocation_scoped_state():
 
 def test_callback_parameter_names_are_the_ones_adk_passes():
     """ADK invokes every callback purely by keyword: tool=, args= and
-    tool_context= for before-tool (_tool_caller.py
-    _execute_single_prepared_call), callback_context= plus llm_request= or
-    llm_response= for the model callbacks (base_llm_flow.py)."""
+    tool_context= for before-tool, plus tool_response= for after-tool
+    (_tool_caller.py _execute_single_prepared_call), callback_context= plus
+    llm_request= or llm_response= for the model callbacks (base_llm_flow.py)."""
     import inspect
 
     def names(callback):
@@ -501,6 +549,12 @@ def test_callback_parameter_names_are_the_ones_adk_passes():
     assert names(count_hidden_transfer_replies) == [
         "callback_context",
         "llm_response",
+    ]
+    assert names(reset_on_real_progress) == [
+        "tool",
+        "args",
+        "tool_context",
+        "tool_response",
     ]
 
 
@@ -517,5 +571,6 @@ def test_the_guard_wires_all_its_callbacks_together_or_none():
         ],
         "after_model_callback": count_hidden_transfer_replies,
         "before_tool_callback": refuse_transfer_to_agent,
+        "after_tool_callback": reset_on_real_progress,
     }
     assert transfer_guard_callbacks(False) == {}

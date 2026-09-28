@@ -52,19 +52,22 @@ logger = logging.getLogger(__name__)
 
 TRANSFER_TOOL_NAME = "transfer_to_agent"
 
-# How many replies in a row called nothing but the hidden tool, one key per
-# agent. temp: state lives only for the current invocation (one per user
-# message) and is never persisted, so each turn starts at zero without a reset
-# callback.
+# How many replies have called the hidden tool since another tool last
+# succeeded, one key per agent. temp: state lives only for the current
+# invocation (one per user message) and is never persisted, so each turn
+# starts at zero without a reset callback.
 HIDDEN_TRANSFER_REPLIES_KEY_PREFIX = "temp:hidden_transfer_replies:"
-# The turn ends after this many such replies in a row, without another model
-# call.
+# The turn ends after this many such replies, without another model call.
 MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES = 3
 
+# Names the agent because the refusal stays in the session, and the
+# coordinator reads it later as another agent's output: the coordinator's own
+# transfer_to_agent is real, and must not look refused. For the same reason
+# there is no bare "do not call transfer_to_agent" in it.
 HIDDEN_TRANSFER_REFUSAL = (
-    "transfer_to_agent is not available to this agent. It hands the user on "
-    "only through `finished`, which says what is still missing when it cannot "
-    "hand over yet. Do not call transfer_to_agent again."
+    "{agent} cannot use transfer_to_agent. {agent} hands the user on only "
+    "through `finished`, which says what is still missing when it cannot hand "
+    "over yet."
 )
 
 # What the user reads when the cap ends a turn. Written for the user, not the
@@ -217,20 +220,20 @@ def refuse_transfer_to_agent(
     del args  # Part of ADK's keyword contract; the refusal does not read it.
     if tool.name != TRANSFER_TOOL_NAME:
         return None
-    return tool_error(HIDDEN_TRANSFER_REFUSAL)
+    return tool_error(HIDDEN_TRANSFER_REFUSAL.format(agent=tool_context.agent_name))
 
 
 def count_hidden_transfer_replies(
     callback_context: Any, llm_response: LlmResponse
 ) -> None:
-    """after_model_callback: count replies in a row that call only the hidden tool.
+    """after_model_callback: count a reply that calls the hidden tool.
 
-    The cap is for a model stuck retrying, so any other complete reply resets
-    the count: a model that took the refusal and went back to work has
-    recovered, and a slip later in a long turn starts again from one. A reply
-    that also calls a real tool resets it too, so the reply that reaches the
-    cap has run nothing but refusals, and no real tool result is left for the
-    model to report when the turn ends.
+    reset_on_real_progress sets the count back to zero, so it counts replies
+    since another tool last succeeded. Nothing else resets it. A reply that
+    also calls a refused `finished` still counts, since retrying both exits
+    together is the same loop. A text-only reply leaves it alone: that reply
+    ends the turn anyway, and a streamed reply can arrive as a text-only
+    response followed by the call-only one.
 
     Counts replies, not calls, so parallel calls in one reply are one attempt.
     Skips partial (streaming) chunks, which ADK also passes here and which are
@@ -239,16 +242,38 @@ def count_hidden_transfer_replies(
     """
     if llm_response.partial or llm_response.content is None:
         return None
-    called = [
-        part.function_call.name
+    if any(
+        part.function_call and part.function_call.name == TRANSFER_TOOL_NAME
         for part in llm_response.content.parts or []
-        if part.function_call
-    ]
-    key = HIDDEN_TRANSFER_REPLIES_KEY_PREFIX + callback_context.agent_name
-    if called and all(name == TRANSFER_TOOL_NAME for name in called):
+    ):
+        key = HIDDEN_TRANSFER_REPLIES_KEY_PREFIX + callback_context.agent_name
         callback_context.state[key] = callback_context.state.get(key, 0) + 1
-    elif callback_context.state.get(key):
-        callback_context.state[key] = 0
+    return None
+
+
+def reset_on_real_progress(
+    tool: Any, args: dict[str, Any], tool_context: Any, tool_response: Any
+) -> None:
+    """after_tool_callback: a tool other than the hidden one succeeded, so the
+    model is doing real work; set the count back to zero.
+
+    A model that takes each refusal and goes back to work keeps its turn,
+    however long the turn is. And a reply that calls the hidden tool beside a
+    tool that succeeds is not counted, so the turn never ends on a real result
+    the model has not reported. ADK also runs this on the refusal itself
+    (after-tool callbacks run on a before-tool callback's answer), hence the
+    name check. Only reset, never answer: returns None, so the tool's own
+    response stands.
+    """
+    del args  # Part of ADK's keyword contract.
+    # Not tool_result.is_error: a tool that returns something other than a
+    # ToolResult reaches here too, and counts as progress.
+    failed = isinstance(tool_response, dict) and tool_response.get("status") == "error"
+    if tool.name == TRANSFER_TOOL_NAME or failed:
+        return None
+    key = HIDDEN_TRANSFER_REPLIES_KEY_PREFIX + tool_context.agent_name
+    if tool_context.state.get(key):
+        tool_context.state[key] = 0
     return None
 
 
@@ -287,8 +312,8 @@ def transfer_guard_callbacks(gated: bool) -> dict[str, Any]:
 
     They only work as a set: the strip removes the injected transfer tool,
     drop_foreign_context removes the worked example of it from history,
-    refuse_transfer_to_agent answers a call made anyway, and the counter and
-    the turn end stop a model that keeps making one. Spread into the
+    refuse_transfer_to_agent answers a call made anyway, and the counter, its
+    reset and the turn end stop a model that keeps making one. Spread into the
     constructor (`**transfer_guard_callbacks(...)`) so no agent gets one
     without the others. An ungated agent gets none.
     """
@@ -302,6 +327,7 @@ def transfer_guard_callbacks(gated: bool) -> dict[str, Any]:
         ],
         "after_model_callback": count_hidden_transfer_replies,
         "before_tool_callback": refuse_transfer_to_agent,
+        "after_tool_callback": reset_on_real_progress,
     }
 
 

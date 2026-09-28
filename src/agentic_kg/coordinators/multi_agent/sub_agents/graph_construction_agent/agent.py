@@ -37,41 +37,14 @@ graph_construction_agent = Agent(
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
     before_agent_callback=reset_construction_handoff_confirmation,
-    # transfer_guard_callbacks wires the callbacks that only work as a set
-    # (common/adk_transfer.py); the same call graphrag_agent_v2 and
-    # user_intent_agent_v2 make.
-    #
-    # ADK injects its own 'transfer_to_agent' tool, plus an instruction
-    # advertising it, into any LlmAgent with a parent or peers -- and it
-    # does not consult the handoff gate above. strip_transfer_to_agent
-    # takes it back out of every request before the model sees it.
-    #
-    # drop_foreign_context closes the matching context-side hole. The
-    # coordinator's own delegating call arrives here rewritten by
-    # _present_other_agent_message (flows/llm_flows/_fencing.py) into a
-    # "For context: ..." turn quoting "[kg_construction_agent_v1] called
-    # tool `transfer_to_agent` with parameters:" and its arguments -- a
-    # worked example of the exact tool name and argument shape, sitting in
-    # history for every subsequent turn in this branch, while the
-    # declaration itself is stripped. Removing the declaration and leaving
-    # the example is half a fix.
-    #
-    # If the model emits the call anyway, refuse_transfer_to_agent (its
-    # before_tool_callback) answers it before ADK's generic not-found
-    # reply, naming 'finished' as the way out. If the model does nothing but
-    # retry it, the turn ends with a short reply to the user after the third
-    # such reply in a row -- pinned by
-    # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase
-    # and test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly.
-    #
-    # Deliberately NOT disallow_transfer_to_parent: that flag would also
-    # close the door, and would also stop Runner._find_agent_to_run
-    # (agents/_agent_router.py find_agent_to_run) from returning this agent
-    # for the user's second message, so every follow-up question in the
-    # post-construction window would be re-arbitrated by the coordinator.
-    # On google-adk 2.9 either flag also makes a blocked 'finished' call
-    # raise ValueError, so a make_finished target must be this agent's
-    # parent or a peer. See adk_transfer.py.
+    # ADK gives this agent its own 'transfer_to_agent', which does not consult
+    # the handoff gate above. transfer_guard_callbacks removes it, removes the
+    # worked example of it that the coordinator's own delegating call leaves
+    # in this agent's history, and answers a call made anyway. The mechanism,
+    # and why disallow_transfer_to_parent is NOT used, are in
+    # common/adk_transfer.py and CLAUDE.md, once. Here it would cost the
+    # post-construction window: every follow-up question would go back to the
+    # coordinator.
     #
     # 'finished' is unaffected -- it writes actions.transfer_to_agent
     # directly, which ADK acts on after the tool returns and no

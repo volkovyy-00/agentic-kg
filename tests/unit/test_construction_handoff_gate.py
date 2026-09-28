@@ -531,6 +531,39 @@ def test_a_reply_that_also_runs_a_real_tool_lets_the_model_report_it(
     assert _final_text(events) == "your handoff is confirmed"
 
 
+def test_retrying_both_exits_in_every_reply_still_ends_the_turn(monkeypatch):
+    """Without a confirmation, [transfer_to_agent, finished] gets two errors.
+    The refused `finished` is not progress, so a model that keeps sending both
+    is capped like one that sends the hidden call alone."""
+    both = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                _TRANSFER.content.parts[0],
+                types.Part(function_call=types.FunctionCall(name="finished", args={})),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[both] * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+            + [_text("never reached")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_both_exits_loop_test")
+    )
+
+    assert len(graph_construction_agent.model.requests) == (
+        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    )
+    assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
+    assert not any(event.actions.transfer_to_agent for event in events)
+
+
 def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):
     parallel = LlmResponse(
         content=types.Content(

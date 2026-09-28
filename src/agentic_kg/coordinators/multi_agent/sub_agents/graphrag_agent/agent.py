@@ -61,21 +61,11 @@ graphrag_agent = Agent(
     description="Information retrieval from a knowledge graph using a range of query tools.",  # Crucial for delegation later
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
-    # v2 is gated: transfer_guard_callbacks wires drop_foreign_context (PR #9's
-    # context filtering), the transfer strip, and the hidden-transfer refusal
-    # and its retry cap, which only work as a set (common/adk_transfer.py).
-    #
-    # ADK injects its own 'transfer_to_agent' tool, plus an instruction
-    # advertising it, into any LlmAgent with a parent or peers, and it does not
-    # consult the handoff gate. The strip removes it from every request.
-    #
-    # Deliberately NOT disallow_transfer_to_parent: that flag would also close
-    # the door, and would also stop Runner._find_agent_to_run
-    # (agents/_agent_router.py find_agent_to_run) from returning this agent
-    # for the user's second message, so every follow-up question would be
-    # re-arbitrated by the coordinator. On google-adk 2.9 either flag also
-    # makes a blocked 'finished' call raise ValueError, so a make_finished
-    # target must be this agent's parent or a peer. See adk_transfer.py.
+    # ADK gives this agent its own 'transfer_to_agent', which does not consult
+    # the handoff gate. transfer_guard_callbacks removes it and answers a call
+    # made anyway, and carries drop_foreign_context (PR #9's context
+    # filtering). The mechanism, and why disallow_transfer_to_parent is NOT
+    # used, are in common/adk_transfer.py and CLAUDE.md, once.
     #
     # Gated only for v2, for the same reason as the reset callback below. v1
     # is the ungated A/B baseline -- its 'finished' transfers unconditionally,

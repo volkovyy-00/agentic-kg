@@ -21,8 +21,9 @@ There is no `[Unreleased]` section.
 - **Calling the hidden transfer tool stopped ending a phase agent's turn (#69, KG-25)**: the intent, construction and
   retrieval agents cannot hand the user on without the user's confirmation, so ADK's own transfer tool is
   removed from them. On 1.x, a model that called it anyway ended the turn with an error; now it is told to leave
-  through `finished` and stays in its phase. A model that does nothing but retry it, three replies in a row, has
-  the turn ended with a short reply to the user, rather than retrying until ADK's 500-call limit.
+  through `finished` and stays in its phase. A model that keeps retrying it, three times with no other tool
+  succeeding in between, has the turn ended with a short reply to the user, rather than retrying until ADK's
+  500-call limit.
 
 ## [0.7.4] - 2026-09-22
 
