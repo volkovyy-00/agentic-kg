@@ -56,10 +56,10 @@ uv run pyright        # must report 0 errors
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
-- Pinned to `google-adk>=1.28.1,<2` (`pyproject.toml`; the floor is the CVE-2026-4810 fix) — ADK 2.x is a
-  breaking rewrite; check which major version any ADK doc, sample, or blog post is describing before trusting
-  it against this code.
-- The floor is not what you run: the committed `uv.lock` resolves `google-adk 1.39.1` (and `neo4j 6.3.1`),
+- Pinned to `google-adk>=2.9.2,<2.10` (`pyproject.toml`) — one minor window on purpose; 2.10 is its own ticket
+  (KG-42). ADK docs, samples and blog posts describe 1.x, or a 2.x newer than ours, as often as 2.9, and the
+  lines differ in behaviour this code depends on; check which version a source describes before trusting it.
+- The floor is not what you run: the committed `uv.lock` resolves `google-adk 2.9.2` (and `neo4j 6.3.1`),
   so `uv sync` installs those. Check the lock, not `pyproject.toml`, when a behaviour looks version-dependent.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
@@ -107,7 +107,7 @@ uv run pyright        # must report 0 errors
 When a turn in the dev UI produces no visible response and no spinner, the UI alone can't tell you why (hung
 tool call, routing bug, and swallowed exception all look identical from the browser). Cheapest checks first:
 poll `GET /apps/{app}/users/{user}/sessions/{id}` directly (frozen event count = nothing happened), then the
-undocumented `GET /debug/trace/session/{id}` (spans have `start_time`/`end_time`, but a call that raises never
+undocumented `GET /dev/apps/{app}/debug/trace/session/{id}` (spans have `start_time`/`end_time`, but a call that raises never
 gets a span — telemetry only fires on success), then the `adk web` server's own stdout, which is the only
 place a swallowed exception actually surfaces. Never reload the tab while a turn is genuinely streaming.
 

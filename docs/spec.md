@@ -13,7 +13,7 @@ workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate 
 ## 1. What this is
 
 A multi-agent system that turns a folder of source files into a Neo4j knowledge graph, then answers
-questions over it. It is built on Google ADK (`google-adk>=1.28.1,<2`) with LiteLLM routing every model
+questions over it. It is built on Google ADK (`google-adk>=2.9.2,<2.10`) with LiteLLM routing every model
 call through OpenRouter, and it talks to Neo4j (`neo4j>=6.3.1,<7`, plus `neo4j-graphrag`) over Bolt —
 local or Aura. Python 3.12, dependencies via `uv`.
 
