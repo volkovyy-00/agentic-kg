@@ -357,10 +357,6 @@ def test_the_model_is_never_offered_transfer_to_agent(monkeypatch):
         assert "transfer_to_agent" not in instruction
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KG-25 Task 3: ADK 2.x fences foreign turns with a longer preamble",
-)
 def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkeypatch):
     """The behavioural half of the callback pair, and the reason it exists.
 

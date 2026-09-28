@@ -299,9 +299,10 @@ wrote, so a re-run against a non-empty graph will include prior data too.
 from conversational recall. Three pieces make that possible:
 
 - `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
-  from the request. ADK rewrites another agent's output into a user-role message carrying a `"For context:"`
-  sentinel before this callback ever sees it, so role alone can't distinguish it from a real user turn — the
-  filter keys on the sentinel instead.
+  from the request. ADK rewrites another agent's output into a user-role message led by a fixed preamble
+  (`OTHER_AGENT_CONTEXT_PREAMBLE`, beginning "For context:") before this callback ever sees it, so role alone
+  can't distinguish it from a real user turn — the filter keys on that whole preamble instead, so a user
+  message that merely starts "For context:" still gets through.
 - `common/graph_profile.py`: turns `neo4j_graphrag`'s enriched schema into tri-state, always-present
   annotations (completeness, uniqueness, per-pattern degree, per-value distribution), cached via
   `get_cached_profile` — because the library's own report doesn't say whether a sampled property list is
