@@ -258,14 +258,17 @@ coordinator lacks `drop_foreign_context`, by design: its transfer tool is never 
 workflow advances.
 
 **A call made anyway is refused, and capped per turn**: the three agents take all their transfer-related callbacks
-from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the strip and
-`drop_foreign_context` as model callbacks, and `refuse_transfer_to_agent` as the tool callback. They only work as a
-set; wire a fourth gated agent the same way. ADK runs before-tool callbacks ahead of its own not-found reply
-(`build_tool_not_found_response`), which invites a retry and is bounded only by `RunConfig.max_llm_calls` (500).
-The refusal answers instead with a `tool_error` naming `finished` as the exit. It counts model *replies*, not calls,
-per agent, in `temp:` state (invocation-scoped, never persisted, so no reset callback). On the third reply in a turn
-it also sets `skip_summarization`, which makes the refusal the turn's final event. Never end that turn by raising: the
-call would stay unanswered in history, and providers reject that history on every later turn.
+from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the strip, `drop_foreign_context`
+and the turn end as before-model callbacks, the reply counter as the after-model callback, and
+`refuse_transfer_to_agent` as the tool callback. They only work as a set; wire a fourth gated agent the same way.
+ADK runs before-tool callbacks ahead of its own not-found reply (`build_tool_not_found_response`), which invites a
+retry and is bounded only by `RunConfig.max_llm_calls` (500). The refusal answers every call instead, with a
+`tool_error` naming `finished` as the exit. The counter counts model *replies* that call the hidden tool, per agent,
+in `temp:` state (invocation-scoped, never persisted, so no reset callback). Past the third such reply in a turn, the
+before-model callback returns a short text reply for the user in place of the next model call, which ends the turn.
+Never end that turn by raising, or with `skip_summarization`: raising leaves the call unanswered in history, which
+providers reject on every later turn, and `skip_summarization` ends the turn on a bare function response with no
+reply to the user.
 
 ### Tool results
 

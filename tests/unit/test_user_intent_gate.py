@@ -22,7 +22,10 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import FOREIGN_CONTEXT_SENTINEL, drop_foreign_context
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    end_turn_past_hidden_transfer_cap,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.tool_result import is_error
 
@@ -316,11 +319,12 @@ def test_both_model_callbacks_are_wired_in_order():
     that ADK leaves in this agent's history. Removing the declaration and
     leaving the example is half a fix -- the model copies the example, the
     strip has already popped the tool from tools_dict, and every copied call
-    costs a model call answered by google-adk 2.9's not-found error. Same
-    pairing as graph_construction_agent."""
+    costs a model call answered by a refusal. Same pairing as
+    graph_construction_agent, plus the per-turn cap on those refusals."""
     assert user_intent_agent.canonical_before_model_callbacks == [
         drop_foreign_context,
         strip_transfer_to_agent,
+        end_turn_past_hidden_transfer_cap,
     ]
 
 

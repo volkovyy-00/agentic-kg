@@ -37,7 +37,7 @@ graph_construction_agent = Agent(
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
     before_agent_callback=reset_construction_handoff_confirmation,
-    # transfer_guard_callbacks wires three callbacks that only work as a set
+    # transfer_guard_callbacks wires the callbacks that only work as a set
     # (common/adk_transfer.py); the same call graphrag_agent_v2 and
     # user_intent_agent_v2 make.
     #
@@ -58,10 +58,11 @@ graph_construction_agent = Agent(
     #
     # If the model emits the call anyway, refuse_transfer_to_agent (its
     # before_tool_callback) answers it before ADK's generic not-found
-    # reply, naming 'finished' as the way out, and ends the turn with an
-    # error if the model keeps calling it -- pinned by
+    # reply, naming 'finished' as the way out. If the model keeps calling
+    # it, the turn ends with a short reply to the user after the third try
+    # -- pinned by
     # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase
-    # and test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn.
+    # and test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly.
     #
     # Deliberately NOT disallow_transfer_to_parent: that flag would also
     # close the door, and would also stop Runner._find_agent_to_run

@@ -43,7 +43,8 @@ user_intent_agent = Agent(
     # copied call costs a model call. Same pairing, same reason, as
     # graph_construction_agent/agent.py. A call made anyway is answered by
     # refuse_transfer_to_agent (wired by transfer_guard_callbacks), which names
-    # the real exit and ends the turn if the model keeps calling it.
+    # the real exit; a model that keeps calling it has its turn ended with a
+    # short reply to the user.
     #
     # Still NO before_agent_callback: graphrag_agent/agent.py carries one
     # because it gates on a per-turn boolean that must be reset; this gate

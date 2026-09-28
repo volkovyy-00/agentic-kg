@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, Optional
 
 from google.adk.tools import ToolContext
 
-from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.graph_profile import (
     numeric_partitioned_properties,
@@ -269,6 +268,5 @@ variants = {
             declare_partition_interpretation,
             finished,
         ],
-        "before_model_callback": drop_foreign_context,
     },
 }

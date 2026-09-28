@@ -54,6 +54,14 @@ Open `http://localhost:8000` (pass `--port 8001` if that's busy). Two coordinato
 - **`single_agent`** — a frozen exercise carried over from the original course: a single agent that talks
   to Neo4j directly via Cypher. Useful for ad-hoc queries; not under active development.
 
+`adk web` saves conversations in a `.adk/` folder next to each agent. Sessions saved by google-adk 1.x are not
+supported on 2.x, so when upgrading to 0.8.0 or later from an earlier release, delete them all before the first
+run:
+
+```bash
+find src -name .adk -type d -prune -exec rm -rf {} +
+```
+
 ## Testing
 
 ```bash

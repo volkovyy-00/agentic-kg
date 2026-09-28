@@ -27,14 +27,19 @@ from google.adk.flows.llm_flows.agent_transfer import (
     _get_transfer_targets,
 )
 from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
+from google.genai import types
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
+    HIDDEN_TRANSFER_TURN_END,
     MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     TRANSFER_TOOL_NAME,
     _without_transfer_block,
+    count_hidden_transfer_replies,
+    end_turn_past_hidden_transfer_cap,
     refuse_transfer_to_agent,
     strip_transfer_to_agent,
     transfer_guard_callbacks,
@@ -347,117 +352,144 @@ def test_a_peer_description_cannot_shadow_the_blocks_end_marker():
     assert instruction == "You are an expert at knowledge graph construction."
 
 
-def _reply(event_id, *call_ids):
-    """A model event in session history carrying these function-call ids."""
-    return SimpleNamespace(
-        id=event_id,
-        get_function_calls=lambda: [SimpleNamespace(id=c) for c in call_ids],
-    )
-
-
-def _tool_context(call_id, events, state=None, agent="graph_construction_agent_v1"):
-    return SimpleNamespace(
-        agent_name=agent,
-        function_call_id=call_id,
-        state={} if state is None else state,
-        session=SimpleNamespace(events=events),
-        actions=SimpleNamespace(skip_summarization=None),
-    )
-
-
 _HIDDEN = SimpleNamespace(name=TRANSFER_TOOL_NAME)
 
 
-def test_refusal_leaves_every_other_tool_alone():
-    context = _tool_context("c1", [_reply("e1", "c1")])
+def _callback_context(state=None, agent="graph_construction_agent_v1"):
+    return SimpleNamespace(agent_name=agent, state={} if state is None else state)
 
-    assert (
-        refuse_transfer_to_agent(SimpleNamespace(name="finished"), {}, context) is None
+
+def _reply(*names, partial=None):
+    """A model reply calling these tools, or saying something if none."""
+    parts = [
+        types.Part(function_call=types.FunctionCall(name=name, args={}))
+        for name in names
+    ] or [types.Part(text="ok")]
+    return LlmResponse(
+        content=types.Content(role="model", parts=parts), partial=partial
     )
-    assert context.state == {}
+
+
+def _run_replies(context, replies):
+    """Each reply as ADK runs it: the model callback before it, the counter
+    after it. Returns what the before-model callback returned last."""
+    ended = None
+    for reply in replies:
+        ended = end_turn_past_hidden_transfer_cap(context, None)
+        if ended is not None:
+            return ended
+        count_hidden_transfer_replies(context, reply)
+    return end_turn_past_hidden_transfer_cap(context, None)
+
+
+def test_refusal_leaves_every_other_tool_alone():
+    assert refuse_transfer_to_agent(SimpleNamespace(name="finished"), {}, None) is None
 
 
 def test_refusal_answers_the_hidden_tool_and_names_the_real_exit():
     """Answered before ADK's generic not-found reply, which invites a retry:
     the model is told which exit this agent really has, and keeps the turn."""
-    context = _tool_context("c1", [_reply("e1", "c1")])
-
-    reply = refuse_transfer_to_agent(_HIDDEN, {"agent_name": _PARENT}, context)
+    reply = refuse_transfer_to_agent(_HIDDEN, {"agent_name": _PARENT}, None)
 
     assert is_error(reply)
     assert "finished" in reply["error_message"]
-    assert not context.actions.skip_summarization
 
 
-def test_refusal_ends_the_turn_on_the_reply_past_the_cap_without_raising():
-    """Raising would leave the call unanswered in history and break every later
-    turn; skip_summarization makes this refusal the turn's final event."""
-    events, state = [], {}
-    for n in range(MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN):
-        events.append(_reply(f"e{n}", f"c{n}"))
-        context = _tool_context(f"c{n}", events, state)
-        assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
-        assert not context.actions.skip_summarization
+def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
+    """The model call after the capped reply is replaced by a text reply, so
+    the user gets an answer and the turn ends without another model call."""
+    context = _callback_context()
+    replies = [_reply(TRANSFER_TOOL_NAME)] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
 
-    events.append(_reply("e-last", "c-last"))
-    context = _tool_context("c-last", events, state)
-    assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
-    assert context.actions.skip_summarization is True
+    assert _run_replies(context, replies) is None
+
+    ended = _run_replies(context, [_reply(TRANSFER_TOOL_NAME)])
+    assert ended is not None
+    assert not ended.get_function_calls()
+    assert ended.content.parts[0].text == HIDDEN_TRANSFER_TURN_END
 
 
 def test_parallel_calls_in_one_reply_count_once():
-    """Three calls in one reply are one attempt: each is refused, none ends
-    the turn."""
-    events, state = [_reply("e1", "c1", "c2", "c3")], {}
-    for call_id in ("c1", "c2", "c3"):
-        context = _tool_context(call_id, events, state)
-        assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
-        assert not context.actions.skip_summarization
+    context = _callback_context()
+    parallel = _reply(TRANSFER_TOOL_NAME, TRANSFER_TOOL_NAME, TRANSFER_TOOL_NAME)
+
+    assert _run_replies(context, [parallel]) is None
+    assert list(context.state.values()) == [1]
+
+
+def test_replies_without_the_hidden_tool_and_partial_chunks_are_not_counted():
+    """ADK passes streaming chunks to after-model callbacks too, and the full
+    reply follows them; counting both would count one reply twice."""
+    context = _callback_context()
+    replies = [
+        _reply("finished"),
+        _reply(),
+        _reply(TRANSFER_TOOL_NAME, partial=True),
+        LlmResponse(),
+    ]
+
+    assert _run_replies(context, replies) is None
+    assert context.state == {}
 
 
 def test_each_agent_keeps_its_own_count():
     """One invocation can run two gated agents (a confirmed construction
     handoff runs retrieval inline); retrieval must not inherit construction's
-    refusals."""
-    events, state = [], {}
-    for n in range(MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN):
-        events.append(_reply(f"e{n}", f"c{n}"))
-        refuse_transfer_to_agent(_HIDDEN, {}, _tool_context(f"c{n}", events, state))
+    replies."""
+    state = {}
+    construction = _callback_context(state)
+    _run_replies(
+        construction,
+        [_reply(TRANSFER_TOOL_NAME)] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
+    )
 
-    events.append(_reply("e-rag", "c-rag"))
-    context = _tool_context("c-rag", events, state, agent="graphrag_agent_v2")
-    assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
-    assert not context.actions.skip_summarization
+    retrieval = _callback_context(state, agent="graphrag_agent_v2")
+    assert _run_replies(retrieval, [_reply(TRANSFER_TOOL_NAME)]) is None
 
 
 def test_the_count_lives_in_invocation_scoped_state():
     """temp: keys are dropped from the persisted delta, so each turn starts at
     zero with no reset callback and nothing lands in the session store."""
-    state = {}
-    refuse_transfer_to_agent(
-        _HIDDEN, {}, _tool_context("c1", [_reply("e1", "c1")], state)
-    )
+    context = _callback_context()
+    count_hidden_transfer_replies(context, _reply(TRANSFER_TOOL_NAME))
 
-    assert state
-    assert all(key.startswith("temp:") for key in state)
+    assert context.state
+    assert all(key.startswith("temp:") for key in context.state)
 
 
-def test_refusal_parameter_names_are_the_ones_adk_passes():
-    """ADK invokes before_tool_callback purely by keyword (tool=, args=,
-    tool_context=; _tool_caller.py _execute_single_prepared_call)."""
+def test_callback_parameter_names_are_the_ones_adk_passes():
+    """ADK invokes every callback purely by keyword: tool=, args= and
+    tool_context= for before-tool (_tool_caller.py
+    _execute_single_prepared_call), callback_context= plus llm_request= or
+    llm_response= for the model callbacks (base_llm_flow.py)."""
     import inspect
 
-    parameters = list(inspect.signature(refuse_transfer_to_agent).parameters)
-    assert parameters == ["tool", "args", "tool_context"]
+    def names(callback):
+        return list(inspect.signature(callback).parameters)
+
+    assert names(refuse_transfer_to_agent) == ["tool", "args", "tool_context"]
+    assert names(end_turn_past_hidden_transfer_cap) == [
+        "callback_context",
+        "llm_request",
+    ]
+    assert names(count_hidden_transfer_replies) == [
+        "callback_context",
+        "llm_response",
+    ]
 
 
-def test_the_guard_wires_all_three_callbacks_together_or_none():
-    """The strip, the context filter and the refusal only work as a set, so a
-    gated agent takes them from one helper."""
+def test_the_guard_wires_all_its_callbacks_together_or_none():
+    """The strip, the context filter, the refusal and its cap only work as a
+    set, so a gated agent takes them from one helper."""
     wired = transfer_guard_callbacks(True)
 
     assert wired == {
-        "before_model_callback": [drop_foreign_context, strip_transfer_to_agent],
+        "before_model_callback": [
+            drop_foreign_context,
+            strip_transfer_to_agent,
+            end_turn_past_hidden_transfer_cap,
+        ],
+        "after_model_callback": count_hidden_transfer_replies,
         "before_tool_callback": refuse_transfer_to_agent,
     }
     assert transfer_guard_callbacks(False) == {}

@@ -15,9 +15,12 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import FOREIGN_CONTEXT_SENTINEL
+from agentic_kg.common.adk_transfer import transfer_guard_callbacks
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
     variants,
 )
+
+GATED_VARIANT = "graphrag_agent_v2"
 
 
 class CapturingLlm(BaseLlm):
@@ -53,7 +56,9 @@ def _build_agent(variant_name):
         description="test",
         instruction=spec["instruction"],
         tools=spec["tools"],
-        before_model_callback=spec.get("before_model_callback"),
+        # The same call graphrag_agent/agent.py makes, so these tests check
+        # the wiring production uses.
+        **transfer_guard_callbacks(gated=variant_name == GATED_VARIANT),
     )
 
 
@@ -114,8 +119,12 @@ def test_v1_still_receives_it_negative_control():
 
 
 def test_v1_is_left_intact_for_the_acceptance_ab():
+    """The variants carry instructions and tools only. Which one is gated is
+    decided once, by graphrag_agent/agent.py's IS_GATED_VARIANT, so a callback
+    key added back to a variant would be wiring that nothing reads."""
     assert "graphrag_agent_v1" in variants
-    assert "before_model_callback" not in variants["graphrag_agent_v1"]
+    for name, spec in variants.items():
+        assert set(spec) == {"instruction", "tools"}, name
 
 
 def test_v2_binds_the_profile_wrapper_not_the_bare_schema_tool():

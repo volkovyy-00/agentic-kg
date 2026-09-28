@@ -62,8 +62,8 @@ graphrag_agent = Agent(
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
     # v2 is gated: transfer_guard_callbacks wires drop_foreign_context (PR #9's
-    # context filtering), the transfer strip and the hidden-transfer refusal,
-    # which only work as a set (common/adk_transfer.py).
+    # context filtering), the transfer strip, and the hidden-transfer refusal
+    # and its per-turn cap, which only work as a set (common/adk_transfer.py).
     #
     # ADK injects its own 'transfer_to_agent' tool, plus an instruction
     # advertising it, into any LlmAgent with a parent or peers, and it does not
@@ -80,8 +80,8 @@ graphrag_agent = Agent(
     # Gated only for v2, for the same reason as the reset callback below. v1
     # is the ungated A/B baseline -- its 'finished' transfers unconditionally,
     # so it has no guarantee for the injected tool to bypass, and
-    # test_v1_is_left_intact_for_the_acceptance_ab pins that it carries no
-    # before_model_callback at all.
+    # test_v1_is_left_intact_for_the_acceptance_ab pins that it gets none of
+    # these callbacks.
     **transfer_guard_callbacks(gated=IS_GATED_VARIANT),
     # Conditional because only v2 is gated. Attaching unconditionally would
     # write inert flags every turn under v1, read by nobody -- harmless, but

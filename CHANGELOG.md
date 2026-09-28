@@ -16,14 +16,13 @@ There is no `[Unreleased]` section.
   conventions are unchanged.
 - **Upgrade: delete your local `adk web` session stores (#69, KG-25)**: sessions saved by 1.x are not supported on
   2.x — resuming one is untested, and this release does not carry conversation history over — so start clean.
-  `adk web` keeps one store per agent, in a `.adk/` folder inside the agents directory; delete them all before
-  the first run with `find src -name .adk -type d -prune -exec rm -rf {} +`. Past conversations are lost;
-  nothing else is.
+  Delete them all before the first run (the README's *Run the web UI* section has the command). Past
+  conversations are lost; nothing else is.
 - **Calling the hidden transfer tool stopped ending a phase agent's turn (#69, KG-25)**: the intent, construction and
   retrieval agents cannot hand the user on without the user's confirmation, so ADK's own transfer tool is
   removed from them. On 1.x, a model that called it anyway ended the turn with an error; now it is told to leave
-  through `finished` and stays in its phase. A model that tries it in a third reply in one turn ends the turn
-  there, rather than retrying until ADK's 500-call limit.
+  through `finished` and stays in its phase. A model that tries it in a third reply in one turn has the turn
+  ended with a short reply to the user, rather than retrying until ADK's 500-call limit.
 
 ## [0.7.4] - 2026-09-22
 

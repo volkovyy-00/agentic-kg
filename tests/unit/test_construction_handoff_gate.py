@@ -18,6 +18,7 @@ from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
+    HIDDEN_TRANSFER_TURN_END,
     MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     strip_transfer_to_agent,
 )
@@ -247,8 +248,9 @@ def _declaration_names(request):
     return names
 
 
-async def _run_one_turn(agent, app_name, message="hello"):
-    """Drive one real user turn through ADK and return the events it produced.
+async def _run_turns(agent, app_name, messages):
+    """Drive real user turns through ADK, all in ONE session, and return each
+    turn's events.
 
     Points the Runner at an agent that is already wired into the real tree
     rather than re-parenting it, which BaseAgent's sub-agent parenting
@@ -256,17 +258,59 @@ async def _run_one_turn(agent, app_name, message="hello"):
     """
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
-        app_name=app_name,
-        user_id="u1",
+        app_name=app_name, user_id="u1"
     )
-    return [
-        event
-        async for event in runner.run_async(
-            user_id="u1",
-            session_id=session.id,
-            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+    turns = []
+    for message in messages:
+        turns.append(
+            [
+                event
+                async for event in runner.run_async(
+                    user_id="u1",
+                    session_id=session.id,
+                    new_message=types.Content(
+                        role="user", parts=[types.Part(text=message)]
+                    ),
+                )
+            ]
         )
+    return turns
+
+
+def _hidden_transfer_replies(events):
+    return [
+        part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response and part.function_response.name == "transfer_to_agent"
     ]
+
+
+def _final_text(events):
+    """The text of the turn's last event, which is what the user reads."""
+    parts = events[-1].content.parts if events[-1].content else []
+    return "".join(part.text or "" for part in parts)
+
+
+def _unanswered_calls(llm_request):
+    """Function-call ids in a request's history with no matching response --
+    the shape OpenAI and Anthropic reject with a 400."""
+    calls, answered = set(), set()
+    for content in llm_request.contents:
+        for part in content.parts or []:
+            if part.function_call:
+                calls.add(part.function_call.id)
+            if part.function_response:
+                answered.add(part.function_response.id)
+    return calls - answered
+
+
+_TRANSFER = _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+
+
+async def _run_one_turn(agent, app_name, message="hello"):
+    """One user turn through ADK; the events it produced."""
+    return (await _run_turns(agent, app_name, [message]))[0]
 
 
 def test_the_strip_callback_is_wired_onto_the_construction_agent():
@@ -359,15 +403,10 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
         _run_one_turn(graph_construction_agent, "construction_transfer_error_test")
     )
 
-    replies = [
-        part.function_response
-        for event in events
-        for part in (event.content.parts if event.content else None) or []
-        if part.function_response and part.function_response.name == "transfer_to_agent"
-    ]
+    replies = _hidden_transfer_replies(events)
     assert len(replies) == 1
-    assert is_error(replies[0].response or {})
-    assert "finished" in (replies[0].response or {})["error_message"]
+    assert is_error(replies[0])
+    assert "finished" in replies[0]["error_message"]
     assert not any(event.actions.transfer_to_agent for event in events)
     # The error went back to this agent's own model, which answered it.
     assert len(graph_construction_agent.model.requests) == 2
@@ -412,62 +451,13 @@ def test_transfer_and_finished_in_one_reply_neither_transfers_nor_exits(
     assert not any(event.actions.transfer_to_agent for event in events)
 
 
-async def _run_turns(agent, app_name, messages):
-    """Like _run_one_turn, but several user turns in ONE session, returning
-    each turn's events."""
-    runner = InMemoryRunner(agent=agent, app_name=app_name)
-    session = await runner.session_service.create_session(
-        app_name=app_name, user_id="u1"
-    )
-    turns = []
-    for message in messages:
-        turns.append(
-            [
-                event
-                async for event in runner.run_async(
-                    user_id="u1",
-                    session_id=session.id,
-                    new_message=types.Content(
-                        role="user", parts=[types.Part(text=message)]
-                    ),
-                )
-            ]
-        )
-    return turns
-
-
-def _hidden_transfer_replies(events):
-    return [
-        part.function_response.response or {}
-        for event in events
-        for part in (event.content.parts if event.content else None) or []
-        if part.function_response and part.function_response.name == "transfer_to_agent"
-    ]
-
-
-def _unanswered_calls(llm_request):
-    """Function-call ids in a request's history with no matching response --
-    the shape OpenAI and Anthropic reject with a 400."""
-    calls, answered = set(), set()
-    for content in llm_request.contents:
-        for part in content.parts or []:
-            if part.function_call:
-                calls.add(part.function_call.id)
-            if part.function_response:
-                answered.add(part.function_response.id)
-    return calls - answered
-
-
-_TRANSFER = _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
-
-
 def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
     monkeypatch,
 ):
     """Without a per-turn cap, only RunConfig.max_llm_calls (500) would stop a
     model that keeps retrying. The reply past the cap is still answered, and
-    ends the turn, so the next turn starts from a complete history and a
-    fresh count."""
+    the turn ends with a reply to the user instead of another model call, so
+    the next turn starts from a complete history and a fresh count."""
     cap = MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
     monkeypatch.setattr(
         graph_construction_agent,
@@ -489,10 +479,56 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
     first_replies = _hidden_transfer_replies(first)
     assert len(first_replies) == cap + 1
     assert all(is_error(reply) for reply in first_replies)
+    assert _final_text(first) == HIDDEN_TRANSFER_TURN_END
     # Turn 2: one refused call (the count restarted), then an answer.
     assert len(requests) == cap + 3
     assert all(is_error(reply) for reply in _hidden_transfer_replies(second))
     assert not _unanswered_calls(requests[-1])
+
+
+def test_a_real_tool_in_the_capped_reply_still_runs_and_the_user_gets_a_reply(
+    monkeypatch,
+):
+    """The capped reply also confirms the handoff: the confirmation is still
+    recorded and answered, and the turn still ends with text for the user
+    rather than on a bare function response."""
+    both = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                _TRANSFER.content.parts[0],
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="confirm_construction_handoff", args={}
+                    )
+                ),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+            + [both, _text("never reached")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_capped_real_tool_test")
+    )
+
+    responses = {
+        part.function_response.name: part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response
+    }
+    assert is_success(responses["confirm_construction_handoff"])
+    assert len(graph_construction_agent.model.requests) == (
+        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN + 1
+    )
+    assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
 
 
 def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):
