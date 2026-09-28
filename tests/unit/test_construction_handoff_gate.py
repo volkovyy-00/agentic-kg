@@ -149,8 +149,8 @@ def test_reset_is_wired_onto_the_construction_agent():
 
 def test_reset_parameter_is_named_callback_context():
     """Catches a rename. ADK invokes these callbacks by keyword
-    (base_agent.py:385-387), so a different parameter name fails at request
-    time with a TypeError rather than at import."""
+    (BaseAgent._handle_before_agent_callback), so a different parameter name
+    fails at request time with a TypeError rather than at import."""
     parameters = list(
         inspect.signature(reset_construction_handoff_confirmation).parameters
     )
@@ -246,8 +246,8 @@ async def _run_one_turn(agent, app_name, message="hello"):
     """Drive one real user turn through ADK and return the events it produced.
 
     Points the Runner at an agent that is already wired into the real tree
-    rather than re-parenting it, which base_agent.py:496-505 forbids for an
-    agent that already has a parent.
+    rather than re-parenting it, which BaseAgent's sub-agent parenting
+    validator forbids for an agent that already has a parent.
     """
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
@@ -277,7 +277,7 @@ def test_the_strip_callback_is_wired_onto_the_construction_agent():
 def test_the_agent_does_not_disallow_transfers():
     """Guards the trap this design exists to avoid. Setting
     disallow_transfer_to_parent would also close the door -- and would make
-    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every in-phase follow-up back
     through the coordinator. See the spec's 'Why not' section."""
     assert graph_construction_agent.disallow_transfer_to_parent is False
@@ -411,9 +411,9 @@ def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
     test_finished_transfers_to_retrieval_when_confirmed calls the closure with
     a FakeToolContext and would pass even if ADK's resolution path broke.
 
-    Both models are scripted: the transfer runs inline in the same turn
-    (base_llm_flow.py:536-542), so graphrag_agent's real model would otherwise
-    be invoked for real.
+    Both models are scripted: the transfer runs inline in the same turn (the
+    transfer loop in Context._run_node_internal, agents/context.py), so
+    graphrag_agent's real model would otherwise be invoked for real.
     """
     monkeypatch.setattr(
         graph_construction_agent,
@@ -462,9 +462,9 @@ def test_both_model_callbacks_are_present_on_the_construction_agent():
 
     The strip removes the transfer_to_agent DECLARATION; drop_foreign_context
     removes the coordinator's own delegating call, which ADK rewrites into a
-    'For context: ... called tool transfer_to_agent with parameters {...}'
-    message (contents.py:241-245) and then keeps in history for every later
-    turn. Either one alone leaves the model a standing worked example of a
+    'For context: ... called tool `transfer_to_agent` with parameters: ...'
+    message (_present_other_agent_message, flows/llm_flows/_fencing.py) and
+    then keeps in history for every later turn. Either one alone leaves the model a standing worked example of a
     door it is not supposed to use.
     """
     callbacks = graph_construction_agent.canonical_before_model_callbacks

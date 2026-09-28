@@ -123,8 +123,9 @@ def test_the_fixture_actually_contains_the_tool_negative_control():
 
 
 def test_strip_removes_the_tool_from_the_dispatch_table():
-    """tools_dict is what functions.py looks the call up in. Leaving it here
-    means ADK will happily run a call the model made from memory."""
+    """tools_dict is what ADK looks the call up in (_get_tool in
+    flows/llm_flows/_tool_caller.py). Leaving it here means ADK will happily
+    run a call the model made from memory."""
     request = asyncio.run(_request_as_adk_builds_it())
     strip_transfer_to_agent(None, request)
     assert TRANSFER_TOOL_NAME not in request.tools_dict

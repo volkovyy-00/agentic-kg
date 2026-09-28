@@ -13,7 +13,7 @@ from .variants import variants
 def reset_construction_handoff_confirmation(callback_context: CallbackContext) -> None:
     """Clear the handoff confirmation at the start of every turn this agent runs.
 
-    Fires once per run_async (base_agent.py:218-223), which for a plain Agent
+    Fires once per BaseAgent.run_async, which for a plain Agent
     means every turn this agent is active -- not only on entry to the phase.
     There is no phase-entry-versus-turn-N distinction here and none should be
     built: trying to keep a confirmation alive across turns is the stale-flag
@@ -24,8 +24,8 @@ def reset_construction_handoff_confirmation(callback_context: CallbackContext) -
     'finished' both fire after the reset, inside one unbroken loop.
 
     The parameter name is load-bearing: ADK invokes callbacks by keyword
-    (base_agent.py:385-387), so renaming it fails at request time with a
-    TypeError, not at import.
+    (BaseAgent._handle_before_agent_callback), so renaming it fails at
+    request time with a TypeError, not at import.
     """
     callback_context.state[HANDOFF_CONFIRMED_KEY] = False
 
@@ -39,8 +39,8 @@ graph_construction_agent = Agent(
     tools=variants[AGENT_NAME]["tools"],
     before_agent_callback=reset_construction_handoff_confirmation,
     # Two model callbacks, in a list -- ADK iterates
-    # canonical_before_model_callbacks (base_llm_flow.py:661), so a list is
-    # native here. Same shape graphrag_agent_v2 carries.
+    # LlmAgent.canonical_before_model_callbacks, so a list is native here.
+    # Same shape graphrag_agent_v2 carries.
     #
     # ADK injects its own 'transfer_to_agent' tool, plus an instruction
     # advertising it, into any LlmAgent with a parent or peers -- and it
@@ -49,30 +49,32 @@ graph_construction_agent = Agent(
     #
     # drop_foreign_context closes the matching context-side hole. The
     # coordinator's own delegating call arrives here rewritten by
-    # _present_other_agent_message (contents.py) into "For context:
-    # [kg_construction_agent_v1] called tool 'transfer_to_agent' with
-    # parameters: {'agent_name': 'graph_construction_agent_v1'}" -- a
+    # _present_other_agent_message (flows/llm_flows/_fencing.py) into a
+    # "For context: ..." turn quoting "[kg_construction_agent_v1] called
+    # tool `transfer_to_agent` with parameters:" and its arguments -- a
     # worked example of the exact tool name and argument shape, sitting in
     # history for every subsequent turn in this branch, while the
     # declaration itself is stripped. Removing the declaration and leaving
     # the example is half a fix.
     #
-    # This does NOT soften what happens if the model emits the call anyway:
-    # tools_dict no longer holds it, so ADK raises (functions.py:565-568).
-    # That hard error is spec-mandated and pinned by
-    # test_calling_transfer_to_agent_anyway_is_a_hard_error. There is no
-    # stub and no graceful path; this callback only removes the standing
-    # invitation to try.
+    # If the model emits the call anyway, tools_dict no longer holds it, so
+    # google-adk 2.9 answers it with a not-found error listing this agent's
+    # own tools (build_tool_not_found_response) and the agent keeps the
+    # turn, pinned by
+    # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase.
+    # There is no stub; this callback only removes the standing invitation
+    # to try.
     #
     # Deliberately NOT disallow_transfer_to_parent: that flag would also
     # close the door, and would also stop Runner._find_agent_to_run
-    # (runners.py:474-489) from returning this agent for the user's second
-    # message, so every follow-up question in the post-construction window
-    # would be re-arbitrated by the coordinator. See adk_transfer.py.
+    # (agents/_agent_router.py find_agent_to_run) from returning this agent
+    # for the user's second message, so every follow-up question in the
+    # post-construction window would be re-arbitrated by the coordinator.
+    # See adk_transfer.py.
     #
     # 'finished' is unaffected -- it writes actions.transfer_to_agent
-    # directly (base_llm_flow.py:536-548), which no request-level strip
-    # touches.
+    # directly, which ADK acts on after the tool returns and no
+    # request-level strip touches.
     before_model_callback=[drop_foreign_context, strip_transfer_to_agent],
 )
 

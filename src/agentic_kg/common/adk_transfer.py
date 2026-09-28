@@ -19,16 +19,19 @@ The cost is coupling: we remove something ADK built, so we depend on the shape
 it built it in -- marker phrases in an interpolated instruction block, and the
 layout of config.tools. That is why this is tested against real LlmRequest
 objects and ADK's own instruction builder, and asserted end-to-end on what
-reaches the model. A google-adk 2.x upgrade should expect to rewrite this
-module.
+reaches the model, so a google-adk upgrade that changes either shape fails
+those tests rather than this module going quietly inert.
 
-Known gap, deliberately not closed: the live (bidi-streaming) path never runs
-this. run_live does call _preprocess_async, so it DOES inject the transfer
-tool, but it never reaches _handle_before_model_callback, which only
-_call_llm_async on the run_async path calls -- so neither this strip nor
-drop_foreign_context applies under run_live. That is unreachable here because
-LiteLlm does not override BaseLlm.connect, which raises NotImplementedError,
-so no agent in this tree can run live at all.
+Known gap, deliberately not closed: the live (bidi-streaming) path never
+applies this. run_live_flow (flows/llm_flows/_live_llm_flow.py) calls
+_preprocess_async, so it DOES inject the transfer tool, and opens the
+connection with that request. It runs _handle_before_model_callback only in
+screen_live_user_content, once per user message sent after the connection is
+open, on a copy of the request whose contents are just that message -- so
+neither this strip nor drop_foreign_context shapes the request the live
+connection was opened with. That is unreachable here because LiteLlm does not
+override BaseLlm.connect, which raises NotImplementedError, so no agent in
+this tree can run live at all.
 """
 
 import logging

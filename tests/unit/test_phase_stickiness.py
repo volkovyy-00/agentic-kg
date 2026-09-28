@@ -1,10 +1,10 @@
 """Empirical proof that a gated agent keeps the user across turns.
 
 ADK decides who handles each NEW top-level user message in
-Runner._find_agent_to_run (runners.py:474-489): it walks back to the agent
-that replied last and returns it only if _is_transferable_across_agent_tree
-(492-510) finds disallow_transfer_to_parent unset on that agent and every
-ancestor. Setting that flag -- the obvious way to remove ADK's injected
+Runner._find_agent_to_run (on google-adk 2.9, find_agent_to_run in
+agents/_agent_router.py): it walks back to the agent that replied last and
+returns it only if is_transferable_across_agent_tree finds
+disallow_transfer_to_parent unset on that agent and every ancestor. Setting that flag -- the obvious way to remove ADK's injected
 transfer tool, and the one this design rejected -- would therefore send every
 in-phase follow-up question back to the coordinator to be re-arbitrated.
 

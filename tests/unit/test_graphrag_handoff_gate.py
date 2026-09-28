@@ -241,8 +241,8 @@ def test_reset_is_wired_onto_the_graphrag_agent():
 
 def test_reset_parameter_is_named_callback_context():
     """Catches a rename. ADK invokes these callbacks by keyword
-    (base_agent.py:385-387), so a different parameter name fails at request
-    time with a TypeError rather than at import."""
+    (BaseAgent._handle_before_agent_callback), so a different parameter name
+    fails at request time with a TypeError rather than at import."""
     parameters = list(inspect.signature(reset_graphrag_handoff_confirmation).parameters)
     assert parameters == ["callback_context"]
 
@@ -294,7 +294,7 @@ def test_both_model_callbacks_are_present_on_the_shipped_variant():
 def test_the_agent_does_not_disallow_transfers():
     """Guards the trap this design exists to avoid. Setting
     disallow_transfer_to_parent would also close the door -- and would make
-    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every follow-up question back
     through the coordinator. See the spec's 'Why not' section."""
     assert graphrag_agent.disallow_transfer_to_parent is False
@@ -390,9 +390,9 @@ def test_an_unstripped_agent_still_receives_it_negative_control():
 
     Builds a fresh, unparented v1 with no strip callback and gives it a
     throwaway parent with a peer. That is only possible because it is freshly
-    constructed: base_agent.py:496-505 raises on any attempt to re-parent the
-    live singletons, which is why every other test here points the Runner at
-    the real tree.
+    constructed: BaseAgent's sub-agent parenting validator raises on any
+    attempt to re-parent the live singletons, which is why every other test
+    here points the Runner at the real tree.
     """
     spec = variants["graphrag_agent_v1"]
     child = Agent(
@@ -429,9 +429,9 @@ def test_a_confirmed_handoff_still_reaches_the_coordinator(monkeypatch):
     closure with a FakeToolContext and would pass even if ADK's resolution
     path broke.
 
-    Both models are scripted: the transfer runs inline in the same turn
-    (base_llm_flow.py:536-542), so the coordinator's real model would
-    otherwise be invoked for real.
+    Both models are scripted: the transfer runs inline in the same turn (the
+    transfer loop in Context._run_node_internal, agents/context.py), so the
+    coordinator's real model would otherwise be invoked for real.
     """
     monkeypatch.setattr(
         graphrag_agent,

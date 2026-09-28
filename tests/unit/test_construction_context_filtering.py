@@ -74,8 +74,8 @@ def _text(text):
 def _foreign_event():
     """One event shaped exactly as ADK reshapes another agent's turn.
 
-    _present_other_agent_message (contents.py) sets role and author to 'user' and
-    prepends the sentinel as its own part, so role cannot distinguish this from
+    _present_other_agent_message (flows/llm_flows/_fencing.py) sets role and
+    author to 'user' and prepends the sentinel as its own part, so role cannot distinguish this from
     a real human turn -- which is why drop_foreign_context keys on the sentinel
     text sitting at parts[0].
     """
@@ -95,7 +95,8 @@ async def _prepare_session(app_name):
     """Create a session and plant the stale critic turn in its history.
 
     Points InMemoryRunner at the singleton, which is already parented into the
-    real tree -- re-parenting it is what base_agent.py:496-505 forbids.
+    real tree -- re-parenting it is what BaseAgent's sub-agent parenting
+    validator forbids ("already has a parent agent").
     """
     runner = InMemoryRunner(agent=graph_construction_agent, app_name=app_name)
     session = await runner.session_service.create_session(
@@ -192,9 +193,9 @@ def test_without_the_filter_the_stale_warning_does_reach_the_model(monkeypatch):
     keeps this control on the same road as the positive case: same object, same
     name, same tools, same instruction, same place in the tree.
 
-    Safe because canonical_before_model_callbacks (llm_agent.py:382-393) is a
-    live property re-read on every access, and neither BaseAgent nor LlmAgent
-    sets frozen or validate_assignment (base_agent.py:70-74). monkeypatch is
+    Safe because LlmAgent.canonical_before_model_callbacks is a live property
+    re-read on every access, and neither BaseAgent nor LlmAgent sets frozen or
+    validate_assignment (BaseAgent.model_config). monkeypatch is
     function-scoped, so both attributes are restored for the next test.
     """
     monkeypatch.setattr(graph_construction_agent, "model", _scripted_model())

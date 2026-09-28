@@ -173,12 +173,12 @@ an absence**, because an omitted key reads to a model as "fine." Four mechanisms
 failure modes:
 
 **Context filtering** (`common/adk_context.py`) — ADK rewrites another agent's output into a *user-role*
-message carrying a literal `"For context:"` sentinel before any `before_model_callback` sees it. Role
-alone therefore cannot distinguish a colleague agent's stale claim from something the human actually
-typed. `drop_foreign_context` keys on the sentinel and strips those turns. Scope matters: it removes one
-structurally-invisible contamination channel. It deliberately **keeps the agent's own** prior turns, and
-it no-ops rather than emptying a request that is entirely foreign. Self-recall is addressed by prompt
-instruction only — "query for it again instead" — not by enforcement.
+message led by a fixed preamble (a paragraph beginning `"For context:"`) before any `before_model_callback`
+sees it. Role alone therefore cannot distinguish a colleague agent's stale claim from something the human
+actually typed. `drop_foreign_context` keys on that whole preamble and strips those turns. Scope matters:
+it removes one structurally-invisible contamination channel. It deliberately **keeps the agent's own**
+prior turns, and it no-ops rather than emptying a request that is entirely foreign. Self-recall is
+addressed by prompt instruction only — "query for it again instead" — not by enforcement.
 
 **Schema profiling** (`common/graph_profile.py`) — the underlying library reports property values from
 either an exhaustive scan or, above 10,000 rows, five arbitrary sampled values, and the two are

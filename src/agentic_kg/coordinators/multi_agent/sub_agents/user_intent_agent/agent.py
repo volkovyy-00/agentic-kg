@@ -38,10 +38,11 @@ user_intent_agent = Agent(
     # for the whole interview -- a worked example of the exact tool name
     # and argument shape, on every turn of the stickiest phase there is.
     # Removing the declaration and leaving the example is half a fix: the
-    # model copies it, the strip has popped it from tools_dict, and ADK
-    # raises ValueError mid-turn -- a dead turn with no response and no
-    # spinner, which is not a failure the model can recover from. Same
-    # pairing, same reason, as graph_construction_agent/agent.py.
+    # model copies it, the strip has popped it from tools_dict, and
+    # google-adk 2.9 answers with a not-found error -- recoverable, but every
+    # copied call costs a model call and nothing but RunConfig.max_llm_calls
+    # bounds a model that keeps copying it. Same pairing, same reason, as
+    # graph_construction_agent/agent.py.
     #
     # Still NO before_agent_callback: graphrag_agent/agent.py carries one
     # because it gates on a per-turn boolean that must be reset; this gate
@@ -49,9 +50,10 @@ user_intent_agent = Agent(
     #
     # Deliberately NOT disallow_transfer_to_parent: that flag would also
     # close the door, and would also stop Runner._find_agent_to_run
-    # (runners.py:474-489) from returning this agent for the user's second
-    # message, so every mid-interview reply would be re-arbitrated by the
-    # coordinator. An interview is multi-turn by nature. See adk_transfer.py.
+    # (agents/_agent_router.py find_agent_to_run) from returning this agent
+    # for the user's second message, so every mid-interview reply would be
+    # re-arbitrated by the coordinator. An interview is multi-turn by nature.
+    # See adk_transfer.py.
     before_model_callback=(
         [drop_foreign_context, strip_transfer_to_agent] if IS_GATED_VARIANT else None
     ),

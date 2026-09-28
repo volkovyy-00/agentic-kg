@@ -291,7 +291,8 @@ class Neo4jForADK:
         loads settings and constructs a driver. Its only production caller,
         cypher_tools._physical_schema, already wraps it in try/except ->
         tool_error. Any new caller must do the same: an unhandled exception
-        mid-turn is indistinguishable from a hang in `adk web` (see CLAUDE.md).
+        mid-turn ends the turn with no reply the model can act on, and `adk
+        web` shows the user only a one-line error (see CLAUDE.md).
         """
         return self._connection()[0]
 

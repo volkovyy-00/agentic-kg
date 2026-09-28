@@ -289,8 +289,8 @@ def _plan_problems(state: StateLike) -> list[str]:
     any check drops the others' early catch FOR THAT ITERATION, IN THE LOOP
     ONLY; approval still refuses the plan.
 
-    exc_info because the adk web server's own stdout is the only place these
-    surface -- a bare message there is near-useless.
+    exc_info because the adk web server's own log output is the only place
+    these surface -- a bare message there is near-useless.
     """
     try:
         return find_plan_problems(state)[0]
