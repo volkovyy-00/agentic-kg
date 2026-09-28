@@ -1,11 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
-from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import (
-    refuse_transfer_to_agent,
-    strip_transfer_to_agent,
-)
+from agentic_kg.common.adk_transfer import transfer_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.construction_handoff_tools import HANDOFF_CONFIRMED_KEY
 
@@ -41,9 +37,9 @@ graph_construction_agent = Agent(
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
     before_agent_callback=reset_construction_handoff_confirmation,
-    # Two model callbacks, in a list -- ADK iterates
-    # LlmAgent.canonical_before_model_callbacks, so a list is native here.
-    # Same shape graphrag_agent_v2 carries.
+    # transfer_guard_callbacks wires three callbacks that only work as a set
+    # (common/adk_transfer.py); the same call graphrag_agent_v2 and
+    # user_intent_agent_v2 make.
     #
     # ADK injects its own 'transfer_to_agent' tool, plus an instruction
     # advertising it, into any LlmAgent with a parent or peers -- and it
@@ -60,8 +56,8 @@ graph_construction_agent = Agent(
     # declaration itself is stripped. Removing the declaration and leaving
     # the example is half a fix.
     #
-    # If the model emits the call anyway, refuse_transfer_to_agent (the
-    # before_tool_callback below) answers it before ADK's generic not-found
+    # If the model emits the call anyway, refuse_transfer_to_agent (its
+    # before_tool_callback) answers it before ADK's generic not-found
     # reply, naming 'finished' as the way out, and ends the turn with an
     # error if the model keeps calling it -- pinned by
     # test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase
@@ -79,8 +75,7 @@ graph_construction_agent = Agent(
     # 'finished' is unaffected -- it writes actions.transfer_to_agent
     # directly, which ADK acts on after the tool returns and no
     # request-level strip touches.
-    before_model_callback=[drop_foreign_context, strip_transfer_to_agent],
-    before_tool_callback=refuse_transfer_to_agent,
+    **transfer_guard_callbacks(gated=True),
 )
 
 root_agent = graph_construction_agent

@@ -249,21 +249,23 @@ agent's parent or a peer — one more reason to leave both flags unset. Instruct
 phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning rather than
 failing — check logs after any ADK bump.
 
-**Always pair the strip with `drop_foreign_context`**: `before_model_callback=[drop_foreign_context,
-strip_transfer_to_agent]`. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
+**Always pair the strip with `drop_foreign_context`** (`transfer_guard_callbacks` wires
+`before_model_callback=[drop_foreign_context, strip_transfer_to_agent]`). Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
 rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with
 parameters:`` — a worked example of the call the model then copies, after the strip already removed the tool from
 `tools_dict`. `user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the
 coordinator lacks `drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the
 workflow advances.
 
-**A call made anyway is refused, and capped per turn**: the same three agents carry
-`before_tool_callback=refuse_transfer_to_agent` (`common/adk_transfer.py`). ADK runs before-tool callbacks ahead
-of its own not-found reply (`build_tool_not_found_response`), which invites a retry and is bounded only by
-`RunConfig.max_llm_calls` (500). The callback answers instead with a `tool_error` naming `finished` as the exit, and
-on the third call in one turn raises `HiddenTransferLoopError`, ending the turn. Its count is keyed on the
-invocation id (one per user message), so it needs no reset callback; its `hidden_transfer_calls` state key belongs
-to this guard, not to any handoff gate.
+**A call made anyway is refused, and capped per turn**: the three agents take all their transfer-related callbacks
+from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the strip and
+`drop_foreign_context` as model callbacks, and `refuse_transfer_to_agent` as the tool callback. They only work as a
+set; wire a fourth gated agent the same way. ADK runs before-tool callbacks ahead of its own not-found reply
+(`build_tool_not_found_response`), which invites a retry and is bounded only by `RunConfig.max_llm_calls` (500).
+The refusal answers instead with a `tool_error` naming `finished` as the exit. It counts model *replies*, not calls,
+per agent, in `temp:` state (invocation-scoped, never persisted, so no reset callback). On the third reply in a turn
+it also sets `skip_summarization`, which makes the refusal the turn's final event. Never end that turn by raising: the
+call would stay unanswered in history, and providers reject that history on every later turn.
 
 ### Tool results
 

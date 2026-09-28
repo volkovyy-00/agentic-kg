@@ -44,15 +44,18 @@ from typing import Any, Optional
 
 from google.adk.models.llm_response import LlmResponse
 
+from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.tool_result import ToolResult, tool_error
 
 logger = logging.getLogger(__name__)
 
 TRANSFER_TOOL_NAME = "transfer_to_agent"
 
-# Per-turn bookkeeping for refuse_transfer_to_agent: {"invocation_id", "count"}.
-HIDDEN_TRANSFER_CALLS_KEY = "hidden_transfer_calls"
-MAX_HIDDEN_TRANSFER_CALLS_PER_TURN = 2
+# refuse_transfer_to_agent's per-turn count, one key per agent. temp: state
+# lives only for the current invocation (one per user message) and is never
+# persisted, so each turn starts at zero without a reset callback.
+HIDDEN_TRANSFER_REPLIES_KEY_PREFIX = "temp:hidden_transfer_replies:"
+MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN = 2
 
 HIDDEN_TRANSFER_REFUSAL = (
     "transfer_to_agent is not available to this agent. It hands the user on "
@@ -143,9 +146,10 @@ def strip_transfer_to_agent(
 
     All three surfaces matter. tools_dict is ADK's dispatch table, so removing
     it turns a call the model remembers from an earlier turn into a tool error
-    rather than a working exit, and the agent keeps the turn. Pair with
-    refuse_transfer_to_agent, which answers that call before ADK's generic
-    not-found reply and caps it per turn.
+    rather than a working exit, and the agent keeps the turn. Wire it with
+    transfer_guard_callbacks, which pairs it with refuse_transfer_to_agent:
+    that answers such a call before ADK's generic not-found reply and caps it
+    per turn.
     config.tools is the schema the provider actually receives, so leaving it
     would keep offering the model the tool. system_instruction is where ADK
     tells the model the tool exists at all.
@@ -180,10 +184,6 @@ def strip_transfer_to_agent(
     return None
 
 
-class HiddenTransferLoopError(RuntimeError):
-    """A gated agent kept calling the stripped transfer tool in one turn."""
-
-
 def refuse_transfer_to_agent(
     tool: Any, args: dict[str, Any], tool_context: Any
 ) -> Optional[ToolResult]:
@@ -194,34 +194,65 @@ def refuse_transfer_to_agent(
     retry, and nothing but RunConfig.max_llm_calls (default 500) would stop a
     model that keeps retrying. ADK runs before-tool callbacks ahead of that
     reply (_tool_caller.py _execute_single_prepared_call), so this one answers
-    first: with this agent's real exit on the first
-    MAX_HIDDEN_TRANSFER_CALLS_PER_TURN calls of a turn, and by raising
-    HiddenTransferLoopError on the next, which ends the turn with an error the
-    Dev UI shows.
+    first, naming this agent's real exit.
 
-    The count is keyed on tool_context.invocation_id -- one invocation per user
-    message -- so each turn starts at zero without a reset callback.
+    The cap counts model replies, not calls: parallel calls in one reply are
+    one attempt. On the reply after MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN the
+    refusal also sets skip_summarization, which makes it the turn's final
+    event: the turn ends without another model call, and the call keeps its
+    response in history. (Raising instead would leave the call unanswered, and
+    providers reject that history on every later turn.) Counted per agent,
+    since one turn can run two gated agents.
 
     Returns None for every other tool, so ADK runs it as usual. The parameter
     NAMES are load-bearing: ADK passes tool=, args= and tool_context= by
     keyword.
     """
+    del args  # Part of ADK's keyword contract; the refusal does not read it.
     if tool.name != TRANSFER_TOOL_NAME:
         return None
-    previous = tool_context.state.get(HIDDEN_TRANSFER_CALLS_KEY) or {}
-    count = 1
-    if previous.get("invocation_id") == tool_context.invocation_id:
-        count += previous.get("count", 0)
-    tool_context.state[HIDDEN_TRANSFER_CALLS_KEY] = {
-        "invocation_id": tool_context.invocation_id,
-        "count": count,
-    }
-    if count > MAX_HIDDEN_TRANSFER_CALLS_PER_TURN:
-        raise HiddenTransferLoopError(
-            f"{tool_context.agent_name} called {TRANSFER_TOOL_NAME} {count} "
-            "times in one turn after being told it is not available"
+    key = HIDDEN_TRANSFER_REPLIES_KEY_PREFIX + tool_context.agent_name
+    replies = list(tool_context.state.get(key) or [])
+    reply = _reply_carrying(tool_context)
+    if reply not in replies:
+        replies.append(reply)
+        tool_context.state[key] = replies
+    if len(replies) > MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN:
+        logger.warning(
+            "%s called %s in %d replies this turn; ending the turn",
+            tool_context.agent_name,
+            TRANSFER_TOOL_NAME,
+            len(replies),
         )
+        tool_context.actions.skip_summarization = True
     return tool_error(HIDDEN_TRANSFER_REFUSAL)
+
+
+def _reply_carrying(tool_context: Any) -> str:
+    """Id of the model event that carries this call (ADK appends it before the
+    tools run); the call's own id if it cannot be found."""
+    call_id = tool_context.function_call_id
+    for event in reversed(tool_context.session.events):
+        if any(call.id == call_id for call in event.get_function_calls()):
+            return event.id
+    return call_id
+
+
+def transfer_guard_callbacks(gated: bool) -> dict[str, Any]:
+    """The callbacks a gated phase agent needs, as Agent(...) keyword args.
+
+    They only work as a set: the strip removes the injected transfer tool,
+    drop_foreign_context removes the worked example of it from history, and
+    refuse_transfer_to_agent answers a call made anyway. Spread into the
+    constructor (`**transfer_guard_callbacks(...)`) so no agent gets one
+    without the others. An ungated agent gets none.
+    """
+    if not gated:
+        return {}
+    return {
+        "before_model_callback": [drop_foreign_context, strip_transfer_to_agent],
+        "before_tool_callback": refuse_transfer_to_agent,
+    }
 
 
 def _extend_past_trailing_paragraphs(instruction: str, end: int) -> int:

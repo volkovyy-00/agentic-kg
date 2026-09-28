@@ -22,7 +22,6 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
-import pytest
 from google.adk.flows.llm_flows.agent_transfer import (
     _build_transfer_instructions,
     _get_transfer_targets,
@@ -31,13 +30,14 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
 
+from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
-    MAX_HIDDEN_TRANSFER_CALLS_PER_TURN,
+    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     TRANSFER_TOOL_NAME,
-    HiddenTransferLoopError,
     _without_transfer_block,
     refuse_transfer_to_agent,
     strip_transfer_to_agent,
+    transfer_guard_callbacks,
 )
 from agentic_kg.common.tool_result import is_error
 
@@ -347,16 +347,29 @@ def test_a_peer_description_cannot_shadow_the_blocks_end_marker():
     assert instruction == "You are an expert at knowledge graph construction."
 
 
-def _tool_context(invocation_id, state=None):
+def _reply(event_id, *call_ids):
+    """A model event in session history carrying these function-call ids."""
     return SimpleNamespace(
-        invocation_id=invocation_id,
-        agent_name="graph_construction_agent_v1",
-        state={} if state is None else state,
+        id=event_id,
+        get_function_calls=lambda: [SimpleNamespace(id=c) for c in call_ids],
     )
 
 
+def _tool_context(call_id, events, state=None, agent="graph_construction_agent_v1"):
+    return SimpleNamespace(
+        agent_name=agent,
+        function_call_id=call_id,
+        state={} if state is None else state,
+        session=SimpleNamespace(events=events),
+        actions=SimpleNamespace(skip_summarization=None),
+    )
+
+
+_HIDDEN = SimpleNamespace(name=TRANSFER_TOOL_NAME)
+
+
 def test_refusal_leaves_every_other_tool_alone():
-    context = _tool_context("inv-1")
+    context = _tool_context("c1", [_reply("e1", "c1")])
 
     assert (
         refuse_transfer_to_agent(SimpleNamespace(name="finished"), {}, context) is None
@@ -366,36 +379,67 @@ def test_refusal_leaves_every_other_tool_alone():
 
 def test_refusal_answers_the_hidden_tool_and_names_the_real_exit():
     """Answered before ADK's generic not-found reply, which invites a retry:
-    the model is told which exit this agent really has."""
-    reply = refuse_transfer_to_agent(
-        SimpleNamespace(name=TRANSFER_TOOL_NAME),
-        {"agent_name": _PARENT},
-        _tool_context("inv-1"),
-    )
+    the model is told which exit this agent really has, and keeps the turn."""
+    context = _tool_context("c1", [_reply("e1", "c1")])
+
+    reply = refuse_transfer_to_agent(_HIDDEN, {"agent_name": _PARENT}, context)
 
     assert is_error(reply)
     assert "finished" in reply["error_message"]
+    assert not context.actions.skip_summarization
 
 
-def test_refusal_ends_the_turn_once_the_model_keeps_calling_it():
-    tool = SimpleNamespace(name=TRANSFER_TOOL_NAME)
-    context = _tool_context("inv-1")
-    for _ in range(MAX_HIDDEN_TRANSFER_CALLS_PER_TURN):
-        assert is_error(refuse_transfer_to_agent(tool, {}, context))
+def test_refusal_ends_the_turn_on_the_reply_past_the_cap_without_raising():
+    """Raising would leave the call unanswered in history and break every later
+    turn; skip_summarization makes this refusal the turn's final event."""
+    events, state = [], {}
+    for n in range(MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN):
+        events.append(_reply(f"e{n}", f"c{n}"))
+        context = _tool_context(f"c{n}", events, state)
+        assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
+        assert not context.actions.skip_summarization
 
-    with pytest.raises(HiddenTransferLoopError):
-        refuse_transfer_to_agent(tool, {}, context)
+    events.append(_reply("e-last", "c-last"))
+    context = _tool_context("c-last", events, state)
+    assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
+    assert context.actions.skip_summarization is True
 
 
-def test_refusal_counts_each_turn_afresh():
-    """The count is keyed on the invocation (one per user message), so a new
-    turn starts at zero without a reset callback."""
-    tool = SimpleNamespace(name=TRANSFER_TOOL_NAME)
+def test_parallel_calls_in_one_reply_count_once():
+    """Three calls in one reply are one attempt: each is refused, none ends
+    the turn."""
+    events, state = [_reply("e1", "c1", "c2", "c3")], {}
+    for call_id in ("c1", "c2", "c3"):
+        context = _tool_context(call_id, events, state)
+        assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
+        assert not context.actions.skip_summarization
+
+
+def test_each_agent_keeps_its_own_count():
+    """One invocation can run two gated agents (a confirmed construction
+    handoff runs retrieval inline); retrieval must not inherit construction's
+    refusals."""
+    events, state = [], {}
+    for n in range(MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN):
+        events.append(_reply(f"e{n}", f"c{n}"))
+        refuse_transfer_to_agent(_HIDDEN, {}, _tool_context(f"c{n}", events, state))
+
+    events.append(_reply("e-rag", "c-rag"))
+    context = _tool_context("c-rag", events, state, agent="graphrag_agent_v2")
+    assert is_error(refuse_transfer_to_agent(_HIDDEN, {}, context))
+    assert not context.actions.skip_summarization
+
+
+def test_the_count_lives_in_invocation_scoped_state():
+    """temp: keys are dropped from the persisted delta, so each turn starts at
+    zero with no reset callback and nothing lands in the session store."""
     state = {}
-    for _ in range(MAX_HIDDEN_TRANSFER_CALLS_PER_TURN):
-        refuse_transfer_to_agent(tool, {}, _tool_context("inv-1", state))
+    refuse_transfer_to_agent(
+        _HIDDEN, {}, _tool_context("c1", [_reply("e1", "c1")], state)
+    )
 
-    assert is_error(refuse_transfer_to_agent(tool, {}, _tool_context("inv-2", state)))
+    assert state
+    assert all(key.startswith("temp:") for key in state)
 
 
 def test_refusal_parameter_names_are_the_ones_adk_passes():
@@ -405,3 +449,15 @@ def test_refusal_parameter_names_are_the_ones_adk_passes():
 
     parameters = list(inspect.signature(refuse_transfer_to_agent).parameters)
     assert parameters == ["tool", "args", "tool_context"]
+
+
+def test_the_guard_wires_all_three_callbacks_together_or_none():
+    """The strip, the context filter and the refusal only work as a set, so a
+    gated agent takes them from one helper."""
+    wired = transfer_guard_callbacks(True)
+
+    assert wired == {
+        "before_model_callback": [drop_foreign_context, strip_transfer_to_agent],
+        "before_tool_callback": refuse_transfer_to_agent,
+    }
+    assert transfer_guard_callbacks(False) == {}

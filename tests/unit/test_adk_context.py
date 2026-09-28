@@ -14,6 +14,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
 from agentic_kg.common.adk_context import (
+    _PREAMBLE_AS_OF_ADK_2_9_2,
     FOREIGN_CONTEXT_SENTINEL,
     drop_foreign_context,
 )
@@ -142,6 +143,15 @@ def test_keeps_a_user_message_that_begins_with_for_context(text):
     req = _request(foreign, human)
     drop_foreign_context(None, req)
     assert req.contents == [human]
+
+
+def test_the_fallback_preamble_still_matches_adk():
+    """The sentinel is imported from ADK; the literal is used only if that
+    import fails. Keeps the fallback from going stale on the pinned version."""
+    from google.adk.flows.llm_flows._fencing import OTHER_AGENT_CONTEXT_PREAMBLE
+
+    assert _PREAMBLE_AS_OF_ADK_2_9_2 == OTHER_AGENT_CONTEXT_PREAMBLE
+    assert FOREIGN_CONTEXT_SENTINEL == OTHER_AGENT_CONTEXT_PREAMBLE
 
 
 def test_canary_adk_still_marks_foreign_events_with_our_sentinel():

@@ -1,10 +1,6 @@
 from google.adk.agents import Agent
 
-from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import (
-    refuse_transfer_to_agent,
-    strip_transfer_to_agent,
-)
+from agentic_kg.common.adk_transfer import transfer_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 
 # variants are pairs of instructions with tools
@@ -24,7 +20,8 @@ user_intent_agent = Agent(
     description="Knowledge graph use case ideation.",
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
-    # Two MODEL callbacks, and deliberately NO before_agent_callback. ADK
+    # transfer_guard_callbacks (model and tool callbacks that only work as a
+    # set), and deliberately NO before_agent_callback. ADK
     # injects its own 'transfer_to_agent' tool, plus an instruction
     # advertising it, into any LlmAgent with a parent or peers, and it does
     # not consult the approval gate in variants.py. That tool is the exit
@@ -45,7 +42,7 @@ user_intent_agent = Agent(
     # leaving the example is half a fix: the model copies it, and every
     # copied call costs a model call. Same pairing, same reason, as
     # graph_construction_agent/agent.py. A call made anyway is answered by
-    # refuse_transfer_to_agent (the before_tool_callback below), which names
+    # refuse_transfer_to_agent (wired by transfer_guard_callbacks), which names
     # the real exit and ends the turn if the model keeps calling it.
     #
     # Still NO before_agent_callback: graphrag_agent/agent.py carries one
@@ -60,10 +57,7 @@ user_intent_agent = Agent(
     # On google-adk 2.9 either flag also makes a blocked 'finished' call
     # raise ValueError, so a make_finished target must be this agent's
     # parent or a peer. See adk_transfer.py.
-    before_model_callback=(
-        [drop_foreign_context, strip_transfer_to_agent] if IS_GATED_VARIANT else None
-    ),
-    before_tool_callback=refuse_transfer_to_agent if IS_GATED_VARIANT else None,
+    **transfer_guard_callbacks(gated=IS_GATED_VARIANT),
 )
 
 root_agent = user_intent_agent

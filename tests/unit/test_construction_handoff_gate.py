@@ -10,7 +10,6 @@ unit-testable and is verified by hand (see the plan's Task 5).
 import asyncio
 import inspect
 
-import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
@@ -19,8 +18,7 @@ from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
-    MAX_HIDDEN_TRANSFER_CALLS_PER_TURN,
-    HiddenTransferLoopError,
+    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     strip_transfer_to_agent,
 )
 from agentic_kg.common.tool_result import is_error, is_success
@@ -414,29 +412,153 @@ def test_transfer_and_finished_in_one_reply_neither_transfers_nor_exits(
     assert not any(event.actions.transfer_to_agent for event in events)
 
 
-def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn(monkeypatch):
+async def _run_turns(agent, app_name, messages):
+    """Like _run_one_turn, but several user turns in ONE session, returning
+    each turn's events."""
+    runner = InMemoryRunner(agent=agent, app_name=app_name)
+    session = await runner.session_service.create_session(
+        app_name=app_name, user_id="u1"
+    )
+    turns = []
+    for message in messages:
+        turns.append(
+            [
+                event
+                async for event in runner.run_async(
+                    user_id="u1",
+                    session_id=session.id,
+                    new_message=types.Content(
+                        role="user", parts=[types.Part(text=message)]
+                    ),
+                )
+            ]
+        )
+    return turns
+
+
+def _hidden_transfer_replies(events):
+    return [
+        part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response and part.function_response.name == "transfer_to_agent"
+    ]
+
+
+def _unanswered_calls(llm_request):
+    """Function-call ids in a request's history with no matching response --
+    the shape OpenAI and Anthropic reject with a 400."""
+    calls, answered = set(), set()
+    for content in llm_request.contents:
+        for part in content.parts or []:
+            if part.function_call:
+                calls.add(part.function_call.id)
+            if part.function_response:
+                answered.add(part.function_response.id)
+    return calls - answered
+
+
+_TRANSFER = _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+
+
+def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
+    monkeypatch,
+):
     """Without a per-turn cap, only RunConfig.max_llm_calls (500) would stop a
-    model that keeps retrying. After MAX_HIDDEN_TRANSFER_CALLS_PER_TURN refused
-    calls, the next one ends the turn with an error instead of another call."""
+    model that keeps retrying. The reply past the cap is still answered, and
+    ends the turn, so the next turn starts from a complete history and a
+    fresh count."""
+    cap = MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[
-                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
-            ],
+            responses=[_TRANSFER] * (cap + 2) + [_text("back to work")],
         ),
     )
-    with pytest.raises(HiddenTransferLoopError):
-        asyncio.run(
-            _run_one_turn(graph_construction_agent, "construction_transfer_loop_test")
+    first, second = asyncio.run(
+        _run_turns(
+            graph_construction_agent,
+            "construction_transfer_loop_test",
+            ["hello", "and now?"],
         )
-
-    assert (
-        len(graph_construction_agent.model.requests)
-        == MAX_HIDDEN_TRANSFER_CALLS_PER_TURN + 1
     )
+
+    requests = graph_construction_agent.model.requests
+    first_replies = _hidden_transfer_replies(first)
+    assert len(first_replies) == cap + 1
+    assert all(is_error(reply) for reply in first_replies)
+    # Turn 2: one refused call (the count restarted), then an answer.
+    assert len(requests) == cap + 3
+    assert all(is_error(reply) for reply in _hidden_transfer_replies(second))
+    assert not _unanswered_calls(requests[-1])
+
+
+def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):
+    parallel = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="transfer_to_agent", args={"agent_name": name}
+                    )
+                )
+                for name in ("kg_construction_agent_v1", "graphrag_agent_v2", "x")
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(model="scripted", responses=[parallel, _text("still here")]),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_parallel_test")
+    )
+
+    replies = _hidden_transfer_replies(events)
+    assert len(replies) == 3
+    assert all(is_error(reply) for reply in replies)
+    assert len(graph_construction_agent.model.requests) == 2
+
+
+def test_retrieval_does_not_inherit_constructions_refusals(monkeypatch):
+    """A confirmed handoff runs the retrieval agent inside the same turn; its
+    first hidden call is refused, not treated as the construction agent's
+    third."""
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+            + [_call("confirm_construction_handoff"), _call("finished")],
+        ),
+    )
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER, _text("retrieval agent speaking")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(
+            graph_construction_agent,
+            "construction_handoff_count_test",
+            message="I'm done here, move me on",
+        )
+    )
+
+    retrieval_replies = _hidden_transfer_replies(
+        [event for event in events if event.author == GRAPHRAG_AGENT_NAME]
+    )
+    assert len(retrieval_replies) == 1
+    assert is_error(retrieval_replies[0])
+    assert len(graphrag_agent.model.requests) == 2
 
 
 def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
