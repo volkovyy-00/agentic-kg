@@ -16,8 +16,8 @@ There is no `[Unreleased]` section.
   joined to it. Labels, relationship types and key and join columns that happen to be Cypher keywords (`Order`,
   `END`, `null` ...) are now accepted, and the build writes every such name into its queries in backticks. A
   name the build would still refuse — one starting with a digit, or containing a space, backtick, parenthesis,
-  brace or newline — is now refused when it is proposed, with the build's own message, instead of being
-  approved and then dropped at build time.
+  brace or newline — is now refused when it is proposed, with the build's own message plus a note that a file
+  column cannot be renamed, instead of being approved and then dropped at build time.
 
 ## [0.8.0] - 2026-09-29
 

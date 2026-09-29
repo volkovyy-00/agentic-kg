@@ -91,6 +91,8 @@ __all__ = [
     "import_relationships",
     "construct_domain_graph",
     "build_graph_from_construction_rules",
+    "node_rule_name_error",
+    "relationship_rule_name_error",
 ]
 
 

@@ -20,6 +20,15 @@ from .reference_reachability import (
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 
+# Added after the build's own refusal text (KG-44), so the model knows which names
+# it can fix: without it, a header like 'Order ID' gets renamed in the proposal and
+# then fails the file check instead.
+_NAME_HINT = (
+    "A label or relationship type can be renamed to follow this rule, but a file "
+    "column cannot: if it is a key or join column, choose another column or tell "
+    "the user it cannot be used."
+)
+
 #  Tool: Propose Node Construction
 
 NODE_CONSTRUCTION = "node_construction"
@@ -110,7 +119,7 @@ def propose_node_construction(
     # is refused now, with the build's own text, whatever the file holds.
     name_error = node_rule_name_error(node_construction_rule)
     if name_error is not None:
-        return tool_error(name_error)
+        return tool_error(f"{name_error} {_NAME_HINT}")
 
     # quick sanity check -- does the approved file have the unique column?
     search_results = search_file(approved_file, unique_column_name)
@@ -280,7 +289,7 @@ def propose_relationship_construction(
     # Names first, before the file is read (KG-44): see propose_node_construction.
     name_error = relationship_rule_name_error(relationship_construction_rule)
     if name_error is not None:
-        return tool_error(name_error)
+        return tool_error(f"{name_error} {_NAME_HINT}")
 
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)

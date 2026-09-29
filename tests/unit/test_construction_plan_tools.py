@@ -1688,6 +1688,18 @@ def test_approval_fails_closed_when_the_reachability_check_raises(
 CHARACTER_RULE = (
     "It must be a letter or underscore followed by letters, digits or underscores."
 )
+# The propose tools add a way forward after the build's own text: a label or type
+# can be renamed, a file column cannot.
+NAME_HINT = (
+    "A label or relationship type can be renamed to follow this rule, but a file "
+    "column cannot: if it is a key or join column, choose another column or tell "
+    "the user it cannot be used."
+)
+
+
+def _proposal(build_text):
+    """What the propose tools report: the build's own text, then NAME_HINT."""
+    return f"{build_text} {NAME_HINT}"
 
 
 def _node_rule(label, key):
@@ -1754,11 +1766,11 @@ def test_propose_node_refuses_a_bad_name_with_the_builds_message(
 ):
     result = propose_node_construction("orders.csv", label, key, [], ctx)
     assert result["status"] == "error"
-    # The literal pins the kind string; the equality pins "the build's own text".
-    assert result["error_message"] == expected
-    assert (
-        result["error_message"]
-        == kg.import_nodes(_node_rule(label, key))["error_message"]
+    # The literal pins the kind string; the equality pins "the build's own text,
+    # then the hint".
+    assert result["error_message"] == _proposal(expected)
+    assert result["error_message"] == _proposal(
+        kg.import_nodes(_node_rule(label, key))["error_message"]
     )
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
@@ -1788,10 +1800,9 @@ def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(
     args = _rel_args(**override)
     result = _propose_rel(args, ctx)
     assert result["status"] == "error"
-    assert result["error_message"] == expected
-    assert (
-        result["error_message"]
-        == kg.import_relationships(_rel_rule(args))["error_message"]
+    assert result["error_message"] == _proposal(expected)
+    assert result["error_message"] == _proposal(
+        kg.import_relationships(_rel_rule(args))["error_message"]
     )
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
@@ -1836,16 +1847,17 @@ def test_the_first_bad_name_reported_is_the_one_the_build_checks_first(
     pair is pinned, so swapping any two checks fails a case."""
     args = _rel_args(**override)
     result = _propose_rel(args, ctx)
-    assert result["error_message"] == expected
-    assert (
-        result["error_message"]
-        == kg.import_relationships(_rel_rule(args))["error_message"]
+    assert result["error_message"] == _proposal(expected)
+    assert result["error_message"] == _proposal(
+        kg.import_relationships(_rel_rule(args))["error_message"]
     )
 
 
 def test_a_node_reports_its_label_before_its_key_column(ctx, any_column_exists):
     result = propose_node_construction("orders.csv", "1Order", "order id", [], ctx)
-    assert result["error_message"] == f"Invalid label: '1Order'. {CHARACTER_RULE}"
+    assert result["error_message"] == _proposal(
+        f"Invalid label: '1Order'. {CHARACTER_RULE}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1868,10 +1880,11 @@ def test_a_bad_name_is_reported_before_the_file_is_searched(
     monkeypatch.setattr(cpt, "search_file", fake_search_file)
     node = propose_node_construction("orders.csv", "Order", "order id", [], ctx)
     rel = _propose_rel(_rel_args(proposed_relationship_type="HAS ITEM"), ctx)
-    assert node["error_message"] == f"Invalid column name: 'order id'. {CHARACTER_RULE}"
-    assert (
-        rel["error_message"]
-        == f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
+    assert node["error_message"] == _proposal(
+        f"Invalid column name: 'order id'. {CHARACTER_RULE}"
+    )
+    assert rel["error_message"] == _proposal(
+        f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
     )
     assert searched == [], "a bad name must be reported without reading the file"
 
@@ -1896,7 +1909,7 @@ def test_a_node_batch_keeps_the_entries_before_a_bad_name(ctx, any_column_exists
     )
     assert result["status"] == "error"
     assert result["error_message"].endswith(
-        f"Invalid column name: '1id'. {CHARACTER_RULE}"
+        _proposal(f"Invalid column name: '1id'. {CHARACTER_RULE}")
     )
     assert list(ctx.state[PROPOSED_CONSTRUCTION_PLAN]) == ["Order"]
 
@@ -1913,7 +1926,7 @@ def test_a_relationship_batch_keeps_the_entries_before_a_bad_name(
     result = propose_relationship_constructions([good, bad], ctx)
     assert result["status"] == "error"
     assert result["error_message"].endswith(
-        f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
+        _proposal(f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}")
     )
     assert list(ctx.state[PROPOSED_CONSTRUCTION_PLAN]) == ["SET"]
 
@@ -1933,4 +1946,6 @@ def test_keyword_names_are_proposed_as_given(ctx, any_column_exists):
 def test_a_non_string_name_is_refused_not_crashed_on(ctx, any_column_exists):
     result = propose_node_construction("orders.csv", 123, "END", [], ctx)  # type: ignore[arg-type]
     assert result["status"] == "error"
-    assert result["error_message"] == f"Invalid label: '123'. {CHARACTER_RULE}"
+    assert result["error_message"] == _proposal(
+        f"Invalid label: '123'. {CHARACTER_RULE}"
+    )
