@@ -36,7 +36,9 @@ from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
     HIDDEN_TRANSFER_TURN_END,
     MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
+    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     TRANSFER_TOOL_NAME,
+    _state_key,
     _without_transfer_block,
     count_hidden_transfer_replies,
     end_turn_past_hidden_transfer_cap,
@@ -358,16 +360,27 @@ _HIDDEN = SimpleNamespace(name=TRANSFER_TOOL_NAME)
 
 def _callback_context(state=None, agent="graph_construction_agent_v1"):
     """Stands in for both a CallbackContext and a ToolContext: the callbacks
-    read only agent_name and state from either."""
-    return SimpleNamespace(agent_name=agent, state={} if state is None else state)
+    read only agent_name, state and (the refusal) actions."""
+    return SimpleNamespace(
+        agent_name=agent,
+        state={} if state is None else state,
+        actions=SimpleNamespace(skip_summarization=None),
+    )
 
 
-def _reply(*names, partial=None):
-    """A model reply calling these tools, or saying something if none."""
+def _consecutive(context):
+    return context.state.get(_state_key("consecutive", context.agent_name))
+
+
+def _reply(*names, partial=None, text=None):
+    """A model reply calling these tools, or saying something if none; with
+    `text`, saying that before the calls."""
     parts = [
         types.Part(function_call=types.FunctionCall(name=name, args={}))
         for name in names
     ] or [types.Part(text="ok")]
+    if text is not None and names:
+        parts.insert(0, types.Part(text=text))
     return LlmResponse(
         content=types.Content(role="model", parts=parts), partial=partial
     )
@@ -458,7 +471,42 @@ def test_a_reply_that_also_calls_a_real_tool_resets_the_count():
     replies.append(_reply(TRANSFER_TOOL_NAME, "confirm_construction_handoff"))
 
     assert _run_replies(context, replies) is None
-    assert list(context.state.values()) == [0]
+    assert _consecutive(context) == 0
+
+
+def test_the_per_turn_ceiling_holds_when_every_retry_is_paired_with_a_success():
+    """A tool that always succeeds (confirm_construction_handoff, a schema
+    read) resets the consecutive count on every reply; the per-turn ceiling
+    is the one no reset clears."""
+    context = _callback_context()
+    paired = _reply(TRANSFER_TOOL_NAME, "confirm_construction_handoff")
+
+    early = [paired] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
+    assert _run_replies(context, early) is None
+    assert _run_replies(context, [paired]) is not None
+
+
+def test_a_reply_that_asks_the_user_something_ends_the_turn_on_its_refusal():
+    """A question and the hidden call in one reply: the refusal ends the turn,
+    so the question is the user's to answer before the model runs again."""
+    context = _callback_context()
+    asking = _reply(TRANSFER_TOOL_NAME, text="Which products matter most?")
+
+    count_hidden_transfer_replies(context, asking)
+    refuse_transfer_to_agent(_HIDDEN, {}, context)
+
+    assert context.actions.skip_summarization is True
+
+
+def test_a_reply_that_only_calls_the_hidden_tool_keeps_the_turn():
+    context = _callback_context()
+    count_hidden_transfer_replies(
+        context, _reply(TRANSFER_TOOL_NAME, text="Which products matter most?")
+    )
+    count_hidden_transfer_replies(context, _reply(TRANSFER_TOOL_NAME))
+    refuse_transfer_to_agent(_HIDDEN, {}, context)
+
+    assert not context.actions.skip_summarization
 
 
 def test_retrying_both_exits_together_is_still_capped():
@@ -488,7 +536,7 @@ def test_parallel_calls_in_one_reply_count_once():
     parallel = _reply(TRANSFER_TOOL_NAME, TRANSFER_TOOL_NAME, TRANSFER_TOOL_NAME)
 
     assert _run_replies(context, [parallel]) is None
-    assert list(context.state.values()) == [1]
+    assert _consecutive(context) == 1
 
 
 def test_replies_without_the_hidden_tool_and_partial_chunks_are_not_counted():

@@ -267,15 +267,17 @@ those four kinds, extend the helper to take it and merge it in: passing the same
 not-found reply (`build_tool_not_found_response`), which invites a retry and is bounded only by
 `RunConfig.max_llm_calls` (500). The refusal answers every call instead, with a `tool_error` that names the agent
 and `finished` as its exit, and no bare "do not call transfer_to_agent": it stays in the session, and the
-coordinator, whose own transfer tool is real, reads it later as another agent's output. The counter counts model
-*replies* that call the hidden tool, per agent, in `temp:` state (invocation-scoped, never persisted, so no reset
-callback), and only a *successful* call to another tool resets it. So a model that recovers keeps its turn, a reply
-that also runs a tool that succeeds is never the one that ends the turn, and a refused `finished` beside the hidden
-call does not reset it. A text-only reply leaves the count alone: a streamed reply can arrive as text first, then
-the call. After the third counted reply, the before-model callback returns a short text reply for the user in place
-of the next model call, which ends the turn. Never end that turn by raising, or with `skip_summarization`: raising
-leaves the call unanswered in history, which providers reject on every later turn, and `skip_summarization` ends the
-turn on a bare function response with no reply to the user.
+coordinator, whose own transfer tool is real, reads it later as another agent's output. The counter keeps two counts
+of model *replies* that call the hidden tool, per agent, in `temp:` state (invocation-scoped, never persisted, so no
+reset callback): one since another tool last *succeeded* (only that resets it, so a model that recovers keeps its
+turn, and a refused `finished` beside the hidden call or a streamed text-only reply does not reset it), and one for
+the whole turn, which nothing resets (a model can pair every retry with a tool that always succeeds). After three of
+the first or six of the second, the before-model callback returns a short text reply for the user in place of the
+next model call, which ends the turn. A reply that calls the hidden tool *and* speaks to the user (a question, the
+reported intent session's shape) ends the turn at once: its refusal sets `skip_summarization`, so the question is
+the turn's last word and the model cannot act on the refusal before the user answers. That is the only place for
+`skip_summarization`: a turn must never end on it without text for the user. Never end the turn by raising either:
+that leaves the call unanswered in history, and providers reject that history on every later turn.
 
 ### Tool results
 

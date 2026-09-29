@@ -8,7 +8,7 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
-## [0.8.0] - 2026-09-28
+## [0.8.0] - 2026-09-29
 
 ### Changed
 - **Moved to google-adk 2.9.x (#69, KG-25)**: left the 1.x line, which has had no release since 1.39.1, for
@@ -21,9 +21,10 @@ There is no `[Unreleased]` section.
 - **Calling the hidden transfer tool stopped ending a phase agent's turn (#69, KG-25)**: the intent, construction and
   retrieval agents cannot hand the user on without the user's confirmation, so ADK's own transfer tool is
   removed from them. On 1.x, a model that called it anyway ended the turn with an error; now it is told to leave
-  through `finished` and stays in its phase. A model that keeps retrying it, three times with no other tool
-  succeeding in between, has the turn ended with a short reply to the user, rather than retrying until ADK's
-  500-call limit.
+  through `finished` and stays in its phase. A model that keeps retrying it (three times with no other tool
+  succeeding in between, or six times in one turn) has the turn ended with a short reply to the user, rather than
+  retrying until ADK's 500-call limit. If the agent asks the user something in the same reply, the turn ends on
+  that question.
 
 ## [0.7.4] - 2026-09-22
 

@@ -484,6 +484,45 @@ def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
     assert len(user_intent_agent.model.requests) == 2
 
 
+def test_a_question_asked_with_the_hidden_call_is_the_turns_last_word(
+    monkeypatch,
+):
+    """The reported session's shape: a clarifying question and
+    transfer_to_agent in one reply. The call is refused and the turn ends
+    there, so the user answers the question before the model runs again --
+    it gets no chance to act on the refusal (approve, say) first."""
+    asking = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="Which products matter most to you?"),
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="transfer_to_agent",
+                        args={"agent_name": "kg_construction_agent_v1"},
+                    )
+                ),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(model="scripted", responses=[asking, _text("never reached")]),
+    )
+    events = asyncio.run(_run_one_turn(user_intent_agent, "intent_question_test"))
+
+    assert len(user_intent_agent.model.requests) == 1
+    texts = [
+        part.text
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.text
+    ]
+    assert texts == ["Which products matter most to you?"]
+    assert not any(event.actions.transfer_to_agent for event in events)
+
+
 def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch):
     """Drives 'set_perceived_user_goal', 'approve_perceived_user_goal', and
     'finished' as three function calls in a SINGLE model reply, through the

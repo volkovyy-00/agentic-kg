@@ -20,6 +20,7 @@ from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
     HIDDEN_TRANSFER_TURN_END,
     MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
+    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     strip_transfer_to_agent,
 )
 from agentic_kg.common.tool_result import is_error, is_success
@@ -562,6 +563,44 @@ def test_retrying_both_exits_in_every_reply_still_ends_the_turn(monkeypatch):
     )
     assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
     assert not any(event.actions.transfer_to_agent for event in events)
+
+
+def test_pairing_every_retry_with_a_tool_that_succeeds_still_ends_the_turn(
+    monkeypatch,
+):
+    """[transfer_to_agent, confirm_construction_handoff] in every reply: the
+    confirmation always succeeds and resets the consecutive count, so only the
+    per-turn ceiling stops it before ADK's 500-call limit."""
+    paired = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                _TRANSFER.content.parts[0],
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="confirm_construction_handoff", args={}
+                    )
+                ),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[paired] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+            + [_text("never reached")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_paired_loop_test")
+    )
+
+    assert len(graph_construction_agent.model.requests) == (
+        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+    )
+    assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
 
 
 def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):

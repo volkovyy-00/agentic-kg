@@ -41,7 +41,9 @@ def is_success(result: ToolResult) -> bool:
 
 
 def is_error(result: ToolResult) -> bool:
-    return result["status"] == "error"
+    # Tolerant, unlike is_success: ADK's after-tool callbacks see whatever a
+    # tool returned, including dicts with no "status" (make_finished's {}).
+    return isinstance(result, Mapping) and result.get("status") == "error"
 
 
 def _payload_key(result: Mapping[str, Any]) -> str:
