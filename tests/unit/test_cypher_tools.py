@@ -28,16 +28,33 @@ def test_create_uniqueness_constraint_builds_expected_query(fake_db):
     result = cypher_tools.create_uniqueness_constraint("Person", "id")
     assert result["status"] == "success"
     query, _params = fake_db.queries[0]
-    assert "FOR (n:Person)" in query
-    assert "REQUIRE n.id IS UNIQUE" in query
+    assert "FOR (n:`Person`)" in query
+    assert "REQUIRE n.`id` IS UNIQUE" in query
+
+
+def test_create_uniqueness_constraint_quotes_a_keyword_label_and_key(fake_db):
+    """KG-44: Order and END are ordinary names once quoted."""
+    result = cypher_tools.create_uniqueness_constraint("Order", "END")
+    assert result["status"] == "success"
+    query, _params = fake_db.queries[0]
+    assert "FOR (n:`Order`)" in query
+    assert "REQUIRE n.`END` IS UNIQUE" in query
+
+
+def test_constraint_name_keeps_its_0_8_0_value(fake_db):
+    """IF NOT EXISTS matches by name: a changed value would stop matching the
+    constraints earlier builds created, and every re-run would add another."""
+    cypher_tools.create_uniqueness_constraint("Person", "id")
+    query, _params = fake_db.queries[0]
+    assert query.startswith("CREATE CONSTRAINT `Person_id_constraint` IF NOT EXISTS")
 
 
 def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any_query(
     fake_db,
 ):
-    """create_uniqueness_constraint used to guard interpolation with
-    is_symbol() alone, which lets newline/paren payloads through -- it must
-    use the same identifier regex kg_construction_tools.py uses."""
+    """create_uniqueness_constraint checks its label with checked(), the same
+    character rule kg_construction_tools.py uses, so a newline/paren payload
+    is refused before any query is sent."""
     result = cypher_tools.create_uniqueness_constraint(INJECTION_PAYLOAD, "id")
     assert result["status"] == "error"
     assert fake_db.queries == []

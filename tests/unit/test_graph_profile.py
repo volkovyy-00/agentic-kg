@@ -195,7 +195,8 @@ def test_value_count_threshold_matches_the_library_limit():
 from fakes import ScriptedGraphDb
 
 from agentic_kg.common import graph_profile
-from agentic_kg.common.graph_profile import build_profile, quote
+from agentic_kg.common.cypher_identifiers import quote
+from agentic_kg.common.graph_profile import build_profile
 
 # Shared with the rest of the unit suite; see tests/unit/fakes.py.
 FakeGraphDbForProfile = ScriptedGraphDb

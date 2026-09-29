@@ -26,6 +26,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from .cypher_identifiers import quote
 from .neo4j_for_adk import get_graphdb
 from .tool_result import is_success
 
@@ -144,18 +145,6 @@ def annotate_property(
         out["numeric_like"] = _numeric_like_state(values)
 
     return out
-
-
-def quote(name: str) -> str:
-    """Backtick-quote an identifier that came from the database.
-
-    Deliberately NOT common.cypher_identifiers.checked(): that guards against
-    injection from model-supplied names and rejects anything which is not a
-    bare identifier. These names are read out of the graph, so `Legal Entity`
-    and `10-K` are perfectly legal and must survive. Escaping doubles any
-    embedded backtick, which is Cypher's own convention.
-    """
-    return "`" + name.replace("`", "``") + "`"
 
 
 class ProfileQueryError(RuntimeError):

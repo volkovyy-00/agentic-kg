@@ -84,7 +84,15 @@ def test_loads_bom_csvs_into_the_graph(neo4j_graph, monkeypatch):
     rels = neo4j_graph.send_query(
         "MATCH (:Part)-[r:SUPPLIED_BY]->(:Supplier) RETURN count(r) AS c"
     )
-    assert rels["records"][0]["c"] > 0
+    assert rels["records"][0]["c"] == 176, "one per part_supplier_mapping.csv row"
+
+    # KG-44 AC4: nothing was written beyond the labels and type counted above.
+    total_nodes = neo4j_graph.send_query("MATCH (n) RETURN count(n) AS c")
+    assert total_nodes["records"][0]["c"] == sum(
+        r["records"][0]["c"] for r in (products, suppliers, parts)
+    )
+    total_rels = neo4j_graph.send_query("MATCH ()-[r]->() RETURN count(r) AS c")
+    assert total_rels["records"][0]["c"] == rels["records"][0]["c"]
 
     # A property from suppliers.csv must actually have landed
     named = neo4j_graph.send_query(
@@ -107,6 +115,103 @@ def test_loading_twice_is_idempotent(neo4j_graph, monkeypatch):
     second = neo4j_graph.send_query("MATCH (n) RETURN count(n) AS c")["records"][0]["c"]
 
     assert first == second, "MERGE should update rather than duplicate"
+
+
+# KG-44: every name position holds a Cypher keyword -- labels Order and Match,
+# key columns END and null, relationship type SET joining END to null -- plus a
+# property column TRUE, which stays an ordinary parameter value.
+KEYWORD_PLAN = {
+    "Order": {
+        "construction_type": "node",
+        "source_file": "orders.csv",
+        "label": "Order",
+        "unique_column_name": "END",
+        "properties": ["TRUE"],
+    },
+    "Match": {
+        "construction_type": "node",
+        "source_file": "matches.csv",
+        "label": "Match",
+        "unique_column_name": "null",
+        "properties": ["name"],
+    },
+    "SET": {
+        "construction_type": "relationship",
+        "source_file": "set.csv",
+        "relationship_type": "SET",
+        "from_node_label": "Order",
+        "from_node_column": "END",
+        "to_node_label": "Match",
+        "to_node_column": "null",
+        "properties": [],
+    },
+}
+
+
+@pytest.fixture
+def keyword_sources(neo4j_graph, tmp_path, monkeypatch):
+    """Point SOURCE_URI at CSVs whose columns are keywords.
+
+    Depends on neo4j_graph so it runs after that fixture sets SOURCE_URI to
+    data/bom, and wins.
+    """
+    (tmp_path / "orders.csv").write_text("END,TRUE\n1,yes\n2,no\n3,yes\n")
+    (tmp_path / "matches.csv").write_text("null,name\na,Alpha\nb,Beta\n")
+    (tmp_path / "set.csv").write_text("END,null\n1,a\n2,a\n3,b\n1,b\n")
+    from agentic_kg.common.config import reset_settings
+
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    reset_settings()
+    yield
+    # monkeypatch restores the env var, but not the cached settings, which would
+    # still point at this deleted tmp_path. reset_settings() only clears the cache.
+    reset_settings()
+
+
+def test_names_that_are_cypher_keywords_build(
+    neo4j_graph, keyword_sources, monkeypatch
+):
+    """KG-44: a plan with an Order node was approved, then the build refused
+    Order and dropped its nodes, constraint and relationships. Neo4j accepts
+    these names unquoted too, so this proves the quoted queries run; the unit
+    tests prove they are quoted."""
+    import agentic_kg.tools.cypher_tools as cypher_tools
+    import agentic_kg.tools.kg_construction_tools as kg
+
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+
+    def count(query):
+        return neo4j_graph.send_query(query)["records"][0]["c"]
+
+    result = kg.construct_domain_graph(KEYWORD_PLAN)
+    assert result["status"] == "success", result.get("error_message")
+    assert "warnings" not in result, result.get("warnings")
+
+    assert count("MATCH (n:`Order`) RETURN count(n) AS c") == 3
+    assert count("MATCH (n:`Match`) RETURN count(n) AS c") == 2
+    assert count("MATCH (:`Order`)-[r:`SET`]->(:`Match`) RETURN count(r) AS c") == 4
+    # A keyword property column is an ordinary value.
+    assert count("MATCH (n:`Order`) WHERE n.`TRUE` = 'yes' RETURN count(n) AS c") == 2
+
+    constraints = neo4j_graph.send_query(
+        "SHOW CONSTRAINTS YIELD type, labelsOrTypes, properties"
+    )["records"]
+    uniques = {
+        (row["labelsOrTypes"][0], row["properties"][0])
+        for row in constraints
+        if "UNIQUENESS" in row["type"]  # neo4j:5 says UNIQUENESS; tolerate a variant
+    }
+    assert {("Order", "END"), ("Match", "null")} <= uniques
+
+    # A re-run adds nothing.
+    again = kg.construct_domain_graph(KEYWORD_PLAN)
+    assert again["status"] == "success", again.get("error_message")
+    assert count("MATCH (n) RETURN count(n) AS c") == 5
+    assert count("MATCH ()-[r]->() RETURN count(r) AS c") == 4
+    assert len(neo4j_graph.send_query("SHOW CONSTRAINTS")["records"]) == len(
+        constraints
+    )
 
 
 def test_a_row_without_a_column_does_not_erase_what_an_earlier_row_loaded(

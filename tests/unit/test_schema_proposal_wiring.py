@@ -138,6 +138,20 @@ def test_every_allowed_type_is_named_in_the_tool_description(fn):
         assert allowed in fn.__doc__, allowed
 
 
+@pytest.mark.parametrize(
+    "fn", [propose_node_construction, propose_relationship_construction]
+)
+def test_the_name_character_rule_is_stated_in_the_tool_description(fn):
+    """The propose tools refuse a label, relationship type, key or join column
+    that is not a plain identifier (KG-44). Unless the description states the
+    rule, the model learns it only from a refusal and spends turns retrying
+    variants such as 'Order-ID' or 'order id'. It must also know that keywords
+    are fine, so it does not rename a correct 'Order'."""
+    text = " ".join(fn.__doc__.split())
+    assert "a letter or underscore followed by letters, digits or underscores" in text
+    assert "Cypher keywords" in text
+
+
 def test_every_allowed_type_is_named_in_the_validation_rules():
     """Same staleness, one layer up: the shared rules block tells both agents
     which types exist, so a new entry in ALLOWED_TYPES that never reaches this

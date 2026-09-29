@@ -4,11 +4,11 @@ Rows are read in Python and sent as parameterised UNWIND batches rather than
 asking Neo4j to read files itself. Aura forbids LOAD CSV FROM "file:///", and
 client-side reading works identically against a local instance.
 
-Labels and relationship types are interpolated into the query text after
-checked() validation (common/cypher_identifiers.py) rather than passed as
-Cypher dynamic labels: dynamic labels plan as Merge instead of
-MergeUniqueNode, so they cannot use the uniqueness index and every row
-triggers an all-nodes scan.
+Labels, relationship types and key/join column names are written into the
+query text -- checked with checked() and backtick-quoted with quote()
+(common/cypher_identifiers.py) -- rather than passed as Cypher dynamic
+labels: dynamic labels plan as Merge instead of MergeUniqueNode, so they
+cannot use the uniqueness index and every row triggers an all-nodes scan.
 """
 
 import logging
@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier, quote
 from agentic_kg.common.cypher_identifiers import checked as _checked
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
@@ -91,6 +91,8 @@ __all__ = [
     "import_relationships",
     "construct_domain_graph",
     "build_graph_from_construction_rules",
+    "node_rule_name_error",
+    "relationship_rule_name_error",
 ]
 
 
@@ -330,7 +332,7 @@ def load_nodes_from_csv(
     # pair of passes, keyed on CLEAR_SENTINEL, which an absent key cannot
     # produce.
     query = f"""UNWIND $rows AS row
-    MERGE (n:{label} {{ {unique_column_name} : row[$unique_column_name] }})
+    MERGE (n:{quote(label)} {{ {quote(unique_column_name)} : row[$unique_column_name] }})
     FOREACH (k IN [p IN $properties WHERE row[p] IS NOT NULL] | SET n[k] = row[k])
     FOREACH (k IN [p IN $typed_properties
                    WHERE row[p] IS NOT NULL AND row[p] <> $clear] | SET n[k] = row[k])
@@ -408,7 +410,7 @@ def load_nodes_from_csv(
     # file with one row per component of an assembly. Reporting rows alone let
     # an agent tell a user "64 Assembly nodes loaded" when there were 10. Count
     # the label itself instead of deriving it from the file.
-    counted = _count_in_graph(f"MATCH (n:{label}) RETURN count(n) AS count")
+    counted = _count_in_graph(f"MATCH (n:{quote(label)}) RETURN count(n) AS count")
     if counted is not None:
         loaded["nodes_in_graph"] = counted
 
@@ -434,13 +436,51 @@ def _count_in_graph(query: str) -> int | None:
     return None
 
 
+# (kind, rule key) in the order the build has always checked them. Keys, not
+# values: each value is read only when its turn comes, so a rule with a bad
+# relationship type and a missing to_node_column still reports the bad type.
+_NODE_RULE_NAMES = (("label", "label"), ("column name", "unique_column_name"))
+_RELATIONSHIP_RULE_NAMES = (
+    ("relationship type", "relationship_type"),
+    ("label", "from_node_label"),
+    ("label", "to_node_label"),
+    ("column name", "from_node_column"),
+    ("column name", "to_node_column"),
+)
+
+
+def _first_name_error(rule: dict, names: tuple[tuple[str, str], ...]) -> str | None:
+    for kind, key in names:
+        try:
+            _checked(kind, rule[key])
+        except InvalidIdentifier as exc:
+            return str(exc)
+    return None
+
+
+def node_rule_name_error(rule: dict) -> str | None:
+    """The build's refusal for the first unusable name in a node rule, or None.
+
+    The propose tools call this too, so a name is refused when it is proposed
+    with exactly the text the build would give it (KG-44). A missing key raises
+    KeyError, which construct_domain_graph reports per rule.
+    """
+    return _first_name_error(rule, _NODE_RULE_NAMES)
+
+
+def relationship_rule_name_error(rule: dict) -> str | None:
+    """The build's refusal for the first unusable name in a relationship rule, or None.
+
+    See node_rule_name_error.
+    """
+    return _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
+
+
 def import_nodes(node_construction: dict) -> Dict[str, Any]:
     """Import nodes as defined by a node construction rule."""
-    try:
-        _checked("label", node_construction["label"])
-        _checked("column name", node_construction["unique_column_name"])
-    except InvalidIdentifier as exc:
-        return tool_error(str(exc))
+    name_error = node_rule_name_error(node_construction)
+    if name_error is not None:
+        return tool_error(name_error)
 
     uniqueness_result = create_uniqueness_constraint(
         node_construction["label"],
@@ -460,18 +500,14 @@ def import_nodes(node_construction: dict) -> Dict[str, Any]:
 
 def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     """Import relationships as defined by a relationship construction rule."""
-    try:
-        relationship_type = _checked(
-            "relationship type", relationship_construction["relationship_type"]
-        )
-        from_label = _checked("label", relationship_construction["from_node_label"])
-        to_label = _checked("label", relationship_construction["to_node_label"])
-        from_column = _checked(
-            "column name", relationship_construction["from_node_column"]
-        )
-        to_column = _checked("column name", relationship_construction["to_node_column"])
-    except InvalidIdentifier as exc:
-        return tool_error(str(exc))
+    name_error = relationship_rule_name_error(relationship_construction)
+    if name_error is not None:
+        return tool_error(name_error)
+    relationship_type = relationship_construction["relationship_type"]
+    from_label = relationship_construction["from_node_label"]
+    to_label = relationship_construction["to_node_label"]
+    from_column = relationship_construction["from_node_column"]
+    to_column = relationship_construction["to_node_column"]
 
     source_file = relationship_construction["source_file"]
     properties = relationship_construction["properties"]
@@ -487,9 +523,9 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # check_construction_plan_consistency. Coercion touches typed_properties
     # only, which by that rule can never include a join column.
     query = f"""UNWIND $rows AS row
-    MATCH (from_node:{from_label} {{ {from_column} : row[$from_node_column] }}),
-          (to_node:{to_label} {{ {to_column} : row[$to_node_column] }})
-    MERGE (from_node)-[r:{relationship_type}]->(to_node)
+    MATCH (from_node:{quote(from_label)} {{ {quote(from_column)} : row[$from_node_column] }}),
+          (to_node:{quote(to_label)} {{ {quote(to_column)} : row[$to_node_column] }})
+    MERGE (from_node)-[r:{quote(relationship_type)}]->(to_node)
     FOREACH (k IN [p IN $properties WHERE row[p] IS NOT NULL] | SET r[k] = row[k])
     FOREACH (k IN [p IN $typed_properties
                    WHERE row[p] IS NOT NULL AND row[p] <> $clear] | SET r[k] = row[k])
@@ -579,7 +615,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # idempotent-re-run property above is kept. count() over a relationship
     # type is a count-store lookup, not a scan, so this is cheap per type.
     counted = _count_in_graph(
-        f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) AS count"
+        f"MATCH ()-[r:{quote(relationship_type)}]->() RETURN count(r) AS count"
     )
     if counted is not None:
         loaded["relationships_in_graph"] = counted

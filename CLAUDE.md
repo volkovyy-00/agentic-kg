@@ -316,10 +316,18 @@ wrong type declaration from a single data-entry typo. Identifiers and any column
 relationship joins on may not be typed; `check_construction_plan_consistency` refuses such a plan at
 approval time.
 
-Labels and relationship types, which Cypher cannot parameterise, are validated with
-`common/cypher_identifiers.checked()` and then interpolated into the query text — never passed as Cypher `$()`
-dynamic labels, which cannot use a uniqueness index. The loaders' `ToolResult`s include `nodes_in_graph` /
-`relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
+Labels, relationship types and key/join column names, which Cypher cannot parameterise, are checked with
+`common/cypher_identifiers.checked()` (a plain identifier — letter or underscore, then letters, digits or
+underscores; Cypher keywords such as `Order` are allowed) and written into the query text backtick-quoted with
+`quote()` — never passed as Cypher `$()` dynamic labels, which cannot use a uniqueness index. Names read back
+from the database are only quoted, never checked. The rule is enforced where names enter the plan and again at the
+build, not among the approval-time plan checks: the propose tools refuse a bad name through `node_rule_name_error`
+/ `relationship_rule_name_error` (`tools/kg_construction_tools.py`), with the build's own message followed by a
+hint that a label or type can be renamed but a file column cannot, before reading the file, and those tools (plus
+the remove tools) are the only writers of the plan (KG-44). The build keeps its own check as a second guard, since
+`load_nodes_from_csv` and `create_uniqueness_constraint` can be called directly. A new path that writes plan rules
+must run those helpers too, or move them into `check_construction_plan_consistency`. The loaders' `ToolResult`s
+include `nodes_in_graph` / `relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
 collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
 wrote, so a re-run against a non-empty graph will include prior data too.
 

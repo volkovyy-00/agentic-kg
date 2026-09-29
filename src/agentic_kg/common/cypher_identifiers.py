@@ -1,30 +1,32 @@
-"""Shared validator for identifiers destined for interpolation into Cypher.
+"""Checking and quoting identifiers that go into Cypher query text.
 
-Labels, relationship types and property/column names cannot be parameterised
-in Cypher's structural positions (label position, relationship-type position,
-property keys in `CREATE CONSTRAINT ... FOR (n:Label) REQUIRE n.prop ...`), so
-callers that need them there interpolate validated strings into query text
-instead. `is_symbol()` (`common/neo4j_for_adk.py`) is not a safe basis for
-that by itself: it rejects only strings containing a literal space and
-strings exactly equal to one of its ~50 keywords, so newlines, tabs,
-parentheses, braces, a leading digit or a backtick all pass it and can escape
-the identifier position. Requiring a bare identifier via regex, in addition
-to the keyword check, is what makes the interpolation safe.
+Labels, relationship types and property keys cannot be parameterised in
+Cypher's structural positions (label position, relationship-type position,
+map keys in a MERGE/MATCH pattern, property keys in
+`CREATE CONSTRAINT ... FOR (n:Label) REQUIRE n.prop ...`), so the build writes
+them into the query text itself. Which helper applies depends on where the
+name came from, not on what it looks like:
 
-Every caller that interpolates a *model-supplied* label, relationship type or
-property/column name into Cypher must validate it with `checked()` first.
+- A name the model supplies (a plan's label, relationship type, key or join
+  column) is checked with `checked()`, then written into the query with
+  `quote()`. `checked()` refuses anything but a plain identifier -- a letter
+  or underscore, then letters, digits or underscores. It does not refuse
+  Cypher keywords: `Order`, `END` or `null` are ordinary names once quoted,
+  and Neo4j accepts them as labels, types and keys.
+- A name read back out of the database is only quoted. Neo4j accepts labels
+  `checked()` would refuse (`Legal Entity`, `10-K`), so checking them would
+  fail on data the graph legitimately holds.
 
-Names read back out of the database are a different case and must NOT use
-`checked()`: Neo4j accepts labels this validator rejects (`Legal Entity`,
-`10-K`), so validating them would raise on data the graph legitimately
-contains. Those callers backtick-quote instead -- see `graph_profile.quote()`.
-The distinction is provenance, not syntax: `checked()` guards against
-injection from an untrusted source, and the database is not one.
+`quote()` is what keeps a name inside its identifier position: inside
+backticks, any character is part of the name. The character rule in
+`checked()` is therefore a policy on which model-supplied names the build
+accepts, not what makes the query safe. It still refuses `Order ID`,
+`order-id` or `Straße`, and nothing renames them. It also serves as a second
+guard: a name that passes it cannot leave its position even if a `quote()`
+were lost.
 """
 
 import re
-
-from agentic_kg.common.neo4j_for_adk import is_symbol
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -34,27 +36,26 @@ class InvalidIdentifier(ValueError):
 
 
 def checked(kind: str, value: str) -> str:
-    """Validate an identifier destined for interpolation into Cypher.
-
-    is_symbol() alone is not sufficient: it rejects only literal spaces and
-    exact keyword matches, so newlines, tabs, parentheses and braces pass it
-    and can escape the identifier position. Requiring a bare identifier is
-    what makes the interpolation safe. is_symbol() is still called, since it
-    usefully rejects Cypher keywords the regex alone would allow.
+    """Refuse a model-supplied name that is not a plain identifier.
 
     Raises:
-        InvalidIdentifier: if the value is not a safe bare identifier.
+        InvalidIdentifier: if the value is not a letter or underscore followed
+            by letters, digits or underscores.
 
     Returns:
-        The validated value, unchanged, for convenient chaining.
+        The value, unchanged. Write it into query text with quote().
     """
-    if (
-        not isinstance(value, str)
-        or not _IDENTIFIER.fullmatch(value)
-        or not is_symbol(value)
-    ):
+    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
         raise InvalidIdentifier(
             f"Invalid {kind}: '{value}'. It must be a letter or underscore followed by "
-            f"letters, digits or underscores, and cannot be a Cypher keyword."
+            f"letters, digits or underscores."
         )
     return value
+
+
+def quote(name: str) -> str:
+    """Backtick-quote a name for Cypher query text.
+
+    Escaping doubles any embedded backtick, which is Cypher's own convention.
+    """
+    return "`" + name.replace("`", "``") + "`"

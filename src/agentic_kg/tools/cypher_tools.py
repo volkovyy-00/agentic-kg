@@ -3,8 +3,8 @@ from typing import Any, Dict, Optional
 from google.adk.tools import ToolContext
 from neo4j_graphrag.schema import get_structured_schema
 
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
-from agentic_kg.common.graph_profile import get_cached_profile, quote
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked, quote
+from agentic_kg.common.graph_profile import get_cached_profile
 from agentic_kg.common.neo4j_for_adk import (
     QUERY_TIMEOUT_SECONDS,
     close_graphdb,
@@ -180,8 +180,8 @@ def reset_neo4j_data() -> Dict[str, Any]:
     # $constraint_name` is rejected by the server every time -- this function
     # previously dropped nothing at all. The names come from SHOW
     # CONSTRAINTS/INDEXES, i.e. from the database rather than from a model, so
-    # they are backtick-quoted the way graph_profile does it rather than passed
-    # through checked(), which rejects legal generated names.
+    # they are backtick-quoted with cypher_identifiers.quote() rather than
+    # passed through checked(), which rejects legal generated names.
     #
     # The status checks below compare result["status"], not the result dict
     # itself; `result == "error"` compares a dict to a string and is never true,
@@ -228,20 +228,26 @@ def create_uniqueness_constraint(
         A dictionary with a status key ('success' or 'error').
         On error, includes an 'error_message' key.
     """
-    # Validate input to prevent injection attacks. is_symbol() alone is not
-    # enough here: it only rejects literal spaces and exact keyword matches,
-    # so newlines/parens/braces would otherwise reach the f-string below.
+    # Validate input to prevent injection, then quote. checked() refuses anything
+    # but a plain identifier, so newlines/parens/braces never reach the f-string;
+    # quote() lets a plain identifier that is also a Cypher keyword (Order, END)
+    # through as a name.
     try:
         label = checked("label", label)
         unique_property_key = checked("property key", unique_property_key)
     except InvalidIdentifier as exc:
         return tool_error(str(exc))
 
-    # Use string formatting since Neo4j doesn't support parameterization of labels and property keys when creating a constraint
+    # Use string formatting since Neo4j doesn't support parameterization of labels and property keys when creating a constraint.
+    # The name's value is unchanged since 0.8.0 -- only quoted -- so IF NOT EXISTS
+    # still matches constraints earlier builds created. The format is knowingly
+    # ambiguous: label A_b with key c and label A with key b_c both give
+    # A_b_c_constraint, and IF NOT EXISTS then skips the second one silently.
+    # Fixing that changes the name, so it needs its own migration (follow-up to KG-44).
     constraint_name = f"{label}_{unique_property_key}_constraint"
-    query = f"""CREATE CONSTRAINT {constraint_name} IF NOT EXISTS
-    FOR (n:{label})
-    REQUIRE n.{unique_property_key} IS UNIQUE"""
+    query = f"""CREATE CONSTRAINT {quote(constraint_name)} IF NOT EXISTS
+    FOR (n:{quote(label)})
+    REQUIRE n.{quote(unique_property_key)} IS UNIQUE"""
     results = graphdb.send_query(query)
     return results
 
