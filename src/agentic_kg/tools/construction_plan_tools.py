@@ -60,6 +60,11 @@ def propose_node_construction(
       a relationship joins on -- both are compared as raw text and typing them
       makes the join match nothing.
 
+    The label and the unique column name must each be a letter or underscore
+    followed by letters, digits or underscores. Cypher keywords such as Order
+    or END are fine. A column whose header breaks this rule (such as 'Order ID')
+    cannot be the unique column; renaming it in the proposal will not help.
+
     Args:
         approved_file: The approved file to propose a node construction for
         proposed_label: The proposed label for constructed nodes (used as key in the construction plan)
@@ -217,6 +222,12 @@ def propose_relationship_construction(
       as text. Never declare a type for from_node_column or to_node_column: they
       are compared against the stored node property as raw text, so typing them
       makes the relationship match nothing.
+
+    The relationship type, both node labels and both join column names must each
+    be a letter or underscore followed by letters, digits or underscores. Cypher
+    keywords such as Order or END are fine. A column whose header breaks this
+    rule (such as 'Order ID') cannot be a join column; renaming it in the
+    proposal will not help.
 
     Args:
         approved_file: The approved file to propose a relationship construction for

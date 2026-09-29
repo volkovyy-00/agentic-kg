@@ -1926,7 +1926,7 @@ def test_keyword_names_are_proposed_as_given(ctx, any_column_exists):
     plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
     assert plan["Order"]["unique_column_name"] == "END"
     assert plan["SET"]["to_node_column"] == "null"
-    # Review Focus 2: nothing at approval trips over a keyword name.
+    # Nothing at approval trips over a keyword name.
     assert check_construction_plan_consistency(plan) == []
 
 

@@ -189,7 +189,7 @@ def test_names_that_are_cypher_keywords_build(
     assert count("MATCH (n:`Order`) RETURN count(n) AS c") == 3
     assert count("MATCH (n:`Match`) RETURN count(n) AS c") == 2
     assert count("MATCH (:`Order`)-[r:`SET`]->(:`Match`) RETURN count(r) AS c") == 4
-    # Review Focus 3: a keyword property column is an ordinary value.
+    # A keyword property column is an ordinary value.
     assert count("MATCH (n:`Order`) WHERE n.`TRUE` = 'yes' RETURN count(n) AS c") == 2
 
     constraints = neo4j_graph.send_query(
@@ -202,7 +202,7 @@ def test_names_that_are_cypher_keywords_build(
     }
     assert {("Order", "END"), ("Match", "null")} <= uniques
 
-    # Review Focus 4: a re-run adds nothing.
+    # A re-run adds nothing.
     again = kg.construct_domain_graph(KEYWORD_PLAN)
     assert again["status"] == "success", again.get("error_message")
     assert count("MATCH (n) RETURN count(n) AS c") == 5

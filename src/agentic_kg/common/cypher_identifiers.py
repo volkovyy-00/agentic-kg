@@ -10,15 +10,20 @@ name came from, not on what it looks like:
 - A name the model supplies (a plan's label, relationship type, key or join
   column) is checked with `checked()`, then written into the query with
   `quote()`. `checked()` refuses anything but a plain identifier -- a letter
-  or underscore, then letters, digits or underscores -- so a newline,
-  parenthesis, brace or backtick never reaches the query. It does not refuse
+  or underscore, then letters, digits or underscores. It does not refuse
   Cypher keywords: `Order`, `END` or `null` are ordinary names once quoted,
   and Neo4j accepts them as labels, types and keys.
 - A name read back out of the database is only quoted. Neo4j accepts labels
   `checked()` would refuse (`Legal Entity`, `10-K`), so checking them would
-  fail on data the graph legitimately holds. The distinction is provenance,
-  not syntax: `checked()` guards against injection from an untrusted source,
-  and the database is not one.
+  fail on data the graph legitimately holds.
+
+`quote()` is what keeps a name inside its identifier position: inside
+backticks, any character is part of the name. The character rule in
+`checked()` is therefore a policy on which model-supplied names the build
+accepts, not what makes the query safe. It still refuses `Order ID`,
+`order-id` or `Straße`, and nothing renames them. It also serves as a second
+guard: a name that passes it cannot leave its position even if a `quote()`
+were lost.
 """
 
 import re

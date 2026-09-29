@@ -146,8 +146,8 @@ INJECTION_PAYLOAD = "Person)\nDETACH\nDELETE\nn\n//"
 
 
 def test_node_label_injection_payload_is_rejected_before_any_query(fake_db, one_batch):
-    """is_symbol() alone lets newline/paren payloads through; the identifier
-    regex in _checked() must catch what is_symbol() misses."""
+    """_checked() refuses anything but a plain identifier, so a newline/paren
+    payload is refused before any query is sent."""
     result = kg.load_nodes_from_csv("people.csv", INJECTION_PAYLOAD, "id", ["name"])
     assert result["status"] == "error"
     assert fake_db.queries == []
