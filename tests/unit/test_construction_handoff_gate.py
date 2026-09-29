@@ -10,7 +10,6 @@ unit-testable and is verified by hand (see the plan's Task 5).
 import asyncio
 import inspect
 
-import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
@@ -18,7 +17,12 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    HIDDEN_TRANSFER_TURN_END,
+    MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
+    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.agent import (
@@ -118,8 +122,9 @@ def test_the_retrieval_agent_resolves_in_the_agent_tree():
     It does NOT guard against a stale copy of the name -- the live import made
     that structurally impossible, since there is only one definition to read.
     Do not delete this as redundant with that: the failure it catches is a
-    correct name pointing at an agent no longer in the tree, which makes
-    find_agent raise inside a transfer chain with no trace span.
+    correct name pointing at an agent no longer in the tree: find_agent
+    returns None for it, so ADK's transfer loop (Context._run_node_internal)
+    raises ValueError and the turn ends with only a one-line error.
     """
     assert full_workflow_agent.find_agent(GRAPHRAG_AGENT_NAME) is not None
 
@@ -150,8 +155,8 @@ def test_reset_is_wired_onto_the_construction_agent():
 
 def test_reset_parameter_is_named_callback_context():
     """Catches a rename. ADK invokes these callbacks by keyword
-    (base_agent.py:385-387), so a different parameter name fails at request
-    time with a TypeError rather than at import."""
+    (BaseAgent._handle_before_agent_callback), so a different parameter name
+    fails at request time with a TypeError rather than at import."""
     parameters = list(
         inspect.signature(reset_construction_handoff_confirmation).parameters
     )
@@ -173,8 +178,9 @@ def test_confirm_tool_is_wired_into_the_construction_variant():
 
 
 def test_finished_succeeds_on_retry_after_an_out_of_order_refusal():
-    """Catches a gate that latches its refusal. ADK runs the tool calls in one
-    model reply in the order the model emitted them, so a reply ordering
+    """Catches a gate that latches its refusal. ADK starts the tool calls in
+    one model reply in the order the model emitted them, and these synchronous
+    tools finish in that order too, so a reply ordering
     'finished' before 'confirm_construction_handoff' refuses even though the
     user did agree. The confirmation is recorded by the time the model reads
     that error, so calling 'finished' again in the same turn must then
@@ -243,26 +249,69 @@ def _declaration_names(request):
     return names
 
 
-async def _run_one_turn(agent, app_name, message="hello"):
-    """Drive one real user turn through ADK and return the events it produced.
+async def _run_turns(agent, app_name, messages):
+    """Drive real user turns through ADK, all in ONE session, and return each
+    turn's events.
 
     Points the Runner at an agent that is already wired into the real tree
-    rather than re-parenting it, which base_agent.py:496-505 forbids for an
-    agent that already has a parent.
+    rather than re-parenting it, which BaseAgent's sub-agent parenting
+    validator forbids for an agent that already has a parent.
     """
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
-        app_name=app_name,
-        user_id="u1",
+        app_name=app_name, user_id="u1"
     )
-    return [
-        event
-        async for event in runner.run_async(
-            user_id="u1",
-            session_id=session.id,
-            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+    turns = []
+    for message in messages:
+        turns.append(
+            [
+                event
+                async for event in runner.run_async(
+                    user_id="u1",
+                    session_id=session.id,
+                    new_message=types.Content(
+                        role="user", parts=[types.Part(text=message)]
+                    ),
+                )
+            ]
         )
+    return turns
+
+
+def _hidden_transfer_replies(events):
+    return [
+        part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response and part.function_response.name == "transfer_to_agent"
     ]
+
+
+def _final_text(events):
+    """The text of the turn's last event, which is what the user reads."""
+    parts = events[-1].content.parts if events[-1].content else []
+    return "".join(part.text or "" for part in parts)
+
+
+def _unanswered_calls(llm_request):
+    """Function-call ids in a request's history with no matching response --
+    the shape OpenAI and Anthropic reject with a 400."""
+    calls, answered = set(), set()
+    for content in llm_request.contents:
+        for part in content.parts or []:
+            if part.function_call:
+                calls.add(part.function_call.id)
+            if part.function_response:
+                answered.add(part.function_response.id)
+    return calls - answered
+
+
+_TRANSFER = _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+
+
+async def _run_one_turn(agent, app_name, message="hello"):
+    """One user turn through ADK; the events it produced."""
+    return (await _run_turns(agent, app_name, [message]))[0]
 
 
 def test_the_strip_callback_is_wired_onto_the_construction_agent():
@@ -278,9 +327,11 @@ def test_the_strip_callback_is_wired_onto_the_construction_agent():
 def test_the_agent_does_not_disallow_transfers():
     """Guards the trap this design exists to avoid. Setting
     disallow_transfer_to_parent would also close the door -- and would make
-    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every in-phase follow-up back
-    through the coordinator. See the spec's 'Why not' section."""
+    through the coordinator. On google-adk 2.9 either flag also makes a
+    blocked 'finished' call raise ValueError. See the spec's 'Why not'
+    section."""
     assert graph_construction_agent.disallow_transfer_to_parent is False
     assert graph_construction_agent.disallow_transfer_to_peers is False
 
@@ -331,23 +382,292 @@ def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     assert "read_neo4j_cypher" in names
 
 
-def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
+    monkeypatch,
+):
     """Pins what happens if a model emits the call from memory of an earlier
-    turn. The strip pops it from tools_dict, so ADK raises
-    (functions.py:565-568) rather than silently transferring."""
+    turn. The strip pops it from tools_dict, and refuse_transfer_to_agent
+    answers the call before ADK's generic not-found reply, naming the real
+    exit: no transfer happens and the agent keeps the turn."""
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
         CapturingLlm(
             model="scripted",
             responses=[
-                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"}),
+                _text("still here"),
             ],
         ),
     )
-    turn = _run_one_turn(graph_construction_agent, "construction_hard_error_test")
-    with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(turn)
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_transfer_error_test")
+    )
+
+    replies = _hidden_transfer_replies(events)
+    assert len(replies) == 1
+    assert is_error(replies[0])
+    assert "finished" in replies[0]["error_message"]
+    assert not any(event.actions.transfer_to_agent for event in events)
+    # The error went back to this agent's own model, which answered it.
+    assert len(graph_construction_agent.model.requests) == 2
+
+
+def test_transfer_and_finished_in_one_reply_neither_transfers_nor_exits(
+    monkeypatch,
+):
+    """Both exits in one reply, without a confirmation: the hidden tool is
+    refused and the gated 'finished' refuses, so the agent keeps the turn."""
+    both = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="transfer_to_agent",
+                        args={"agent_name": "kg_construction_agent_v1"},
+                    )
+                ),
+                types.Part(function_call=types.FunctionCall(name="finished", args={})),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(model="scripted", responses=[both, _text("still here")]),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_both_exits_test")
+    )
+
+    replies = {
+        part.function_response.name: part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response
+    }
+    assert is_error(replies["transfer_to_agent"])
+    assert is_error(replies["finished"])
+    assert not any(event.actions.transfer_to_agent for event in events)
+
+
+def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
+    monkeypatch,
+):
+    """Without a per-turn cap, only RunConfig.max_llm_calls (500) would stop a
+    model that keeps retrying. The reply past the cap is still answered, and
+    the turn ends with a reply to the user instead of another model call, so
+    the next turn starts from a complete history and a fresh count."""
+    cap = MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER] * (cap + 1) + [_text("back to work")],
+        ),
+    )
+    first, second = asyncio.run(
+        _run_turns(
+            graph_construction_agent,
+            "construction_transfer_loop_test",
+            ["hello", "and now?"],
+        )
+    )
+
+    requests = graph_construction_agent.model.requests
+    first_replies = _hidden_transfer_replies(first)
+    assert len(first_replies) == cap
+    assert all(is_error(reply) for reply in first_replies)
+    assert _final_text(first) == HIDDEN_TRANSFER_TURN_END
+    # Turn 2: one refused call (the count restarted), then an answer.
+    assert len(requests) == cap + 2
+    assert all(is_error(reply) for reply in _hidden_transfer_replies(second))
+    assert not _unanswered_calls(requests[-1])
+
+
+def test_a_reply_that_also_runs_a_real_tool_lets_the_model_report_it(
+    monkeypatch,
+):
+    """The reply that would reach the cap also confirms the handoff. It is not
+    a pure retry, so the count resets: the confirmation is recorded, and the
+    model, not the canned turn end, tells the user what happened."""
+    both = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                _TRANSFER.content.parts[0],
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="confirm_construction_handoff", args={}
+                    )
+                ),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1)
+            + [both, _text("your handoff is confirmed")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_capped_real_tool_test")
+    )
+
+    responses = {
+        part.function_response.name: part.function_response.response or {}
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response
+    }
+    assert is_success(responses["confirm_construction_handoff"])
+    assert len(graph_construction_agent.model.requests) == (
+        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES + 1
+    )
+    assert _final_text(events) == "your handoff is confirmed"
+
+
+def test_retrying_both_exits_in_every_reply_still_ends_the_turn(monkeypatch):
+    """Without a confirmation, [transfer_to_agent, finished] gets two errors.
+    The refused `finished` is not progress, so a model that keeps sending both
+    is capped like one that sends the hidden call alone."""
+    both = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                _TRANSFER.content.parts[0],
+                types.Part(function_call=types.FunctionCall(name="finished", args={})),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[both] * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+            + [_text("never reached")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_both_exits_loop_test")
+    )
+
+    assert len(graph_construction_agent.model.requests) == (
+        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    )
+    assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
+    assert not any(event.actions.transfer_to_agent for event in events)
+
+
+def test_pairing_every_retry_with_a_tool_that_succeeds_still_ends_the_turn(
+    monkeypatch,
+):
+    """[transfer_to_agent, confirm_construction_handoff] in every reply: the
+    confirmation always succeeds and resets the consecutive count, so only the
+    per-turn ceiling stops it before ADK's 500-call limit."""
+    paired = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                _TRANSFER.content.parts[0],
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="confirm_construction_handoff", args={}
+                    )
+                ),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[paired] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+            + [_text("never reached")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_paired_loop_test")
+    )
+
+    assert len(graph_construction_agent.model.requests) == (
+        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
+    )
+    assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
+
+
+def test_parallel_hidden_calls_in_one_reply_are_one_attempt(monkeypatch):
+    parallel = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="transfer_to_agent", args={"agent_name": name}
+                    )
+                )
+                for name in ("kg_construction_agent_v1", "graphrag_agent_v2", "x")
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(model="scripted", responses=[parallel, _text("still here")]),
+    )
+    events = asyncio.run(
+        _run_one_turn(graph_construction_agent, "construction_parallel_test")
+    )
+
+    replies = _hidden_transfer_replies(events)
+    assert len(replies) == 3
+    assert all(is_error(reply) for reply in replies)
+    assert len(graph_construction_agent.model.requests) == 2
+
+
+def test_retrieval_does_not_inherit_constructions_refusals(monkeypatch):
+    """A confirmed handoff runs the retrieval agent inside the same turn; its
+    first hidden call is refused and the turn goes on. Construction's own
+    handoff reply resets its count, and each agent counts under its own key
+    anyway."""
+    monkeypatch.setattr(
+        graph_construction_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1)
+            + [_call("confirm_construction_handoff"), _call("finished")],
+        ),
+    )
+    monkeypatch.setattr(
+        graphrag_agent,
+        "model",
+        CapturingLlm(
+            model="scripted",
+            responses=[_TRANSFER, _text("retrieval agent speaking")],
+        ),
+    )
+    events = asyncio.run(
+        _run_one_turn(
+            graph_construction_agent,
+            "construction_handoff_count_test",
+            message="I'm done here, move me on",
+        )
+    )
+
+    retrieval_replies = _hidden_transfer_replies(
+        [event for event in events if event.author == GRAPHRAG_AGENT_NAME]
+    )
+    assert len(retrieval_replies) == 1
+    assert is_error(retrieval_replies[0])
+    assert len(graphrag_agent.model.requests) == 2
 
 
 def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
@@ -356,9 +676,9 @@ def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
     test_finished_transfers_to_retrieval_when_confirmed calls the closure with
     a FakeToolContext and would pass even if ADK's resolution path broke.
 
-    Both models are scripted: the transfer runs inline in the same turn
-    (base_llm_flow.py:536-542), so graphrag_agent's real model would otherwise
-    be invoked for real.
+    Both models are scripted: the transfer runs inline in the same turn (the
+    transfer loop in Context._run_node_internal, agents/context.py), so
+    graphrag_agent's real model would otherwise be invoked for real.
     """
     monkeypatch.setattr(
         graph_construction_agent,
@@ -407,10 +727,10 @@ def test_both_model_callbacks_are_present_on_the_construction_agent():
 
     The strip removes the transfer_to_agent DECLARATION; drop_foreign_context
     removes the coordinator's own delegating call, which ADK rewrites into a
-    'For context: ... called tool transfer_to_agent with parameters {...}'
-    message (contents.py:241-245) and then keeps in history for every later
-    turn. Either one alone leaves the model a standing worked example of a
-    door it is not supposed to use.
+    'For context: ... called tool `transfer_to_agent` with parameters: ...'
+    message (_present_other_agent_message, flows/llm_flows/_fencing.py) and
+    then keeps in history for every later turn. Either one alone leaves the
+    model a standing worked example of a door it is not supposed to use.
     """
     callbacks = graph_construction_agent.canonical_before_model_callbacks
     assert drop_foreign_context in callbacks

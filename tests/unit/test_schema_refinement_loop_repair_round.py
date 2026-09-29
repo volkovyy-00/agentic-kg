@@ -97,8 +97,8 @@ def stranding_sources(monkeypatch):
 
 
 # KG-29: a critic that ends a round without text. A thought-only part is how a
-# reasoning model does that; ADK saves output_key only for a non-thought text
-# part, so without the per-round reset the slot would keep last round's verdict.
+# reasoning model does that; record_critic_verdict records no text for it, and
+# the per-round reset keeps last round's verdict from standing in for it.
 def _silent_response() -> LlmResponse:
     return LlmResponse(
         content=types.Content(

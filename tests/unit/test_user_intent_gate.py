@@ -15,7 +15,6 @@ gives rather than on a turn-scoped "yes, move on".
 
 import asyncio
 
-import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
@@ -23,7 +22,10 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import FOREIGN_CONTEXT_SENTINEL, drop_foreign_context
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import (
+    end_turn_past_hidden_transfer_cap,
+    strip_transfer_to_agent,
+)
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.tool_result import is_error
 
@@ -241,9 +243,10 @@ def _multi_call(*name_arg_pairs):
     reply'). ADK runs every function_call Part in a response's Content before
     calling the model again.
 
-    It dispatches them concurrently, not sequentially: handle_function_calls_async
-    (google/adk/flows/llm_flows/functions.py:155-169) creates one asyncio task
-    per call and gathers them, so emission order is not a documented contract.
+    It dispatches them concurrently, not sequentially:
+    _execute_prepared_function_calls_async
+    (google/adk/flows/llm_flows/_batch_tool_executor.py) creates one asyncio
+    task per call and gathers them, so emission order is not a documented contract.
     It holds here because every tool on this agent is synchronous and no plugin
     is registered, leaving no suspension point inside a task -- each runs to
     completion in creation order. Measured 200/200 in that order.
@@ -275,8 +278,8 @@ async def _run_one_turn(agent, app_name, message="hello"):
     """Drive one real user turn through ADK and return the events it produced.
 
     Points the Runner at an agent already wired into the real tree rather than
-    re-parenting it, which base_agent.py:496-505 forbids for an agent that
-    already has a parent.
+    re-parenting it, which BaseAgent's sub-agent parenting validator forbids
+    for an agent that already has a parent.
     """
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
@@ -315,9 +318,11 @@ def test_both_model_callbacks_are_wired_in_order():
     transfer DECLARATION; drop_foreign_context removes the worked EXAMPLE of it
     that ADK leaves in this agent's history. Removing the declaration and
     leaving the example is half a fix -- the model copies the example, the
-    strip has already popped the tool from tools_dict, and ADK raises
-    mid-turn. Same pairing as graph_construction_agent."""
+    strip has already popped the tool from tools_dict, and every copied call
+    costs a model call answered by a refusal. Same pairing as
+    graph_construction_agent, plus the per-turn cap on those refusals."""
     assert user_intent_agent.canonical_before_model_callbacks == [
+        end_turn_past_hidden_transfer_cap,
         drop_foreign_context,
         strip_transfer_to_agent,
     ]
@@ -326,9 +331,10 @@ def test_both_model_callbacks_are_wired_in_order():
 def test_the_agent_does_not_disallow_transfers():
     """Guards the trap this design exists to avoid. Setting
     disallow_transfer_to_parent would also close the door -- and would make
-    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every mid-interview reply back
-    through the coordinator to be re-arbitrated."""
+    through the coordinator to be re-arbitrated. On google-adk 2.9 either
+    flag also makes a blocked 'finished' call raise ValueError."""
     assert user_intent_agent.disallow_transfer_to_parent is False
     assert user_intent_agent.disallow_transfer_to_peers is False
 
@@ -363,10 +369,10 @@ def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkey
     Wiring assertions prove drop_foreign_context is attached, not that it does
     anything -- the same gap TRAP 5 guards for the strip. This agent is entered
     BY the coordinator's transfer_to_agent call, which ADK rewrites into a
-    'For context: ...' turn (contents.py) that would otherwise sit in history
-    for the whole interview: a worked example of the exact call the strip
-    removes the declaration for. Catches drop_foreign_context being dropped, or
-    being wired somewhere it never runs.
+    'For context: ...' turn (flows/llm_flows/_fencing.py) that would otherwise
+    sit in history for the whole interview: a worked example of the exact call
+    the strip removes the declaration for. Catches drop_foreign_context being
+    dropped, or being wired somewhere it never runs.
     """
     monkeypatch.setattr(
         full_workflow_agent,
@@ -444,24 +450,77 @@ def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     assert "approve_perceived_user_goal" in names
 
 
-def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
+    monkeypatch,
+):
     """Pins what happens if a model emits the call from memory of an earlier
-    turn -- which is precisely what the reported session did. The strip pops it
-    from tools_dict, so ADK raises (functions.py:565-568) rather than silently
-    transferring mid-question."""
+    turn. The strip pops it from tools_dict, and refuse_transfer_to_agent
+    answers the call before ADK's generic not-found reply, naming the real
+    exit: no transfer happens and the agent keeps the turn."""
     monkeypatch.setattr(
         user_intent_agent,
         "model",
         CapturingLlm(
             model="scripted",
             responses=[
-                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"})
+                _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"}),
+                _text("still here"),
             ],
         ),
     )
-    turn = _run_one_turn(user_intent_agent, "intent_hard_error_test")
-    with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(turn)
+    events = asyncio.run(_run_one_turn(user_intent_agent, "intent_transfer_error_test"))
+
+    replies = [
+        part.function_response
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response and part.function_response.name == "transfer_to_agent"
+    ]
+    assert len(replies) == 1
+    assert is_error(replies[0].response or {})
+    assert "finished" in (replies[0].response or {})["error_message"]
+    assert not any(event.actions.transfer_to_agent for event in events)
+    # The error went back to this agent's own model, which answered it.
+    assert len(user_intent_agent.model.requests) == 2
+
+
+def test_a_question_asked_with_the_hidden_call_is_the_turns_last_word(
+    monkeypatch,
+):
+    """The reported session's shape: a clarifying question and
+    transfer_to_agent in one reply. The call is refused and the turn ends
+    there, so the user answers the question before the model runs again --
+    it gets no chance to act on the refusal (approve, say) first."""
+    asking = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="Which products matter most to you?"),
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="transfer_to_agent",
+                        args={"agent_name": "kg_construction_agent_v1"},
+                    )
+                ),
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        user_intent_agent,
+        "model",
+        CapturingLlm(model="scripted", responses=[asking, _text("never reached")]),
+    )
+    events = asyncio.run(_run_one_turn(user_intent_agent, "intent_question_test"))
+
+    assert len(user_intent_agent.model.requests) == 1
+    texts = [
+        part.text
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.text
+    ]
+    assert texts == ["Which products matter most to you?"]
+    assert not any(event.actions.transfer_to_agent for event in events)
 
 
 def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch):
@@ -474,7 +533,7 @@ def test_the_gate_opens_through_adks_real_session_state_in_one_reply(monkeypatch
     it looks: each function call in a reply gets its OWN ToolContext and
     therefore its own private EventActions.state_delta, so the approval is
     NOT visible to 'finished' through the delta. It is visible because
-    State.__setitem__ (google/adk/sessions/state.py:47-52) writes through to
+    State.__setitem__ (google/adk/sessions/state.py) writes through to
     self._value as well, and _value is invocation_context.session.state --
     one dict shared by every tool call in the invocation.
 

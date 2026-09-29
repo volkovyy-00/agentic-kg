@@ -340,8 +340,8 @@ def test_reset_is_wired_onto_the_graphrag_agent():
 
 def test_reset_parameter_is_named_callback_context():
     """Catches a rename. ADK invokes these callbacks by keyword
-    (base_agent.py:385-387), so a different parameter name fails at request
-    time with a TypeError rather than at import."""
+    (BaseAgent._handle_before_agent_callback), so a different parameter name
+    fails at request time with a TypeError rather than at import."""
     parameters = list(
         inspect.signature(reset_partition_interpretation_declaration).parameters
     )

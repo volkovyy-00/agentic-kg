@@ -1,12 +1,14 @@
 # tests/unit/test_adk_context.py
 """Unit tests for the graphrag foreign-context filter.
 
-The canary test deliberately drives ADK's own _present_other_agent_message rather
-than asserting on our copy of the sentinel string: asserting our constant
-equals our constant proves nothing. google-adk is pinned >=1.28.1,<2, so a
-routine `uv sync` can change that wording; this test is what notices.
+The sentinel is ADK's own OTHER_AGENT_CONTEXT_PREAMBLE, imported, so its
+wording follows ADK and a move or rename fails at import. What an upgrade can
+still break is the structure: the canary drives ADK's own
+_present_other_agent_message and checks the preamble is still part 0 of every
+foreign event, which is where drop_foreign_context looks.
 """
 
+import pytest
 from google.adk.events.event import Event
 from google.adk.flows.llm_flows.contents import _present_other_agent_message
 from google.adk.models.llm_request import LlmRequest
@@ -123,8 +125,29 @@ def test_returns_none_so_the_model_call_proceeds():
     assert drop_foreign_context(None, req) is None
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["For context: the suppliers file is the newest one", "For context:"],
+)
+def test_keeps_a_user_message_that_begins_with_for_context(text):
+    """The sentinel is ADK's whole preamble, not its first two words: a user
+    may well start a message with "For context:", or send 1.x's entire
+    sentinel. Sent next to real foreign content, so a wrong drop cannot hide
+    behind the all-foreign guard."""
+    foreign = _content(
+        "user",
+        types.Part(text=FOREIGN_CONTEXT_SENTINEL),
+        types.Part(text="[schema_critic_agent] said: 4 suppliers have no quotes"),
+    )
+    human = _content("user", types.Part(text=text))
+    req = _request(foreign, human)
+    drop_foreign_context(None, req)
+    assert req.contents == [human]
+
+
 def test_canary_adk_still_marks_foreign_events_with_our_sentinel():
-    """Fails if a google-adk upgrade changes the foreign-event wording."""
+    """Fails if a google-adk upgrade stops putting its preamble at part 0.
+    Checks structure; the wording follows the import."""
     original = Event(
         author="schema_critic_agent",
         content=_content("model", types.Part(text="4 suppliers have no quote rows")),
@@ -134,7 +157,7 @@ def test_canary_adk_still_marks_foreign_events_with_our_sentinel():
     assert converted.content.parts[0].text == FOREIGN_CONTEXT_SENTINEL, (
         "ADK's _present_other_agent_message no longer emits our sentinel as part 0. "
         "The graphrag context filter is now a silent no-op. Check the installed "
-        "google-adk version against the >=1.28.1,<2 pin in pyproject.toml."
+        "google-adk version against the >=2.9.2,<2.10 pin in pyproject.toml."
     )
 
     # Paired with a surviving human turn: an all-foreign request is

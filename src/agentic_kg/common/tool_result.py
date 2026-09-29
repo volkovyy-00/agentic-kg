@@ -1,8 +1,9 @@
 from typing import Any, Callable, Dict, Mapping
 
 # A plain dict, not a TypedDict union: tool_success() stores the payload under a
-# caller-chosen key ("records", "files", ...), which no TypedDict can describe, and
-# ADK cannot build a Vertex AI tool declaration from a Union-of-TypedDicts return.
+# caller-chosen key ("records", "files", ...), which no TypedDict can describe.
+# (google-adk 2.9 can declare a Union-of-TypedDicts return, so that is not the
+# reason.)
 ToolResult = Dict[str, Any]
 
 
@@ -40,7 +41,9 @@ def is_success(result: ToolResult) -> bool:
 
 
 def is_error(result: ToolResult) -> bool:
-    return result["status"] == "error"
+    # Tolerant, unlike is_success: ADK's after-tool callbacks see whatever a
+    # tool returned, including dicts with no "status" (make_finished's {}).
+    return isinstance(result, Mapping) and result.get("status") == "error"
 
 
 def _payload_key(result: Mapping[str, Any]) -> str:

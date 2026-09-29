@@ -31,9 +31,10 @@ def _physical_schema(include_data_profile: bool) -> Dict[str, Any]:
     """Internal implementation. NOT bound as a tool -- see the two wrappers.
 
     The flag must not appear in any tool's signature. ADK builds a tool's
-    declaration from the callable, and it does not support default values in
-    that schema, so a public `get_physical_schema(include_data_profile=False)`
-    is advertised to the model as a REQUIRED boolean parameter. All four
+    declaration from the callable, so a public
+    `get_physical_schema(include_data_profile=False)` would advertise the flag
+    to the model (google-adk 2.9 declares it optional with its default, but
+    the model can still set it). All four
     consumers -- the coordinator, graph_construction_agent, graphrag and
     single_agent's cypher_agent -- would be handed a knob they know nothing
     about, and a model that guessed True would silently trigger a full scan per

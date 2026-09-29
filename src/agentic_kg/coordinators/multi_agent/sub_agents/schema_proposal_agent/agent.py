@@ -6,6 +6,7 @@ from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import agent_tool
 from google.genai import types
 
@@ -65,10 +66,11 @@ class VerdictKind(StrEnum):
 
 
 # A sibling of 'feedback' rather than a structured value replacing it: the
-# critic writes 'feedback' through output_key, which stores a string because
-# the critic has no output_schema, and ADK renders {feedback} with str().
-# Written only by prepare_refinement_loop_invocation, clear_verdict_before_critic
-# and CheckStatusAndEscalate.
+# critic's verdict is plain text (record_critic_verdict writes a string), and
+# ADK renders {feedback} with str(). 'feedback' is written by
+# prepare_refinement_loop_invocation, clear_verdict_before_critic,
+# record_critic_verdict and CheckStatusAndEscalate; this key by all of those
+# but record_critic_verdict.
 FEEDBACK_KIND_KEY = "feedback_kind"
 
 
@@ -200,10 +202,11 @@ def clear_verdict_before_critic(callback_context: CallbackContext) -> None:
     """Runs before the critic on every iteration, so each verdict is that
     iteration's own (KG-29).
 
-    ADK writes the critic's output_key only when its final response carries a
-    text part, so a silent critic would otherwise leave the previous
-    iteration's verdict -- the critic's or the loop's composite -- standing as
-    this one's. Cleared here, a silent iteration is structurally no verdict.
+    record_critic_verdict writes the slot only when a model reply arrives, so a
+    critic whose model call fails or yields no reply would otherwise leave the
+    previous iteration's verdict -- the critic's or the loop's composite --
+    standing as this one's. Cleared here, such an iteration is structurally no
+    verdict.
 
     On the critic, never on schema_proposal_agent: the proposal step runs
     first in each iteration and must still read the previous one's feedback
@@ -211,6 +214,37 @@ def clear_verdict_before_critic(callback_context: CallbackContext) -> None:
     """
     callback_context.state["feedback"] = ""
     callback_context.state[FEEDBACK_KIND_KEY] = VerdictKind.NONE.value
+
+
+def record_critic_verdict(
+    callback_context: CallbackContext, llm_response: LlmResponse
+) -> None:
+    """Records the critic's verdict: the text of its final answer, and only that.
+
+    Replaces output_key, which on google-adk 2.x also stores the text an agent
+    writes alongside a tool call, accumulated over its whole run -- so narration
+    ("Let me look at the goal first.") became part of the verdict (KG-25).
+
+    Runs after every model reply of the critic's run. A complete reply
+    overwrites 'feedback': with "" when it calls a tool (it is not a final
+    answer), otherwise with its non-thought text joined as ADK joined it. The
+    run's last reply is its final answer, so it has the last word; a final
+    answer without text leaves "". A partial chunk writes nothing -- the
+    complete reply that follows it does.
+
+    Returns None: a truthy return would replace the model's reply. Plugin
+    after-model callbacks run before this one, and a truthy return from one
+    would skip it; the project registers none.
+    """
+    if llm_response.partial:
+        return None
+    parts = (llm_response.content.parts if llm_response.content else None) or []
+    if any(part.function_call for part in parts):
+        verdict = ""
+    else:
+        verdict = "".join(part.text for part in parts if part.text and not part.thought)
+    callback_context.state["feedback"] = verdict
+    return None
 
 
 def reset_schema_refinement_turn_budget(callback_context: CallbackContext) -> None:
@@ -240,8 +274,8 @@ schema_critic_agent = LlmAgent(
     model=get_llm(LlmKind.reasoning),
     instruction=variants[CRITIC_NAME]["instruction"],
     tools=variants[CRITIC_NAME]["tools"],
-    output_key="feedback",
     before_agent_callback=clear_verdict_before_critic,
+    after_model_callback=record_critic_verdict,
 )
 
 
@@ -256,8 +290,8 @@ def _plan_problems(state: StateLike) -> list[str]:
     any check drops the others' early catch FOR THAT ITERATION, IN THE LOOP
     ONLY; approval still refuses the plan.
 
-    exc_info because the adk web server's own stdout is the only place these
-    surface -- a bare message there is near-useless.
+    exc_info because the adk web server's own log output is the only place
+    these surface -- a bare message there is near-useless.
     """
     try:
         return find_plan_problems(state)[0]

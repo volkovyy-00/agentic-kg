@@ -56,10 +56,10 @@ uv run pyright        # must report 0 errors
 ```
 
 - Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
-- Pinned to `google-adk>=1.28.1,<2` (`pyproject.toml`; the floor is the CVE-2026-4810 fix) — ADK 2.x is a
-  breaking rewrite; check which major version any ADK doc, sample, or blog post is describing before trusting
-  it against this code.
-- The floor is not what you run: the committed `uv.lock` resolves `google-adk 1.39.1` (and `neo4j 6.3.1`),
+- Pinned to `google-adk>=2.9.2,<2.10` (`pyproject.toml`) — one minor window on purpose: each minor moves
+  separately. ADK docs, samples and blog posts describe 1.x, or a 2.x newer than ours, as often as 2.9, and the
+  lines differ in behaviour this code depends on; check which version a source describes before trusting it.
+- The floor is not what you run: the committed `uv.lock` resolves `google-adk 2.9.2` (and `neo4j 6.3.1`),
   so `uv sync` installs those. Check the lock, not `pyproject.toml`, when a behaviour looks version-dependent.
 - `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
   `pytest`/`uv run pytest` never touches Docker.
@@ -95,8 +95,9 @@ uv run pyright        # must report 0 errors
 - **`single_agent`** (`coordinators/single_agent/`) — one agent that talks to Neo4j directly via Cypher, delegating
   to `agents/cypher_agent` as a sub-agent for query execution.
 - **`multi_agent`** (`coordinators/multi_agent/`) — a hierarchical `LlmAgent` (`full_workflow_agent`),
-  registered as `kg_construction_agent_v1` (`MULTI_AGENT_COORDINATOR` in `common/agent_names.py` — this is the
-  name to use when polling the ADK API, per the debugging steps below), that delegates,
+  registered as `kg_construction_agent_v1` (`MULTI_AGENT_COORDINATOR` in `common/agent_names.py` — the author
+  on its events; the `{app}` in the ADK API paths of the debugging steps below is the directory, `multi_agent`),
+  that delegates,
   in strict sequence, through five sub-agents defined in `coordinators/multi_agent/sub_agents/`:
   1. `user_intent_agent` — establishes `kind_of_graph` / `graph_description`
   2. `file_suggestion_agent` — requires an approved user goal; suggests input files
@@ -107,9 +108,12 @@ uv run pyright        # must report 0 errors
 When a turn in the dev UI produces no visible response and no spinner, the UI alone can't tell you why (hung
 tool call, routing bug, and swallowed exception all look identical from the browser). Cheapest checks first:
 poll `GET /apps/{app}/users/{user}/sessions/{id}` directly (frozen event count = nothing happened), then the
-undocumented `GET /debug/trace/session/{id}` (spans have `start_time`/`end_time`, but a call that raises never
-gets a span — telemetry only fires on success), then the `adk web` server's own stdout, which is the only
-place a swallowed exception actually surfaces. Never reload the tab while a turn is genuinely streaming.
+undocumented `GET /dev/apps/{app}/debug/trace/session/{id}` (spans have `start_time`/`end_time`; a model call that
+raises still gets a `call_llm` span, but with no attributes at all — ADK sets them only per response — and this
+endpoint's span JSON carries no status field at all), then the `adk web` server's own log output, which is the only
+place a swallowed exception actually surfaces. An exception that escapes the run is not swallowed: on google-adk 2.9
+`/run_sse` sends it to the browser, which shows the escaped exception as a red error event in the chat plus a
+one-line snackbar. Never reload the tab while a turn is genuinely streaming.
 
 Note there are **two separate implementations of similarly-named agents**: `src/agentic_kg/agents/` (standalone
 versions, e.g. `cypher_agent` — the one actually wired into `single_agent` — plus `user_intent_agent`, which is not
@@ -171,11 +175,13 @@ may not join on a node property that holds several values per node) and `check_r
   session). Next to it the stop-check writes `feedback_kind` (`VerdictKind`: `mechanical` when any problem was found,
   whatever the critic said; `critic`; `none`), chosen from the branch that ran and never read off the text;
   `prepare_refinement_loop_invocation` resets it to `none`, and so does `clear_verdict_before_critic` (the critic's
-  `before_agent_callback`), which also empties `feedback` before every critic run. ADK writes an `output_key` only
-  when the agent's final response carries a non-thought text part, so a silent run leaves the key's previous value
-  standing — the pre-clear is what makes a silent critic mean no verdict rather than the last round's, and any new
-  `output_key` whose silence must mean "nothing" needs the same. The `'stopped:'` message and the proposal prompt read it;
-  the coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
+  `before_agent_callback`), which also empties `feedback` before every critic run. The critic's verdict is written by
+  `record_critic_verdict` (its `after_model_callback`): every complete reply overwrites `feedback`, with `""` if it
+  calls a tool, so the run's final answer has the last word and text written beside a tool call never survives. The
+  pre-clear covers a critic whose model call fails or yields no reply, either way leaving nothing to record. Never
+  use `output_key` for a value code parses: on google-adk 2.x it also stores text an agent writes alongside tool
+  calls, accumulated over its run (KG-25). The `'stopped:'` message and the proposal prompt read it; the
+  coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
   `get_proposed_construction_plan_with_approval_check` returns an error. The loop runs at most two iterations, so a
   problem the second revision introduces still surfaces at approval.
 
@@ -236,18 +242,42 @@ block) into every sub-agent with a parent or peers, and it never consulted the g
 `graphrag_agent_v2` and `user_intent_agent_v2` (never `_v1`) therefore run `strip_transfer_to_agent`
 (`common/adk_transfer.py`) as a `before_model_callback`, removing the tool from `tools_dict`, `config.tools` and
 the system instruction. `disallow_transfer_to_parent` was avoided because it also kills phase stickiness
-(`Runner._find_agent_to_run` would re-arbitrate every message through the coordinator). Instruction-block removal
-matches two marker phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a
-warning rather than failing — check logs after any ADK bump.
+(`Runner._find_agent_to_run` would re-arbitrate every message through the coordinator). On google-adk 2.9 either
+disallow flag also makes a blocked `finished` call raise `ValueError`
+(`workflow/utils/_transfer_utils.resolve_and_derive_transfer_context`), so a `make_finished` target must be the
+agent's parent or a peer — one more reason to leave both flags unset. Instruction-block removal matches two marker
+phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning rather than
+failing — check logs after any ADK bump.
 
-**Always pair the strip with `drop_foreign_context`**: `before_model_callback=[drop_foreign_context,
-strip_transfer_to_agent]`. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
-rewrites into a `"For context: [kg_construction_agent_v1] called tool transfer_to_agent…"` turn — a worked
-example of the call the model then copies, after the strip already removed the tool from `tools_dict`. ADK then
-raises `ValueError` mid-turn: a dead turn with no response and no spinner (the swallowed-exception mode; debug
-from the `adk web` stdout, per the *Two coordinators* section). `user_intent_agent` is the most exposed, since the
-interview is the stickiest phase. Only the coordinator lacks `drop_foreign_context`, by design: its transfer tool
-is never stripped, since that is how the workflow advances.
+**Always pair the strip with `drop_foreign_context`**: take both from `**transfer_guard_callbacks(gated=...)`, never
+hand-wired. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
+rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with
+parameters:`` — a worked example of the call the model then copies, after the strip already removed the tool from
+`tools_dict`. `user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the
+coordinator lacks `drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the
+workflow advances.
+
+**A call made anyway is refused, and a model stuck retrying it is stopped**: the three agents take all their
+transfer-related callbacks from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the
+turn end, the strip and `drop_foreign_context` as before-model callbacks, the reply counter as the after-model
+callback, `refuse_transfer_to_agent` as the before-tool callback and the counter's reset as the after-tool callback.
+They only work as a set; wire a fourth gated agent the same way. If a gated agent needs its own callback of one of
+those four kinds, extend the helper to take it and merge it in: passing the same keyword beside the spread is a
+`TypeError` at import, and hand-wiring the lists drops the set. ADK runs before-tool callbacks ahead of its own
+not-found reply (`build_tool_not_found_response`), which invites a retry and is bounded only by
+`RunConfig.max_llm_calls` (500). The refusal answers every call instead, with a `tool_error` that names the agent
+and `finished` as its exit, and no bare "do not call transfer_to_agent": it stays in the session, and the
+coordinator, whose own transfer tool is real, reads it later as another agent's output. The counter keeps two counts
+of model *replies* that call the hidden tool, per agent, in `temp:` state (invocation-scoped, never persisted, so no
+reset callback): one since another tool last *succeeded* (only that resets it, so a model that recovers keeps its
+turn, and a refused `finished` beside the hidden call or a streamed text-only reply does not reset it), and one for
+the whole turn, which nothing resets (a model can pair every retry with a tool that always succeeds). After three of
+the first or six of the second, the before-model callback returns a short text reply for the user in place of the
+next model call, which ends the turn. A reply that calls the hidden tool *and* speaks to the user (a question, the
+reported intent session's shape) ends the turn at once: its refusal sets `skip_summarization`, so the question is
+the turn's last word and the model cannot act on the refusal before the user answers. That is the only place for
+`skip_summarization`: a turn must never end on it without text for the user. Never end the turn by raising either:
+that leaves the call unanswered in history, and providers reject that history on every later turn.
 
 ### Tool results
 
@@ -299,9 +329,10 @@ wrote, so a re-run against a non-empty graph will include prior data too.
 from conversational recall. Three pieces make that possible:
 
 - `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
-  from the request. ADK rewrites another agent's output into a user-role message carrying a `"For context:"`
-  sentinel before this callback ever sees it, so role alone can't distinguish it from a real user turn — the
-  filter keys on the sentinel instead.
+  from the request. ADK rewrites another agent's output into a user-role message led by a fixed preamble
+  (`OTHER_AGENT_CONTEXT_PREAMBLE`, beginning "For context:") before this callback ever sees it, so role alone
+  can't distinguish it from a real user turn — the filter keys on that whole preamble instead, so a user
+  message that merely starts "For context:" still gets through.
 - `common/graph_profile.py`: turns `neo4j_graphrag`'s enriched schema into tri-state, always-present
   annotations (completeness, uniqueness, per-pattern degree, per-value distribution), cached via
   `get_cached_profile` — because the library's own report doesn't say whether a sampled property list is
@@ -330,10 +361,10 @@ read if you add cost tracking.
 
 `get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
 (e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
-exceeds the balance, the call gets a 402 that ADK's dev UI shows as an indistinguishable hang — no spinner, no
-error, no trace span, since telemetry only fires on a successful response. If reasoning-model calls silently
-stop working, check account balance and the `adk web` server's own stdout (it logs the real exception) before
-assuming a code regression.
+exceeds the balance, the call fails with a 402. The dev UI shows that as a red error event in the chat plus a
+one-line snackbar, and its `call_llm` span has no request/response attributes at all (ADK sets them only per
+response). If reasoning-model calls stop working, check account balance and the `adk web` server's own log output
+(it logs the real exception) before assuming a code regression.
 
 ### Domain models
 

@@ -15,8 +15,9 @@ def make_finished(parent_agent_name: str) -> Callable[[ToolContext], Dict[str, A
 
     def finished(tool_context: ToolContext) -> Dict[str, Any]:
         """Finish the current phase and hand control back to the coordinator."""
-        # escalate is currently inert: ADK only reads it for control flow
-        # inside a LoopAgent, and no caller of make_finished runs inside one.
+        # escalate is currently inert: ADK reads it for control flow only
+        # inside a LoopAgent or ParallelAgent, and no caller of make_finished
+        # runs inside either.
         # Kept deliberately so a future phase added inside a loop behaves
         # correctly without anyone having to remember to add it back.
         tool_context.actions.escalate = True

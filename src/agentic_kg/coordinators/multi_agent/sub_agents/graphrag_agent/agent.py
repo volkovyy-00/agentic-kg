@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
-from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.adk_transfer import transfer_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED_KEY
 from agentic_kg.tools.graphrag_partition_tools import (
@@ -14,7 +14,7 @@ from .variants import variants
 def reset_graphrag_handoff_confirmation(callback_context: CallbackContext) -> None:
     """Clear the handoff confirmation at the start of every turn this agent runs.
 
-    Fires once per run_async (base_agent.py:218-223), which for a plain Agent
+    Fires once per BaseAgent.run_async, which for a plain Agent
     means every turn this agent is active -- not only on entry to the phase.
     There is no phase-entry-versus-turn-N distinction here and none should be
     built: trying to keep a confirmation alive across turns is the stale-flag
@@ -25,8 +25,8 @@ def reset_graphrag_handoff_confirmation(callback_context: CallbackContext) -> No
     both fire after the reset, inside one unbroken loop.
 
     The parameter name is load-bearing: ADK invokes callbacks by keyword
-    (base_agent.py:385-387), so renaming it fails at request time with a
-    TypeError, not at import.
+    (BaseAgent._handle_before_agent_callback), so renaming it fails at
+    request time with a TypeError, not at import.
     """
     callback_context.state[GRAPHRAG_HANDOFF_CONFIRMED_KEY] = False
 
@@ -61,38 +61,24 @@ graphrag_agent = Agent(
     description="Information retrieval from a knowledge graph using a range of query tools.",  # Crucial for delegation later
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
-    # v2 holds two model callbacks: drop_foreign_context (from the variant
-    # spec, PR #9's context filtering) and the transfer strip. ADK iterates
-    # canonical_before_model_callbacks as a list (base_llm_flow.py:661), so a
-    # list is native here -- the strip must JOIN drop_foreign_context, never
-    # replace it.
+    # ADK gives this agent its own 'transfer_to_agent', which does not consult
+    # the handoff gate. transfer_guard_callbacks removes it and answers a call
+    # made anyway, and carries drop_foreign_context (PR #9's context
+    # filtering). The mechanism, and why disallow_transfer_to_parent is NOT
+    # used, are in common/adk_transfer.py and CLAUDE.md, once.
     #
-    # ADK injects its own 'transfer_to_agent' tool, plus an instruction
-    # advertising it, into any LlmAgent with a parent or peers, and it does not
-    # consult the handoff gate. The strip removes it from every request.
-    #
-    # Deliberately NOT disallow_transfer_to_parent: that flag would also close
-    # the door, and would also stop Runner._find_agent_to_run
-    # (runners.py:474-489) from returning this agent for the user's second
-    # message, so every follow-up question would be re-arbitrated by the
-    # coordinator. See adk_transfer.py.
-    #
-    # Conditional for the same reason as the reset callback below. v1 is the
-    # ungated A/B baseline -- its 'finished' transfers unconditionally, so it
-    # has no guarantee for the injected tool to bypass, and
-    # test_v1_is_left_intact_for_the_acceptance_ab pins that it carries no
-    # before_model_callback at all. Never attach this unconditionally.
-    before_model_callback=(
-        [variants[AGENT_NAME]["before_model_callback"], strip_transfer_to_agent]
-        if IS_GATED_VARIANT
-        else variants[AGENT_NAME].get("before_model_callback")
-    ),
+    # Gated only for v2, for the same reason as the reset callback below. v1
+    # is the ungated A/B baseline -- its 'finished' transfers unconditionally,
+    # so it has no guarantee for the injected tool to bypass, and
+    # test_v1_is_left_intact_for_the_acceptance_ab pins that it gets none of
+    # these callbacks.
+    **transfer_guard_callbacks(gated=IS_GATED_VARIANT),
     # Conditional because only v2 is gated. Attaching unconditionally would
     # write inert flags every turn under v1, read by nobody -- harmless, but
-    # untrue to "v1 is untouched" and avoidable in one line. Same None-default
-    # reasoning as the model callback above. A list, not a single callback:
-    # ADK's canonical_before_agent_callbacks accepts either, the same way
-    # canonical_before_model_callbacks already does above.
+    # untrue to "v1 is untouched" and avoidable in one line; v1 gets None
+    # here, as it gets no callbacks from transfer_guard_callbacks above. A
+    # list, not a single callback: ADK's canonical_before_agent_callbacks
+    # accepts either.
     before_agent_callback=(
         [
             reset_graphrag_handoff_confirmation,

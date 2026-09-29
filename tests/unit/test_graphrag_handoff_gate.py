@@ -11,7 +11,6 @@ PR #9's description for the verification steps).
 import asyncio
 import inspect
 
-import pytest
 from google.adk.agents import Agent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
@@ -242,15 +241,16 @@ def test_reset_is_wired_onto_the_graphrag_agent():
 
 def test_reset_parameter_is_named_callback_context():
     """Catches a rename. ADK invokes these callbacks by keyword
-    (base_agent.py:385-387), so a different parameter name fails at request
-    time with a TypeError rather than at import."""
+    (BaseAgent._handle_before_agent_callback), so a different parameter name
+    fails at request time with a TypeError rather than at import."""
     parameters = list(inspect.signature(reset_graphrag_handoff_confirmation).parameters)
     assert parameters == ["callback_context"]
 
 
 def test_finished_succeeds_on_retry_after_an_out_of_order_refusal():
-    """Catches a gate that latches its refusal. ADK runs the tool calls in one
-    model reply in the order the model emitted them, so a reply ordering
+    """Catches a gate that latches its refusal. ADK starts the tool calls in
+    one model reply in the order the model emitted them, and these synchronous
+    tools finish in that order too, so a reply ordering
     'finished' before 'confirm_graphrag_handoff' refuses even though the user
     did agree. The confirmation is recorded by the time the model reads that
     error, so calling 'finished' again in the same turn must then transfer --
@@ -295,9 +295,11 @@ def test_both_model_callbacks_are_present_on_the_shipped_variant():
 def test_the_agent_does_not_disallow_transfers():
     """Guards the trap this design exists to avoid. Setting
     disallow_transfer_to_parent would also close the door -- and would make
-    Runner._find_agent_to_run (runners.py:474-489) stop returning this agent
+    Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every follow-up question back
-    through the coordinator. See the spec's 'Why not' section."""
+    through the coordinator. On google-adk 2.9 either flag also makes a
+    blocked 'finished' call raise ValueError. See the spec's 'Why not'
+    section."""
     assert graphrag_agent.disallow_transfer_to_parent is False
     assert graphrag_agent.disallow_transfer_to_peers is False
 
@@ -351,23 +353,38 @@ def test_the_agents_own_tools_survive_the_strip(monkeypatch):
     assert "read_neo4j_cypher" in names
 
 
-def test_calling_transfer_to_agent_anyway_is_a_hard_error(monkeypatch):
+def test_calling_transfer_to_agent_anyway_returns_an_error_and_stays_in_phase(
+    monkeypatch,
+):
     """Pins what happens if a model emits the call from memory of an earlier
-    turn. The strip pops it from tools_dict, so ADK raises
-    (functions.py:565-568) rather than silently transferring."""
+    turn. The strip pops it from tools_dict, and refuse_transfer_to_agent
+    answers the call before ADK's generic not-found reply, naming the real
+    exit: no transfer happens and the agent keeps the turn."""
     monkeypatch.setattr(
         graphrag_agent,
         "model",
         CapturingLlm(
             model="scripted",
             responses=[
-                _call("transfer_to_agent", {"agent_name": MULTI_AGENT_COORDINATOR})
+                _call("transfer_to_agent", {"agent_name": MULTI_AGENT_COORDINATOR}),
+                _text("still here"),
             ],
         ),
     )
-    turn = _run_one_turn(graphrag_agent, "graphrag_hard_error_test")
-    with pytest.raises(ValueError, match="transfer_to_agent"):
-        asyncio.run(turn)
+    events = asyncio.run(_run_one_turn(graphrag_agent, "graphrag_transfer_error_test"))
+
+    replies = [
+        part.function_response
+        for event in events
+        for part in (event.content.parts if event.content else None) or []
+        if part.function_response and part.function_response.name == "transfer_to_agent"
+    ]
+    assert len(replies) == 1
+    assert is_error(replies[0].response or {})
+    assert "finished" in (replies[0].response or {})["error_message"]
+    assert not any(event.actions.transfer_to_agent for event in events)
+    # The error went back to this agent's own model, which answered it.
+    assert len(graphrag_agent.model.requests) == 2
 
 
 def test_an_unstripped_agent_still_receives_it_negative_control():
@@ -376,9 +393,9 @@ def test_an_unstripped_agent_still_receives_it_negative_control():
 
     Builds a fresh, unparented v1 with no strip callback and gives it a
     throwaway parent with a peer. That is only possible because it is freshly
-    constructed: base_agent.py:496-505 raises on any attempt to re-parent the
-    live singletons, which is why every other test here points the Runner at
-    the real tree.
+    constructed: BaseAgent's sub-agent parenting validator raises on any
+    attempt to re-parent the live singletons, which is why every other test
+    here points the Runner at the real tree.
     """
     spec = variants["graphrag_agent_v1"]
     child = Agent(
@@ -415,9 +432,9 @@ def test_a_confirmed_handoff_still_reaches_the_coordinator(monkeypatch):
     closure with a FakeToolContext and would pass even if ADK's resolution
     path broke.
 
-    Both models are scripted: the transfer runs inline in the same turn
-    (base_llm_flow.py:536-542), so the coordinator's real model would
-    otherwise be invoked for real.
+    Both models are scripted: the transfer runs inline in the same turn (the
+    transfer loop in Context._run_node_internal, agents/context.py), so the
+    coordinator's real model would otherwise be invoked for real.
     """
     monkeypatch.setattr(
         graphrag_agent,

@@ -70,8 +70,9 @@ def test_conversational_kind_does_not_send_a_reasoning_effort(monkeypatch):
 
 
 def test_returns_a_litellm_instance_not_a_string(monkeypatch):
-    """ADK never registers LiteLlm in its LLMRegistry, so agents must be handed
-    an instance. A bare model string raises at agent construction."""
+    """Agents must be handed an instance: google-adk 2.9 resolves a bare
+    "openrouter/..." string to a LiteLlm with default arguments, dropping the
+    settings get_llm applies."""
     from google.adk.models.lite_llm import LiteLlm
 
     reset_settings()

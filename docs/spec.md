@@ -13,7 +13,7 @@ workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate 
 ## 1. What this is
 
 A multi-agent system that turns a folder of source files into a Neo4j knowledge graph, then answers
-questions over it. It is built on Google ADK (`google-adk>=1.28.1,<2`) with LiteLLM routing every model
+questions over it. It is built on Google ADK (`google-adk>=2.9.2,<2.10`) with LiteLLM routing every model
 call through OpenRouter, and it talks to Neo4j (`neo4j>=6.3.1,<7`, plus `neo4j-graphrag`) over Bolt —
 local or Aura. Python 3.12, dependencies via `uv`.
 
@@ -173,12 +173,12 @@ an absence**, because an omitted key reads to a model as "fine." Four mechanisms
 failure modes:
 
 **Context filtering** (`common/adk_context.py`) — ADK rewrites another agent's output into a *user-role*
-message carrying a literal `"For context:"` sentinel before any `before_model_callback` sees it. Role
-alone therefore cannot distinguish a colleague agent's stale claim from something the human actually
-typed. `drop_foreign_context` keys on the sentinel and strips those turns. Scope matters: it removes one
-structurally-invisible contamination channel. It deliberately **keeps the agent's own** prior turns, and
-it no-ops rather than emptying a request that is entirely foreign. Self-recall is addressed by prompt
-instruction only — "query for it again instead" — not by enforcement.
+message led by a fixed preamble (a paragraph beginning `"For context:"`) before any `before_model_callback`
+sees it. Role alone therefore cannot distinguish a colleague agent's stale claim from something the human
+actually typed. `drop_foreign_context` keys on that whole preamble and strips those turns. Scope matters:
+it removes one structurally-invisible contamination channel. It deliberately **keeps the agent's own**
+prior turns, and it no-ops rather than emptying a request that is entirely foreign. Self-recall is
+addressed by prompt instruction only — "query for it again instead" — not by enforcement.
 
 **Schema profiling** (`common/graph_profile.py`) — the underlying library reports property values from
 either an exhaustive scan or, above 10,000 rows, five arbitrary sampled values, and the two are
@@ -220,7 +220,7 @@ These compose in `graphrag_agent`'s `variants.py`, which is the only place all f
 that look like accidents and are not: the profiled schema payload deliberately discards the library's
 raw property lists (passing both would let the raw copy assert exactly what the profile exists to deny,
 and appear first), and the profile flag is exposed as two separate zero-argument tools rather than one
-parameterised tool, because ADK would advertise the parameter as required and a model guessing `true`
+parameterised tool, because ADK would advertise the parameter to the model and a model guessing `true`
 would trigger a full scan per label on the latency-sensitive construction path.
 
 `graphrag_agent_v1` is retained unchanged for A/B comparison. The comparison's outcome is not recorded

@@ -82,6 +82,13 @@ def test_is_success():
     print("✓ is_success correctly identifies success results")
 
 
+def test_is_error_is_false_for_a_result_without_a_status():
+    """ADK's after-tool callbacks see whatever a tool returned, including
+    dicts with no status and non-dicts."""
+    assert is_error({}) is False
+    assert is_error("done") is False  # type: ignore[arg-type]
+
+
 def test_is_error():
     """Test that is_error correctly identifies error results."""
     success_result = tool_success("result", "data")

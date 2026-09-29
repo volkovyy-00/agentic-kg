@@ -185,6 +185,30 @@ def test_graphrag_wrapper_is_a_named_function_not_a_partial():
     assert "partial" not in fn.__doc__.lower()
 
 
+def _declared_parameter_names(fn) -> set[str]:
+    """The parameter names ADK declares to the model for fn.
+
+    google-adk 2.x declares tools as a JSON schema (parameters_json_schema)
+    and leaves declaration.parameters None -- the field this lookup used to
+    read alone. Reading both keeps it honest whichever one ADK fills.
+    """
+    from google.adk.tools.function_tool import FunctionTool
+
+    declared = FunctionTool(fn)._get_declaration()
+    schema = declared.parameters_json_schema or {}
+    props = (declared.parameters.properties or {}) if declared.parameters else {}
+    return set(schema.get("properties", {})) | set(props)
+
+
+def test_the_declaration_lookup_sees_real_parameters():
+    """Guards the lookup below against going vacuous, as it was on google-adk
+    2.x while it read only declaration.parameters: it must find the
+    parameters a real tool does declare."""
+    assert {"query", "params"} <= _declared_parameter_names(
+        cypher_tools.read_neo4j_cypher
+    )
+
+
 @pytest.mark.parametrize(
     "tool_name",
     [
@@ -194,20 +218,15 @@ def test_graphrag_wrapper_is_a_named_function_not_a_partial():
     ],
 )
 def test_no_tool_exposes_the_profile_flag_to_a_model(tool_name):
-    """ADK cannot express a default in a tool declaration, so any parameter
-    with one is advertised as REQUIRED. A model-visible include_data_profile
-    would make the profile optional -- and could trigger a full scan per label
-    on the latency-tuned construction agent."""
+    """A model-visible include_data_profile would put the choice in the
+    model's hands: google-adk 2.9 declares it optional with its default, but a
+    model may still pass True and trigger a full scan per label on the
+    latency-tuned construction agent."""
     import inspect
-
-    from google.adk.tools.function_tool import FunctionTool
 
     fn = getattr(cypher_tools, tool_name)
     assert "include_data_profile" not in inspect.signature(fn).parameters
-
-    declared = FunctionTool(fn)._get_declaration()
-    props = (declared.parameters.properties or {}) if declared.parameters else {}
-    assert "include_data_profile" not in props
+    assert "include_data_profile" not in _declared_parameter_names(fn)
 
 
 class FakeDdlDb(FakeGraphDb):
