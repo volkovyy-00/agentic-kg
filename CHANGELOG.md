@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.8.1] - 2026-09-29
 
 ### Fixed
-- **Names that are Cypher keywords now build (#NN, KG-44)**: a plan with a node labelled `Order` was approved,
+- **Names that are Cypher keywords now build (#71, KG-44)**: a plan with a node labelled `Order` was approved,
   then the build refused `Order` and loaded none of its nodes, its uniqueness constraint or the relationships
   joined to it. Labels, relationship types and key and join columns that happen to be Cypher keywords (`Order`,
   `END`, `null` ...) are now accepted, and the build writes every such name into its queries in backticks. A
