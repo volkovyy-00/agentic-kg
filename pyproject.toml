@@ -21,7 +21,8 @@ dependencies = [
     # which understands GPT-5's reasoning stream events (old openai 1.54 parsed
     # them as unknown chunks, so CustomStreamWrapper never terminated -> hang).
     "litellm>=1.83.9,<1.85",
-    # litellm 1.83.9 hard-pins openai==2.24.0; stated here so the requirement is explicit.
+    # Within our litellm window (>=1.83.9,<1.85): 1.83.x requires openai==2.24.0
+    # exactly; 1.84.x requires >=2.20.0,<3. The >=2.24 floor is ours and fits both.
     "openai>=2.24,<3",
     "neo4j>=6.3.1,<7",
     "neo4j-graphrag>=1.9.1",

@@ -18,8 +18,9 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "openai"
         update-types: ["version-update:semver-major"]
-      # litellm's pin is a single minor-version window (>=1.83.9,<1.84), tied to a hard
-      # sub-dependency lock on openai==2.24.0 -- ignore minor too, not just major.
+      # litellm's window is set by its pin in pyproject.toml (currently >=1.83.9,<1.85),
+      # which is the source of truth. Ignore minor too, not just major, so Dependabot
+      # doesn't propose widening the upper bound by itself.
       - dependency-name: "litellm"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
