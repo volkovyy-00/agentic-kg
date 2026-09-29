@@ -28,8 +28,25 @@ def test_create_uniqueness_constraint_builds_expected_query(fake_db):
     result = cypher_tools.create_uniqueness_constraint("Person", "id")
     assert result["status"] == "success"
     query, _params = fake_db.queries[0]
-    assert "FOR (n:Person)" in query
-    assert "REQUIRE n.id IS UNIQUE" in query
+    assert "FOR (n:`Person`)" in query
+    assert "REQUIRE n.`id` IS UNIQUE" in query
+
+
+def test_create_uniqueness_constraint_quotes_a_keyword_label_and_key(fake_db):
+    """KG-44: Order and END are ordinary names once quoted."""
+    result = cypher_tools.create_uniqueness_constraint("Order", "END")
+    assert result["status"] == "success"
+    query, _params = fake_db.queries[0]
+    assert "FOR (n:`Order`)" in query
+    assert "REQUIRE n.`END` IS UNIQUE" in query
+
+
+def test_constraint_name_keeps_its_0_8_0_value(fake_db):
+    """IF NOT EXISTS matches by name: a changed value would stop matching the
+    constraints earlier builds created, and every re-run would add another."""
+    cypher_tools.create_uniqueness_constraint("Person", "id")
+    query, _params = fake_db.queries[0]
+    assert query.startswith("CREATE CONSTRAINT `Person_id_constraint` IF NOT EXISTS")
 
 
 def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any_query(

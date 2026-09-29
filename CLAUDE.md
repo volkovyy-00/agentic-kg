@@ -316,9 +316,11 @@ wrong type declaration from a single data-entry typo. Identifiers and any column
 relationship joins on may not be typed; `check_construction_plan_consistency` refuses such a plan at
 approval time.
 
-Labels and relationship types, which Cypher cannot parameterise, are validated with
-`common/cypher_identifiers.checked()` and then interpolated into the query text — never passed as Cypher `$()`
-dynamic labels, which cannot use a uniqueness index. The loaders' `ToolResult`s include `nodes_in_graph` /
+Labels, relationship types and key/join column names, which Cypher cannot parameterise, are checked with
+`common/cypher_identifiers.checked()` (a plain identifier — letter or underscore, then letters, digits or
+underscores; Cypher keywords such as `Order` are allowed) and written into the query text backtick-quoted with
+`quote()` — never passed as Cypher `$()` dynamic labels, which cannot use a uniqueness index. Names read back
+from the database are only quoted, never checked. The loaders' `ToolResult`s include `nodes_in_graph` /
 `relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
 collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
 wrote, so a re-run against a non-empty graph will include prior data too.

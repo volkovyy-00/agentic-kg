@@ -39,9 +39,72 @@ def one_batch(monkeypatch):
 def test_node_query_interpolates_label_not_dynamic(fake_db, one_batch):
     kg.load_nodes_from_csv("people.csv", "Person", "id", ["name"])
     query, params = fake_db.queries[0]
-    assert "MERGE (n:Person" in query
+    assert "MERGE (n:`Person`" in query
     assert "$($label)" not in query
     assert params["rows"] == [{"id": "1", "name": "Ada"}]
+
+
+@pytest.fixture
+def keyword_batch(monkeypatch):
+    """A header whose key and join columns are Cypher keywords. one_batch's
+    fixed ["id", "name"] header would fail the loaders' header check first."""
+
+    def fake_batches(relative_path, batch_size=1000):
+        yield ["END", "null", "name"], [{"END": "1", "null": "2", "name": "Ada"}]
+
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+KEYWORD_REL_RULE = {
+    "source_file": "set.csv",
+    "relationship_type": "SET",
+    "from_node_label": "Order",
+    "from_node_column": "END",
+    "to_node_label": "Match",
+    "to_node_column": "null",
+    "properties": [],
+}
+
+
+def test_a_keyword_label_is_quoted_in_the_merge_and_the_count(fake_db, one_batch):
+    result = kg.load_nodes_from_csv("orders.csv", "Order", "id", ["name"])
+    assert result["status"] == "success", result.get("error_message")
+    merge_query, _params = fake_db.queries[0]
+    count_query, _params = fake_db.queries[-1]
+    assert "MERGE (n:`Order` {" in merge_query
+    assert count_query == "MATCH (n:`Order`) RETURN count(n) AS count"
+
+
+def test_a_keyword_key_column_is_quoted_in_the_merge(fake_db, keyword_batch):
+    result = kg.load_nodes_from_csv("orders.csv", "Order", "END", ["name"])
+    assert result["status"] == "success", result.get("error_message")
+    merge_query, params = fake_db.queries[0]
+    assert "{ `END` : row[$unique_column_name] }" in merge_query
+    assert params["unique_column_name"] == "END", "the parameter stays plain"
+
+
+def test_a_keyword_relationship_type_is_quoted_in_the_merge_and_the_count(
+    fake_db, keyword_batch
+):
+    kg.import_relationships(dict(KEYWORD_REL_RULE))
+    load_query, _params = fake_db.queries[0]
+    count_query, _params = fake_db.queries[-1]
+    assert "MERGE (from_node)-[r:`SET`]->(to_node)" in load_query
+    assert count_query == "MATCH ()-[r:`SET`]->() RETURN count(r) AS count"
+
+
+def test_a_keyword_from_join_column_is_quoted_in_the_match(fake_db, keyword_batch):
+    kg.import_relationships(dict(KEYWORD_REL_RULE))
+    load_query, params = fake_db.queries[0]
+    assert "(from_node:`Order` { `END` : row[$from_node_column] })" in load_query
+    assert params["from_node_column"] == "END"
+
+
+def test_a_keyword_to_join_column_is_quoted_in_the_match(fake_db, keyword_batch):
+    kg.import_relationships(dict(KEYWORD_REL_RULE))
+    load_query, params = fake_db.queries[0]
+    assert "(to_node:`Match` { `null` : row[$to_node_column] })" in load_query
+    assert params["to_node_column"] == "null"
 
 
 def test_node_query_uses_unwind_not_load_csv(fake_db, one_batch):
@@ -275,6 +338,9 @@ class MergeSimulatingGraphDb:
         parameters = parameters or {}
         self.queries.append((query, parameters))
         if query.strip().startswith("UNWIND") and "MERGE (n:" in query:
+            # Since KG-44 the label arrives backtick-quoted ("`Assembly`"). Both this
+            # branch and the count branch below read it the same way, so the keys
+            # still line up -- do not strip the backticks on one side only.
             label = query.split("MERGE (n:", 1)[1].split(" ", 1)[0].split("{")[0]
             keys = self._keys_by_label.setdefault(label, set())
             unique_column_name = parameters["unique_column_name"]
@@ -310,7 +376,7 @@ def test_node_count_is_read_back_from_the_label(monkeypatch, duplicate_keys):
     monkeypatch.setattr(kg, "graphdb", db)
     kg.load_nodes_from_csv("assemblies.csv", "Assembly", "assembly_name", ["part"])
     count_query, _params = db.queries[-1]
-    assert count_query == "MATCH (n:Assembly) RETURN count(n) AS count"
+    assert count_query == "MATCH (n:`Assembly`) RETURN count(n) AS count"
 
 
 def test_a_failed_count_does_not_fail_a_committed_load(monkeypatch, duplicate_keys):
@@ -356,7 +422,7 @@ def test_relationship_count_reflects_merged_edges_not_rows(monkeypatch, one_batc
     assert result["rows_loaded"]["rows_matched"] == 1, "existing field is unchanged"
     assert result["rows_loaded"]["relationships_in_graph"] == 27
     count_query, _params = db.queries[-1]
-    assert count_query == "MATCH ()-[r:KNOWS]->() RETURN count(r) AS count"
+    assert count_query == "MATCH ()-[r:`KNOWS`]->() RETURN count(r) AS count"
 
 
 def test_partial_failure_summary_reports_nodes_not_rows(monkeypatch):
