@@ -434,13 +434,51 @@ def _count_in_graph(query: str) -> int | None:
     return None
 
 
+# (kind, rule key) in the order the build has always checked them. Keys, not
+# values: each value is read only when its turn comes, so a rule with a bad
+# relationship type and a missing to_node_column still reports the bad type.
+_NODE_RULE_NAMES = (("label", "label"), ("column name", "unique_column_name"))
+_RELATIONSHIP_RULE_NAMES = (
+    ("relationship type", "relationship_type"),
+    ("label", "from_node_label"),
+    ("label", "to_node_label"),
+    ("column name", "from_node_column"),
+    ("column name", "to_node_column"),
+)
+
+
+def _first_name_error(rule: dict, names) -> str | None:
+    for kind, key in names:
+        try:
+            _checked(kind, rule[key])
+        except InvalidIdentifier as exc:
+            return str(exc)
+    return None
+
+
+def node_rule_name_error(rule: dict) -> str | None:
+    """The build's refusal for the first unusable name in a node rule, or None.
+
+    The propose tools call this too, so a name is refused when it is proposed
+    with exactly the text the build would give it (KG-44). A missing key raises
+    KeyError, which construct_domain_graph reports per rule.
+    """
+    return _first_name_error(rule, _NODE_RULE_NAMES)
+
+
+def relationship_rule_name_error(rule: dict) -> str | None:
+    """The build's refusal for the first unusable name in a relationship rule, or None.
+
+    See node_rule_name_error.
+    """
+    return _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
+
+
 def import_nodes(node_construction: dict) -> Dict[str, Any]:
     """Import nodes as defined by a node construction rule."""
-    try:
-        _checked("label", node_construction["label"])
-        _checked("column name", node_construction["unique_column_name"])
-    except InvalidIdentifier as exc:
-        return tool_error(str(exc))
+    name_error = node_rule_name_error(node_construction)
+    if name_error is not None:
+        return tool_error(name_error)
 
     uniqueness_result = create_uniqueness_constraint(
         node_construction["label"],
@@ -460,18 +498,14 @@ def import_nodes(node_construction: dict) -> Dict[str, Any]:
 
 def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     """Import relationships as defined by a relationship construction rule."""
-    try:
-        relationship_type = _checked(
-            "relationship type", relationship_construction["relationship_type"]
-        )
-        from_label = _checked("label", relationship_construction["from_node_label"])
-        to_label = _checked("label", relationship_construction["to_node_label"])
-        from_column = _checked(
-            "column name", relationship_construction["from_node_column"]
-        )
-        to_column = _checked("column name", relationship_construction["to_node_column"])
-    except InvalidIdentifier as exc:
-        return tool_error(str(exc))
+    name_error = relationship_rule_name_error(relationship_construction)
+    if name_error is not None:
+        return tool_error(name_error)
+    relationship_type = relationship_construction["relationship_type"]
+    from_label = relationship_construction["from_node_label"]
+    to_label = relationship_construction["to_node_label"]
+    from_column = relationship_construction["from_node_column"]
+    to_column = relationship_construction["to_node_column"]
 
     source_file = relationship_construction["source_file"]
     properties = relationship_construction["properties"]

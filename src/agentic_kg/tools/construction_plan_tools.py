@@ -11,6 +11,7 @@ graphdb = get_graphdb()
 
 from .file_tools import APPROVED_FILES, search_file
 from .join_property_check import check_joined_properties_hold_one_value
+from .kg_construction_tools import node_rule_name_error, relationship_rule_name_error
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -86,17 +87,6 @@ def propose_node_construction(
             "Supply every one of them and propose the node again."
         )
 
-    # quick sanity check -- does the approved file have the unique column?
-    search_results = search_file(approved_file, unique_column_name)
-    if search_results["status"] == "error":
-        return search_results  # return the error
-    if search_results["search_results"]["metadata"]["lines_found"] == 0:
-        return tool_error(
-            f"{approved_file} does not have the column {unique_column_name}. Check the file content and try again."
-        )
-
-    # get the current construction plan, or an empty one if none exists
-    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     node_construction_rule = {
         "construction_type": "node",
         "source_file": approved_file,
@@ -110,6 +100,24 @@ def propose_node_construction(
         # that reads as "typed" and fail on .items(). Absent means text.
         "property_types": proposed_property_types or {},
     }
+
+    # Names first, before the file is read (KG-44): a name the build would refuse
+    # is refused now, with the build's own text, whatever the file holds.
+    name_error = node_rule_name_error(node_construction_rule)
+    if name_error is not None:
+        return tool_error(name_error)
+
+    # quick sanity check -- does the approved file have the unique column?
+    search_results = search_file(approved_file, unique_column_name)
+    if search_results["status"] == "error":
+        return search_results  # return the error
+    if search_results["search_results"]["metadata"]["lines_found"] == 0:
+        return tool_error(
+            f"{approved_file} does not have the column {unique_column_name}. Check the file content and try again."
+        )
+
+    # get the current construction plan, or an empty one if none exists
+    construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     construction_plan[proposed_label] = node_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(NODE_CONSTRUCTION, node_construction_rule)
@@ -243,6 +251,26 @@ def propose_relationship_construction(
             "Supply every one of them and propose the relationship again."
         )
 
+    relationship_construction_rule = {
+        "construction_type": "relationship",
+        "source_file": approved_file,
+        "relationship_type": proposed_relationship_type,
+        "from_node_label": from_node_label,
+        "from_node_column": from_node_column,
+        "to_node_label": to_node_label,
+        "to_node_column": to_node_column,
+        # See propose_node_construction: a null reaches Cypher as a silent no-op.
+        "properties": proposed_properties or [],
+        # Same defence, same reason: a null here would reach the loader as a key
+        # that reads as "typed" and fail on .items(). Absent means text.
+        "property_types": proposed_property_types or {},
+    }
+
+    # Names first, before the file is read (KG-44): see propose_node_construction.
+    name_error = relationship_rule_name_error(relationship_construction_rule)
+    if name_error is not None:
+        return tool_error(name_error)
+
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
     if search_results["status"] == "error":
@@ -263,20 +291,6 @@ def propose_relationship_construction(
         )
 
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
-    relationship_construction_rule = {
-        "construction_type": "relationship",
-        "source_file": approved_file,
-        "relationship_type": proposed_relationship_type,
-        "from_node_label": from_node_label,
-        "from_node_column": from_node_column,
-        "to_node_label": to_node_label,
-        "to_node_column": to_node_column,
-        # See propose_node_construction: a null reaches Cypher as a silent no-op.
-        "properties": proposed_properties or [],
-        # Same defence, same reason: a null here would reach the loader as a key
-        # that reads as "typed" and fail on .items(). Absent means text.
-        "property_types": proposed_property_types or {},
-    }
     construction_plan[proposed_relationship_type] = relationship_construction_rule
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = construction_plan
     return tool_success(RELATIONSHIP_CONSTRUCTION, relationship_construction_rule)

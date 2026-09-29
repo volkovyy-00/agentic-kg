@@ -21,6 +21,7 @@ import pytest
 
 from agentic_kg.common.config import reset_settings
 from agentic_kg.tools import construction_plan_tools as cpt
+from agentic_kg.tools import kg_construction_tools as kg
 from agentic_kg.tools.construction_plan_tools import (
     APPROVED_CONSTRUCTION_PLAN,
     PROPOSED_CONSTRUCTION_PLAN,
@@ -1680,3 +1681,256 @@ def test_approval_fails_closed_when_the_reachability_check_raises(
     with pytest.raises(PermissionError):
         module.approve_proposed_construction_plan(stranding_state)
     assert APPROVED_CONSTRUCTION_PLAN not in stranding_state.state
+
+
+# --- KG-44: a name the build would refuse is refused when proposed -----------
+
+CHARACTER_RULE = (
+    "It must be a letter or underscore followed by letters, digits or underscores."
+)
+
+
+def _node_rule(label, key):
+    """The rule propose_node_construction stores, for comparing with the build."""
+    return {
+        "construction_type": "node",
+        "source_file": "orders.csv",
+        "label": label,
+        "unique_column_name": key,
+        "properties": [],
+        "property_types": {},
+    }
+
+
+def _rel_args(**overrides):
+    args = {
+        "proposed_relationship_type": "SET",
+        "from_node_label": "Order",
+        "from_node_column": "END",
+        "to_node_label": "Match",
+        "to_node_column": "null",
+    }
+    args.update(overrides)
+    return args
+
+
+def _propose_rel(args, ctx):
+    return propose_relationship_construction(
+        "set.csv",
+        args["proposed_relationship_type"],
+        args["from_node_label"],
+        args["from_node_column"],
+        args["to_node_label"],
+        args["to_node_column"],
+        [],
+        ctx,
+    )
+
+
+def _rel_rule(args):
+    """The rule propose_relationship_construction stores, for comparing with the build."""
+    return {
+        "construction_type": "relationship",
+        "source_file": "set.csv",
+        "relationship_type": args["proposed_relationship_type"],
+        "from_node_label": args["from_node_label"],
+        "from_node_column": args["from_node_column"],
+        "to_node_label": args["to_node_label"],
+        "to_node_column": args["to_node_column"],
+        "properties": [],
+        "property_types": {},
+    }
+
+
+@pytest.mark.parametrize(
+    "label, key, expected",
+    [
+        ("1Order", "END", f"Invalid label: '1Order'. {CHARACTER_RULE}"),
+        ("Order", "order id", f"Invalid column name: 'order id'. {CHARACTER_RULE}"),
+    ],
+)
+def test_propose_node_refuses_a_bad_name_with_the_builds_message(
+    ctx, any_column_exists, label, key, expected
+):
+    result = propose_node_construction("orders.csv", label, key, [], ctx)
+    assert result["status"] == "error"
+    # The literal pins the kind string; the equality pins "the build's own text".
+    assert result["error_message"] == expected
+    assert (
+        result["error_message"]
+        == kg.import_nodes(_node_rule(label, key))["error_message"]
+    )
+    assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        (
+            {"proposed_relationship_type": "HAS ITEM"},
+            f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}",
+        ),
+        ({"from_node_label": "Order)"}, f"Invalid label: 'Order)'. {CHARACTER_RULE}"),
+        ({"to_node_label": "Ma`tch"}, f"Invalid label: 'Ma`tch'. {CHARACTER_RULE}"),
+        (
+            {"from_node_column": "1END"},
+            f"Invalid column name: '1END'. {CHARACTER_RULE}",
+        ),
+        (
+            {"to_node_column": "to-id"},
+            f"Invalid column name: 'to-id'. {CHARACTER_RULE}",
+        ),
+    ],
+)
+def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(
+    ctx, any_column_exists, override, expected
+):
+    args = _rel_args(**override)
+    result = _propose_rel(args, ctx)
+    assert result["status"] == "error"
+    assert result["error_message"] == expected
+    assert (
+        result["error_message"]
+        == kg.import_relationships(_rel_rule(args))["error_message"]
+    )
+    assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        (
+            {"proposed_relationship_type": "HAS ITEM", "from_node_label": "Order)"},
+            f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}",
+        ),
+        (
+            {"proposed_relationship_type": "HAS ITEM", "to_node_column": "to-id"},
+            f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}",
+        ),
+        (
+            {"from_node_label": "Order)", "to_node_label": "Ma`tch"},
+            f"Invalid label: 'Order)'. {CHARACTER_RULE}",
+        ),
+        (
+            {"to_node_label": "Ma`tch", "from_node_column": "1END"},
+            f"Invalid label: 'Ma`tch'. {CHARACTER_RULE}",
+        ),
+        (
+            {"from_node_column": "1END", "to_node_column": "to-id"},
+            f"Invalid column name: '1END'. {CHARACTER_RULE}",
+        ),
+    ],
+    ids=[
+        "type-before-from-label",
+        "type-before-to-column",
+        "from-label-before-to-label",
+        "to-label-before-from-column",
+        "from-column-before-to-column",
+    ],
+)
+def test_the_first_bad_name_reported_is_the_one_the_build_checks_first(
+    ctx, any_column_exists, override, expected
+):
+    """The build checks type, from label, to label, from column, to column, in
+    that order; the proposal must report the same first name. Each neighbouring
+    pair is pinned, so swapping any two checks fails a case."""
+    args = _rel_args(**override)
+    result = _propose_rel(args, ctx)
+    assert result["error_message"] == expected
+    assert (
+        result["error_message"]
+        == kg.import_relationships(_rel_rule(args))["error_message"]
+    )
+
+
+def test_a_node_reports_its_label_before_its_key_column(ctx, any_column_exists):
+    result = propose_node_construction("orders.csv", "1Order", "order id", [], ctx)
+    assert result["error_message"] == f"Invalid label: '1Order'. {CHARACTER_RULE}"
+
+
+@pytest.mark.parametrize(
+    "search_result",
+    [
+        {"status": "success", "search_results": {"metadata": {"lines_found": 0}}},
+        {"status": "error", "error_message": "orders.csv: no such source file"},
+    ],
+    ids=["column-missing", "file-unreadable"],
+)
+def test_a_bad_name_is_reported_before_the_file_is_searched(
+    ctx, monkeypatch, search_result
+):
+    searched = []
+
+    def fake_search_file(file_path, pattern):
+        searched.append(pattern)
+        return search_result
+
+    monkeypatch.setattr(cpt, "search_file", fake_search_file)
+    node = propose_node_construction("orders.csv", "Order", "order id", [], ctx)
+    rel = _propose_rel(_rel_args(proposed_relationship_type="HAS ITEM"), ctx)
+    assert node["error_message"] == f"Invalid column name: 'order id'. {CHARACTER_RULE}"
+    assert (
+        rel["error_message"]
+        == f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
+    )
+    assert searched == [], "a bad name must be reported without reading the file"
+
+
+def test_a_node_batch_keeps_the_entries_before_a_bad_name(ctx, any_column_exists):
+    result = propose_node_constructions(
+        [
+            {
+                "approved_file": "orders.csv",
+                "proposed_label": "Order",
+                "unique_column_name": "END",
+                "proposed_properties": [],
+            },
+            {
+                "approved_file": "matches.csv",
+                "proposed_label": "Match",
+                "unique_column_name": "1id",
+                "proposed_properties": [],
+            },
+        ],
+        ctx,
+    )
+    assert result["status"] == "error"
+    assert result["error_message"].endswith(
+        f"Invalid column name: '1id'. {CHARACTER_RULE}"
+    )
+    assert list(ctx.state[PROPOSED_CONSTRUCTION_PLAN]) == ["Order"]
+
+
+def test_a_relationship_batch_keeps_the_entries_before_a_bad_name(
+    ctx, any_column_exists
+):
+    good = {"approved_file": "set.csv", "proposed_properties": [], **_rel_args()}
+    bad = {
+        "approved_file": "set.csv",
+        "proposed_properties": [],
+        **_rel_args(proposed_relationship_type="HAS ITEM"),
+    }
+    result = propose_relationship_constructions([good, bad], ctx)
+    assert result["status"] == "error"
+    assert result["error_message"].endswith(
+        f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
+    )
+    assert list(ctx.state[PROPOSED_CONSTRUCTION_PLAN]) == ["SET"]
+
+
+def test_keyword_names_are_proposed_as_given(ctx, any_column_exists):
+    propose_node_construction("orders.csv", "Order", "END", [], ctx)
+    propose_node_construction("matches.csv", "Match", "null", [], ctx)
+    result = _propose_rel(_rel_args(), ctx)
+    assert result["status"] == "success", result.get("error_message")
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert plan["Order"]["unique_column_name"] == "END"
+    assert plan["SET"]["to_node_column"] == "null"
+    # Review Focus 2: nothing at approval trips over a keyword name.
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_a_non_string_name_is_refused_not_crashed_on(ctx, any_column_exists):
+    result = propose_node_construction("orders.csv", 123, "END", [], ctx)  # type: ignore[arg-type]
+    assert result["status"] == "error"
+    assert result["error_message"] == f"Invalid label: '123'. {CHARACTER_RULE}"
