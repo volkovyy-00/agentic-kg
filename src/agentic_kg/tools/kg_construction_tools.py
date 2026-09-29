@@ -447,7 +447,7 @@ _RELATIONSHIP_RULE_NAMES = (
 )
 
 
-def _first_name_error(rule: dict, names) -> str | None:
+def _first_name_error(rule: dict, names: tuple[tuple[str, str], ...]) -> str | None:
     for kind, key in names:
         try:
             _checked(kind, rule[key])

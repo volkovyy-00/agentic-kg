@@ -86,11 +86,13 @@ def test_loads_bom_csvs_into_the_graph(neo4j_graph, monkeypatch):
     )
     assert rels["records"][0]["c"] == 176, "one per part_supplier_mapping.csv row"
 
-    # KG-44 AC4: the whole graph, not just each label, has the pre-KG-44 counts.
+    # KG-44 AC4: nothing was written beyond the labels and type counted above.
     total_nodes = neo4j_graph.send_query("MATCH (n) RETURN count(n) AS c")
-    assert total_nodes["records"][0]["c"] == 118
+    assert total_nodes["records"][0]["c"] == sum(
+        r["records"][0]["c"] for r in (products, suppliers, parts)
+    )
     total_rels = neo4j_graph.send_query("MATCH ()-[r]->() RETURN count(r) AS c")
-    assert total_rels["records"][0]["c"] == 176
+    assert total_rels["records"][0]["c"] == rels["records"][0]["c"]
 
     # A property from suppliers.csv must actually have landed
     named = neo4j_graph.send_query(

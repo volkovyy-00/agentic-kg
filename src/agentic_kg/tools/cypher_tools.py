@@ -240,7 +240,10 @@ def create_uniqueness_constraint(
 
     # Use string formatting since Neo4j doesn't support parameterization of labels and property keys when creating a constraint.
     # The name's value is unchanged since 0.8.0 -- only quoted -- so IF NOT EXISTS
-    # still matches constraints earlier builds created.
+    # still matches constraints earlier builds created. The format is knowingly
+    # ambiguous: label A_b with key c and label A with key b_c both give
+    # A_b_c_constraint, and IF NOT EXISTS then skips the second one silently.
+    # Fixing that changes the name, so it needs its own migration (follow-up to KG-44).
     constraint_name = f"{label}_{unique_property_key}_constraint"
     query = f"""CREATE CONSTRAINT {quote(constraint_name)} IF NOT EXISTS
     FOR (n:{quote(label)})
