@@ -8,6 +8,17 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.8.1] - 2026-09-29
+
+### Fixed
+- **Names that are Cypher keywords now build (#NN, KG-44)**: a plan with a node labelled `Order` was approved,
+  then the build refused `Order` and loaded none of its nodes, its uniqueness constraint or the relationships
+  joined to it. Labels, relationship types and key and join columns that happen to be Cypher keywords (`Order`,
+  `END`, `null` ...) are now accepted, and the build writes every such name into its queries in backticks. A
+  name the build would still refuse — one starting with a digit, or containing a space, backtick, parenthesis,
+  brace or newline — is now refused when it is proposed, with the build's own message, instead of being
+  approved and then dropped at build time.
+
 ## [0.8.0] - 2026-09-29
 
 ### Changed
