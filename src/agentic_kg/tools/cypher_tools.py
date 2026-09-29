@@ -3,8 +3,8 @@ from typing import Any, Dict, Optional
 from google.adk.tools import ToolContext
 from neo4j_graphrag.schema import get_structured_schema
 
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked
-from agentic_kg.common.graph_profile import get_cached_profile, quote
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked, quote
+from agentic_kg.common.graph_profile import get_cached_profile
 from agentic_kg.common.neo4j_for_adk import (
     QUERY_TIMEOUT_SECONDS,
     close_graphdb,
