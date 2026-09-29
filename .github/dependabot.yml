@@ -20,7 +20,7 @@ updates:
         update-types: ["version-update:semver-major"]
       # litellm's window is set by its pin in pyproject.toml (currently >=1.83.9,<1.85),
       # which is the source of truth. Ignore minor too, not just major, so Dependabot
-      # can't widen the upper bound by itself.
+      # doesn't propose widening the upper bound by itself.
       - dependency-name: "litellm"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
