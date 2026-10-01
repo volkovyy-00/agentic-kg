@@ -205,8 +205,9 @@ defaulting to the column's own name (KG-45). Every reader of a relationship's en
 exists, a typed property is not joined, a joined property holds one value) see the matched property, never the
 file column. Only the typed-relationship-property refusal stays on the file columns, since coercion would change
 the value the join reads. `check_construction_plan_consistency` also refuses a rule whose two ends read the same
-column and match it on the same node property: every row would link a node to itself, and on a property holding
-one value per node no join warning fires at the build. Its own refusal messages offer a fix only where following it
+column and match it on the same node property: every row would link each node holding its value to every node
+holding it, itself included (on a key, one self-loop per row), and on a property holding one value per node no join
+warning fires at the build. Its own refusal messages offer a fix only where following it
 keeps the rule's two ends different.
 
 ### Handoff confirmation gates
@@ -332,7 +333,8 @@ underscores; Cypher keywords such as `Order` are allowed) and written into the q
 `quote()` — never passed as Cypher `$()` dynamic labels, which cannot use a uniqueness index. Names read back
 from the database are only quoted, never checked. The rule is enforced where names enter the plan and again at the
 build, not among the approval-time plan checks: the propose tools refuse a bad name through `node_rule_name_error`
-/ `relationship_rule_name_error` (`tools/kg_construction_tools.py`), with the build's own message followed by a
+/ `relationship_rule_name_error` (`tools/kg_construction_tools.py`; the relationship tool calls its two parts in
+turn), with the build's own message followed by a
 hint that a label or type can be renamed but a file column cannot (and, for a bad matched node property, how
 to spell or omit it), before reading the file, and those tools (plus
 the remove tools) are the only writers of the plan (KG-44). The build keeps its own check as a second guard, since

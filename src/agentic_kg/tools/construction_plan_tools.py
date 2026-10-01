@@ -14,7 +14,7 @@ from .join_property_check import check_joined_properties_hold_one_value
 from .kg_construction_tools import (
     matched_property_name_error,
     node_rule_name_error,
-    relationship_rule_name_error,
+    required_relationship_name_error,
 )
 from .reference_reachability import (
     check_reference_columns_are_reachable,
@@ -324,15 +324,15 @@ def propose_relationship_construction(
             relationship_construction_rule[f"{side}_node_property"] = value
 
     # Names first, before the file is read (KG-44): see propose_node_construction.
-    name_error = relationship_rule_name_error(relationship_construction_rule)
+    # The same two checks, in the build's order, as relationship_rule_name_error.
+    # The sentence on spelling a matched property comes only with that check's
+    # refusal: for a type, label or column it would point at a field that is fine.
+    name_error = required_relationship_name_error(relationship_construction_rule)
+    hint = _NAME_HINT
+    if name_error is None:
+        name_error = matched_property_name_error(relationship_construction_rule)
+        hint = _RELATIONSHIP_NAME_HINT
     if name_error is not None:
-        # The sentence on spelling a matched property only when one failed: for
-        # a type, label or column it would send the model to a field that is fine.
-        hint = (
-            _RELATIONSHIP_NAME_HINT
-            if name_error == matched_property_name_error(relationship_construction_rule)
-            else _NAME_HINT
-        )
         return tool_error(f"{name_error} {hint}")
 
     # quick sanity check -- does the approved file have the from_node_column?
@@ -492,8 +492,9 @@ def _identical_ends(
 ) -> str | None:
     """Both ends read one column and match it on one property of one label (KG-45).
 
-    Every node then matches itself, so each row links a node to itself, and on
-    a property holding one value per node no join warning fires at the build.
+    Each row then links every node holding its value to each node holding it,
+    itself included: on a key, one self-loop per row. On a property holding one
+    value per node no join warning fires at the build.
     Compared after resolving, so a field omitted and a field set to the column
     are the same rule. Silent when the node rule is missing or unreadable, and
     when the node does not carry the property: those are reported already.
@@ -511,7 +512,8 @@ def _identical_ends(
         return None
     problem = (
         f"{key}: both ends read '{from_end.column}' and match it on "
-        f"'{label}.{prop}', so every row would link a node to itself."
+        f"'{label}.{prop}', so each row would link every '{label}' holding the "
+        f"row's value to each one holding it, itself included."
     )
     # As in check_endpoint: with no key there is nothing to name, so the fix
     # is keying the node first.

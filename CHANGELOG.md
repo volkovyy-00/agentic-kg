@@ -15,11 +15,15 @@ There is no `[Unreleased]` section.
   `to_node_property`, on the rule and on both propose tools. A column holding another row's key under a
   different name, such as a reference to a row of the same file or to another label's key, now builds one
   edge per row. Approval refuses a rule whose two ends read the same column and match it on the same node
-  property, since every row would link a node to itself. A relationship load reports `rows_skipped`.
+  property, since every row would link each node holding its value to every node holding it, itself included.
+  A relationship load reports `rows_skipped`.
 
 ### Fixed
-- **A reference under a different name no longer builds wrong edges (#72, KG-45)**: every rule a model could
+- **A reference under a different name can now be built correctly (#72, KG-45)**: every rule a model could
   write for such a column linked nodes sharing a value, or built self-loops, and approval accepted them all.
+  The new field lets the correct rule be written, and approval now refuses the self-loop shape. A reference
+  matched on a node property of its own name is still approvable and is caught only by the build's over-match
+  warning.
   A row whose join value is blank, empty or whitespace only now links nothing. Before, a blank value matched
   any node that stored the same blank, which could link a node to itself. Such rows are counted, and the
   match warnings leave them out.

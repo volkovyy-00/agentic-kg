@@ -480,14 +480,20 @@ def node_rule_name_error(rule: dict) -> str | None:
 def relationship_rule_name_error(rule: dict) -> str | None:
     """The build's refusal for the first unusable name in a relationship rule, or None.
 
-    See node_rule_name_error. The five names in _RELATIONSHIP_RULE_NAMES come
-    first, read by direct indexing, so a missing required key still raises the
-    KeyError construct_domain_graph reports. Then each end's matched node
-    property: see matched_property_name_error.
+    See node_rule_name_error. The required names come first, then each end's
+    matched node property. The propose tool calls the two parts itself, so its
+    hint follows the one that failed.
     """
-    return _first_name_error(
-        rule, _RELATIONSHIP_RULE_NAMES
-    ) or matched_property_name_error(rule)
+    return required_relationship_name_error(rule) or matched_property_name_error(rule)
+
+
+def required_relationship_name_error(rule: dict) -> str | None:
+    """The refusal for the first unusable name in _RELATIONSHIP_RULE_NAMES, or None.
+
+    Read by direct indexing, so a missing required key still raises the
+    KeyError construct_domain_graph reports.
+    """
+    return _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
 
 
 def matched_property_name_error(rule: dict) -> str | None:
@@ -572,11 +578,11 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # A join column missing from the header makes row[$..._node_column] null,
     # which matches no node and silently produces zero relationships rather
     # than an error. Check the header before sending anything.
-    rows_committed = 0
+    rows_read = 0
     rows_skipped = 0
-    # Rows actually sent and committed: what a failure message may claim is in
-    # the graph, and what the join warnings compare matches against.
-    # rows_committed also counts skipped rows, as rows read.
+    # rows_read counts every row, skipped or not; rows_sent only the rows sent
+    # and committed: what a failure message may claim is in the graph, and
+    # what the join warnings compare matches against.
     rows_sent = 0
     rows_matched = 0
     totals: Dict[str, Any] = {}
@@ -608,9 +614,9 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                 for row in batch
                 if not (is_blank(row.get(from_column)) or is_blank(row.get(to_column)))
             ]
+            rows_read += len(batch)
             rows_skipped += len(batch) - len(kept)
             if not kept:
-                rows_committed += len(batch)
                 continue
             rows, tallies = _coerce_batch(kept, typed_types)
             # Merged BEFORE the gate: the cumulative arm has to see this batch,
@@ -640,7 +646,6 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                 )
             for record in result.get("records") or []:
                 rows_matched += record.get("rows_matched", 0) or 0
-            rows_committed += len(batch)
             rows_sent += len(kept)
     except FileNotFoundError:
         return tool_error(f"{source_file}: no such source file")
@@ -654,7 +659,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
 
     loaded = {
         "source_file": source_file,
-        "rows": rows_committed,
+        "rows": rows_read,
         "rows_matched": rows_matched,
         "rows_skipped": rows_skipped,
     }
@@ -693,9 +698,9 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         if rows_skipped
         else ""
     )
-    if rows_committed and not rows_sent:
+    if rows_read and not rows_sent:
         warnings.append(
-            f"{source_file}: all {rows_committed} rows are blank in a join column "
+            f"{source_file}: all {rows_read} rows are blank in a join column "
             f"({ends}), so nothing was linked by {relationship_type}."
         )
     elif rows_sent and rows_matched < rows_sent / 2:

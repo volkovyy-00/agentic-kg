@@ -40,6 +40,7 @@ from agentic_kg.tools.file_tools import APPROVED_FILES
 from agentic_kg.tools.reference_reachability import (
     check_reference_columns_are_reachable,
 )
+from agentic_kg.tools.relationship_endpoints import Endpoint
 
 
 class FakeToolContext:
@@ -2208,7 +2209,7 @@ def test_identical_ends_on_the_key_are_refused(drop, overrides):
     for fragment in (
         "SUPERSEDED_BY: both ends read 'itemID'",
         "'Item.itemID'",
-        "link a node to itself",
+        "itself included",
         "another column of 'items.csv'",
         "'from_node_property' or 'to_node_property'",
     ):
@@ -2231,7 +2232,7 @@ def test_identical_ends_on_a_non_key_property_are_refused_too():
     for fragment in (
         "SUPERSEDED_BY: both ends read 'title'",
         "'Item.title'",
-        "link a node to itself",
+        "itself included",
         "set that end's 'from_node_property' or 'to_node_property' to 'itemID'",
     ):
         assert fragment in problems[0], fragment
@@ -2245,9 +2246,7 @@ def test_identical_ends_on_a_node_without_a_key_are_told_to_key_it(no_key):
     )
     plan["Item"]["unique_column_name"] = no_key
     identical = [
-        p
-        for p in check_construction_plan_consistency(plan)
-        if "link a node to itself" in p
+        p for p in check_construction_plan_consistency(plan) if "itself included" in p
     ]
     assert len(identical) == 1, identical
     assert identical[0].endswith("Key 'Item' by the column that identifies it first.")
@@ -2363,7 +2362,7 @@ def test_approval_refuses_identical_ends_on_the_key(ctx):
     )
     result = approve_proposed_construction_plan(ctx)
     assert result["status"] == "error"
-    assert "link a node to itself" in result["error_message"]
+    assert "itself included" in result["error_message"]
     assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
 
 
@@ -2496,6 +2495,76 @@ def test_a_field_less_column_on_another_label_still_offers_to_join_on_the_key():
     problems = check_construction_plan_consistency(plan)
     assert len(problems) == 1, problems
     assert "join on 'supplier_id'" in problems[0]
+
+
+def _end(side, column, matched_property=None, label="Item"):
+    return Endpoint(side, label, column, matched_property or column)
+
+
+# The fix filter as a table: one row per (end, other, key) shape, so a change to
+# what counts as "the same ends" fails here rather than in one message's wording.
+@pytest.mark.parametrize(
+    "end, other, key, offered",
+    [
+        (
+            _end("from", "legacy_code", label="Part"),
+            _end("to", "sid", label="Supplier"),
+            "part_id",
+            True,
+        ),
+        (_end("to", "supersededBy"), _end("from", "itemID"), "itemID", False),
+        (_end("to", "supersededBy"), _end("from", "parentID"), "itemID", True),
+        (_end("to", "ref", "itemID"), _end("from", "title"), "itemID", False),
+        (_end("to", "itemID"), _end("from", "title"), "itemID", False),
+    ],
+    ids=[
+        "cross-label",
+        "self-reference-would-become-identical",
+        "self-reference-other-end-not-the-key",
+        "already-matched-under-another-name",
+        "already-the-key",
+    ],
+)
+def test_join_on_the_key_is_offered_only_where_it_keeps_the_ends_apart(
+    end, other, key, offered
+):
+    assert cpt._can_join_on_key(end, other, key) is offered
+
+
+@pytest.mark.parametrize(
+    "end, other, change, apart",
+    [
+        (
+            _end("to", "ref"),
+            _end("from", "itemID"),
+            {"matched_property": "itemID"},
+            True,
+        ),
+        (
+            _end("to", "itemID", "title"),
+            _end("from", "itemID"),
+            {"matched_property": "itemID"},
+            False,
+        ),
+        (_end("to", "itemID", label="Bundle"), _end("from", "itemID"), {}, True),
+        (
+            _end("to", "itemID"),
+            _end("from", "itemID"),
+            {"matched_property": "title"},
+            True,
+        ),
+    ],
+    ids=[
+        "other-column",
+        "same-column-onto-the-same-property",
+        "other-label",
+        "moved-off",
+    ],
+)
+def test_a_fix_keeps_the_ends_apart_only_if_the_rewritten_end_differs(
+    end, other, change, apart
+):
+    assert cpt._keeps_ends_apart(end, other, **change) is apart
 
 
 def _fixes_offered(problem):
