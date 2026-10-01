@@ -28,9 +28,10 @@ from agentic_kg.common.value_types import (
     MAJORITY_SHARE,
     UNCONVERTIBLE,
     coerce,
+    is_blank,
 )
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
-from agentic_kg.tools.relationship_endpoints import relationship_endpoints
+from agentic_kg.tools.relationship_endpoints import describe_end, relationship_endpoints
 
 logger = logging.getLogger(__name__)
 
@@ -521,6 +522,10 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     to_label = relationship_construction["to_node_label"]
     from_column = relationship_construction["from_node_column"]
     to_column = relationship_construction["to_node_column"]
+    # KG-45: each end matches its node on the resolved property, reading the
+    # value from its file column. The name check above has already indexed the
+    # required keys, so the ends are present.
+    from_end, to_end = relationship_endpoints(relationship_construction)
 
     source_file = relationship_construction["source_file"]
     properties = relationship_construction["properties"]
@@ -536,8 +541,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # check_construction_plan_consistency. Coercion touches typed_properties
     # only, which by that rule can never include a join column.
     query = f"""UNWIND $rows AS row
-    MATCH (from_node:{quote(from_label)} {{ {quote(from_column)} : row[$from_node_column] }}),
-          (to_node:{quote(to_label)} {{ {quote(to_column)} : row[$to_node_column] }})
+    MATCH (from_node:{quote(from_label)} {{ {quote(from_end.matched_property)} : row[$from_node_column] }}),
+          (to_node:{quote(to_label)} {{ {quote(to_end.matched_property)} : row[$to_node_column] }})
     MERGE (from_node)-[r:{quote(relationship_type)}]->(to_node)
     FOREACH (k IN [p IN $properties WHERE row[p] IS NOT NULL] | SET r[k] = row[k])
     FOREACH (k IN [p IN $typed_properties
@@ -555,6 +560,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # which matches no node and silently produces zero relationships rather
     # than an error. Check the header before sending anything.
     rows_committed = 0
+    rows_skipped = 0
     rows_matched = 0
     totals: Dict[str, Any] = {}
     try:
@@ -575,7 +581,21 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             return tool_error(missing_typed)
 
         for _batch_header, batch in batches:
-            rows, tallies = _coerce_batch(batch, typed_types)
+            # KG-45: a row blank on either join column names no node to link.
+            # It is skipped here, before coercion so it adds nothing to the type
+            # tallies, and counted so the warnings below can leave it out. Blank
+            # is value_types.is_blank: no cell (a short row), empty, or
+            # whitespace only.
+            kept = [
+                row
+                for row in batch
+                if not (is_blank(row.get(from_column)) or is_blank(row.get(to_column)))
+            ]
+            rows_skipped += len(batch) - len(kept)
+            if not kept:
+                rows_committed += len(batch)
+                continue
+            rows, tallies = _coerce_batch(kept, typed_types)
             # Merged BEFORE the gate: the cumulative arm has to see this batch,
             # and on a refusal the totals are discarded with the error anyway.
             _merge_tallies(totals, tallies)
@@ -618,6 +638,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         "source_file": source_file,
         "rows": rows_committed,
         "rows_matched": rows_matched,
+        "rows_skipped": rows_skipped,
     }
     if totals:
         loaded["type_conversion"] = totals
@@ -645,13 +666,27 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # MERGE reports no error for it. Half the rows failing to match is already
     # a design smell worth a human look; zero matches is almost certainly a
     # wrong join key, so both are surfaced rather than silently succeeding.
-    if rows_committed and rows_matched < rows_committed / 2:
+    # Skipped rows (KG-45) never reached the query, so both join warnings
+    # compare matches against the rows that did. A file blank in every row gets
+    # one join warning of its own instead: there is nothing to compare.
+    considered = rows_committed - rows_skipped
+    ends = f"{describe_end(from_end)} -> {describe_end(to_end)}"
+    left_out = (
+        f" ({rows_skipped} rows with a blank join value were left out)"
+        if rows_skipped
+        else ""
+    )
+    if rows_committed and not considered:
         warnings.append(
-            f"{source_file}: only {rows_matched} of {rows_committed} rows matched both "
-            f"endpoints ({from_label}.{from_column} -> "
-            f"{to_label}.{to_column}) — check whether the join columns actually match. "
-            "A join column that is a per-row property collapsed during node loading "
-            "will match few or no rows."
+            f"{source_file}: all {rows_committed} rows are blank in a join column "
+            f"({ends}), so nothing was linked by {relationship_type}."
+        )
+    elif considered and rows_matched < considered / 2:
+        warnings.append(
+            f"{source_file}: only {rows_matched} of {considered} rows matched both "
+            f"endpoints ({ends}){left_out} — check whether the join columns actually "
+            "match. A join column that is a per-row property collapsed during node "
+            "loading will match few or no rows."
         )
 
     # The opposite direction, and it needs no slack. A relationship row states
@@ -667,11 +702,11 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # "pairs" here would state a number the query cannot support, and would be
     # wrong in the case this check was built from: 64 rows fanning out to 426
     # matches still describe only 64 distinct pairs.
-    if rows_committed and rows_matched > rows_committed:
+    if considered and rows_matched > considered:
         warnings.append(
             f"{source_file}: {relationship_type} matched both endpoints "
-            f"{rows_matched} times from {rows_committed} rows "
-            f"({from_label}.{from_column} -> {to_label}.{to_column}) — more "
+            f"{rows_matched} times from {considered} rows "
+            f"({ends}){left_out} — more "
             "matches than rows read means at least one join column matched more "
             "than one node instead of the one the row identifies. Check whether "
             "the join column identifies one node or a group of them."
@@ -691,6 +726,9 @@ def _loaded_summary(key: str, loaded: dict) -> str:
     the number most likely to be repeated verbatim to the user — it must not
     say "rows" where the user will hear "nodes".
     """
+    # .get: node results never carry rows_skipped (KG-45).
+    skipped = loaded.get("rows_skipped")
+    suffix = f", {skipped} skipped" if skipped else ""
     for field, noun in (
         ("nodes_in_graph", "nodes"),
         ("relationships_in_graph", "relationships"),
@@ -699,8 +737,8 @@ def _loaded_summary(key: str, loaded: dict) -> str:
             # "from N rows" would claim this load produced that many nodes,
             # but the count is label-wide (see _count_in_graph) and can
             # include nodes a re-run's own rows had nothing to do with.
-            return f"{key} ({loaded[field]} {noun} now in graph, {loaded['rows']} rows read)"
-    return f"{key} ({loaded['rows']} rows)"
+            return f"{key} ({loaded[field]} {noun} now in graph, {loaded['rows']} rows read{suffix})"
+    return f"{key} ({loaded['rows']} rows{suffix})"
 
 
 def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
