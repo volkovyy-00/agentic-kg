@@ -187,7 +187,7 @@ def test_two_relationships_on_one_node_property_give_one_line(source):
     )
     problems, _ = check(plan)
     assert len(problems) == 1
-    assert "'SEEN', 'ALSO_SEEN' join on" in problems[0]
+    assert "'SEEN', 'ALSO_SEEN' match on" in problems[0]
 
 
 def test_two_relationships_give_the_fix_text_once(source):
@@ -389,6 +389,9 @@ def test_one_unusable_rule_gives_one_note_naming_every_join_it_left_unchecked(
         ("Transect", "source_file", None),
         ("Transect", "properties", 5),
         ("Transect", "properties", [["species_code"]]),
+        ("SEEN", "from_node_property", ["species_code"]),
+        ("SEEN", "from_node_property", {"a": 1}),
+        ("SEEN", "from_node_property", 5),
     ],
 )
 def test_a_malformed_rule_gives_no_refusal_and_never_raises(
@@ -500,3 +503,23 @@ def test_an_unreadable_source_reaches_the_caller_as_a_note_through_find_plan_pro
     assert problems == []
     assert len(unverified) == 1
     assert "walks.csv" in unverified[0]
+
+
+def test_a_matched_property_with_several_values_is_refused(source):
+    """KG-45 AC3: the several-values refusal reads the matched property, not
+    the relationship file's column."""
+    source("walks.csv", WALKS_SEVERAL)
+    plan = _several_values_plan()
+    plan["SEEN"]["from_node_column"] = "seen_code"
+    plan["SEEN"]["from_node_property"] = "species_code"
+    problems, _ = check(plan)
+    assert len(problems) == 1
+    assert "'SEEN' matches on 'species_code' of" in problems[0]
+
+
+def test_a_file_column_named_like_a_property_but_matched_on_the_key_is_not_read(source):
+    source("walks.csv", WALKS_SEVERAL)
+    plan = _several_values_plan()
+    plan["SEEN"]["from_node_property"] = "transect_name"
+    problems, unverified = check(plan)
+    assert problems == [] and unverified == []

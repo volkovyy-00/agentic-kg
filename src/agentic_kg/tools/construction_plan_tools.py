@@ -16,7 +16,7 @@ from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
 )
-from .relationship_endpoints import is_omitted
+from .relationship_endpoints import is_omitted, relationship_endpoints
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
@@ -440,6 +440,39 @@ def _bounded_repr(value: Any) -> str:
     return f"{text[:MAX_ECHOED_VALUE_LENGTH]}... ({len(text)} characters)"
 
 
+def _identical_ends_on_a_key(key, rule, nodes, unreadable) -> str | None:
+    """KG-45 SC2: both ends read one column and match it on one node's key.
+
+    Every row then links a node to itself. Compared after resolving, so a field
+    omitted and a field set to the key are the same rule. Silent when the node
+    rule is missing (reported as such) or unreadable, and when the shared
+    property is not the key (D2: the build's over-match warning covers that).
+    """
+    from_end, to_end = relationship_endpoints(rule)
+    if (from_end.label, from_end.column, from_end.matched_property) != (
+        to_end.label,
+        to_end.column,
+        to_end.matched_property,
+    ):
+        return None
+    label, prop = from_end.label, from_end.matched_property
+    if not isinstance(label, str) or not isinstance(prop, str):
+        return None
+    node_rule = nodes.get(label)
+    if node_rule is None or label in unreadable:
+        return None
+    node_key = node_rule.get("unique_column_name")
+    if prop != node_key:
+        return None
+    return (
+        f"{key}: both ends read '{from_end.column}' and match it on "
+        f"'{label}.{node_key}', so every row would link a node to itself. If "
+        f"another column of '{rule.get('source_file')}' holds the {node_key} of "
+        f"the related {label}, use that column on that end and set that end's "
+        f"'from_node_property' or 'to_node_property' to '{node_key}'."
+    )
+
+
 def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     """Find internal inconsistencies between relationship joins and node constructions.
 
@@ -494,9 +527,11 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             f"fixed."
         )
 
-    # Every column a relationship joins on, so a property can be checked against
-    # the whole plan rather than only its own construction. This is what makes a
-    # type retroactively invalid when a later relationship joins on it.
+    # Every node property a relationship matches on (KG-45: the resolved
+    # matched property, never the file column), so a property can be checked
+    # against the whole plan rather than only its own construction. This is
+    # what makes a type retroactively invalid when a later relationship joins
+    # on it. A non-text value cannot be hashed; it is reported below instead.
     joined_columns = {}
     for key, rule in construction_plan.items():
         if (
@@ -504,30 +539,45 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        for label, column in (
-            (rule.get("from_node_label"), rule.get("from_node_column")),
-            (rule.get("to_node_label"), rule.get("to_node_column")),
-        ):
-            joined_columns.setdefault((label, column), []).append(key)
+        for end in relationship_endpoints(rule):
+            if isinstance(end.matched_property, str):
+                joined_columns.setdefault((end.label, end.matched_property), []).append(
+                    key
+                )
 
-    def check_endpoint(rel_key, side, label, column):
+    def check_endpoint(rel_key, end):
+        label, prop = end.label, end.matched_property
         node_rule = nodes.get(label)
         if node_rule is None:
             problems.append(
-                f"{rel_key}: {side} node label '{label}' has no node construction in the plan."
+                f"{rel_key}: {end.side} node label '{label}' has no node construction in the plan."
             )
             return
         if label in unreadable:
             return
         unique_column = node_rule.get("unique_column_name")
         known_columns = {unique_column, *(node_rule.get("properties") or [])}
-        if column not in known_columns:
+        if prop in known_columns:
+            return
+        others = sorted(c for c in known_columns if c and c != unique_column)
+        field = f"{end.side}_node_property"
+        if prop == end.column:
             problems.append(
-                f"{rel_key}: {side} join column '{column}' is not a column of the "
+                f"{rel_key}: {end.side} join column '{prop}' is not a column of the "
                 f"'{label}' node, which is keyed by '{unique_column}' with properties "
-                f"{sorted(c for c in known_columns if c and c != unique_column)}. "
-                f"This join would match zero rows. Either key '{label}' by '{column}' "
-                f"or join on '{unique_column}'."
+                f"{others}. This join would match zero rows. Either key '{label}' by "
+                f"'{prop}', join on '{unique_column}', or, if '{prop}' holds the "
+                f"'{unique_column}' of a '{label}' under another name, keep the column "
+                f"and set '{field}' to '{unique_column}'."
+            )
+        else:
+            problems.append(
+                f"{rel_key}: the {end.side} end matches its column '{end.column}' on "
+                f"'{label}.{prop}', but '{prop}' is not a property of the '{label}' "
+                f"node, which is keyed by '{unique_column}' with properties {others}. "
+                f"This join would match zero rows. Either set '{field}' to "
+                f"'{unique_column}' or one of those properties, or key '{label}' by "
+                f"'{prop}'."
             )
 
     for key, rule in construction_plan.items():
@@ -536,10 +586,25 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        check_endpoint(
-            key, "from", rule.get("from_node_label"), rule.get("from_node_column")
-        )
-        check_endpoint(key, "to", rule.get("to_node_label"), rule.get("to_node_column"))
+        for end in relationship_endpoints(rule):
+            if not isinstance(end.matched_property, str):
+                # Name the field that supplied the value: with the property
+                # omitted, it came from the column.
+                field = (
+                    f"{end.side}_node_column"
+                    if is_omitted(rule.get(f"{end.side}_node_property"))
+                    else f"{end.side}_node_property"
+                )
+                problems.append(
+                    f"{key}: '{field}' must be a property name, got "
+                    f"{_bounded_repr(end.matched_property)}. The {end.side} end "
+                    f"matches nothing until it is one."
+                )
+                continue
+            check_endpoint(key, end)
+        identical = _identical_ends_on_a_key(key, rule, nodes, unreadable)
+        if identical is not None:
+            problems.append(identical)
 
     # Declared property types. Three rules, all refusing at approval time rather
     # than failing much later at import time.
@@ -580,17 +645,10 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 )
 
             if rule.get("construction_type") == "relationship":
-                joining = (
-                    [key]
-                    if name
-                    in (rule.get("from_node_column"), rule.get("to_node_column"))
-                    else []
-                )
-                own_node_label = (
-                    rule.get("from_node_label")
-                    if name == rule.get("from_node_column")
-                    else rule.get("to_node_label")
-                )
+                from_end, to_end = relationship_endpoints(rule)
+                joining = [key] if name in (from_end.column, to_end.column) else []
+                own_end = from_end if name == from_end.column else to_end
+                own_node_label = own_end.label
                 own_node_rule = nodes.get(own_node_label)
                 join_target = (
                     own_node_rule.get("unique_column_name") if own_node_rule else None
@@ -750,7 +808,9 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Approve the proposed construction plan, if it can actually be built.
 
     Approval is refused when a relationship construction joins on a column the
-    referenced node does not carry, or names an endpoint label that has no node
+    referenced node does not carry, or reads one column at both ends and matches
+    it on the same node's key (linking every node to itself), or names an
+    endpoint label that has no node
     construction in the plan, or joins on a node property that holds more than
     one value per node, or when it leaves an approved file's reference
     column with no node in the plan that carries it reachably -- in every one
@@ -847,7 +907,8 @@ def get_proposed_construction_plan_with_approval_check(
                 "This plan can be approved right now: "
                 "'approve_proposed_construction_plan' will accept it as it stands. "
                 "That is all this tool knows: it checks joins, endpoint labels, "
-                "typed columns, whether each joined node property holds one value "
+                "typed columns, relationships whose two ends are the same node, "
+                "whether each joined node property holds one value "
                 "per node, and whether every approved file's reference "
                 "columns can still be reached, not whether the plan is the right "
                 "one. When your instruction has you presenting this plan, show it "

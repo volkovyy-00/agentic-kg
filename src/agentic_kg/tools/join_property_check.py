@@ -25,12 +25,13 @@ from typing import Dict, List, Tuple
 
 from .file_tools import summarize_key_groups
 from .reference_reachability import declared_properties, node_description, quoted_list
+from .relationship_endpoints import relationship_endpoints
 
 
 def _joins_by_node_property(
     construction_plan: dict,
 ) -> Dict[Tuple[str, str], List[str]]:
-    """Each (node plan key, column) a relationship joins on, with its relationships.
+    """Each (node plan key, matched property) a relationship joins on, with its relationships.
 
     Plan order, `from` endpoint before `to`, each relationship once per pair. The
     node is named by its plan key because that is how
@@ -46,11 +47,10 @@ def _joins_by_node_property(
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        endpoints = (
-            (rule.get("from_node_label"), rule.get("from_node_column")),
-            (rule.get("to_node_label"), rule.get("to_node_column")),
-        )
-        for label, column in endpoints:
+        for end in relationship_endpoints(rule):
+            # KG-45: the node property the end is matched on, not the file
+            # column it reads.
+            label, column = end.label, end.matched_property
             if not isinstance(label, str) or not isinstance(column, str):
                 continue
             relationships = joins.setdefault((label, column), [])
@@ -89,7 +89,7 @@ def _refusal(
     cell counts as a value because the loader writes over an earlier one with it.
     """
     named = quoted_list(relationships)
-    verb = "joins" if len(relationships) == 1 else "join"
+    verb = "matches" if len(relationships) == 1 else "match"
     return (
         f"{named} {verb} on '{column}' of {node_description(rule)}, but that "
         f"property holds more than one value per node (a blank cell counts as a "
