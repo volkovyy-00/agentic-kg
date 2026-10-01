@@ -442,7 +442,38 @@ def _bounded_repr(value: Any) -> str:
     return f"{text[:MAX_ECHOED_VALUE_LENGTH]}... ({len(text)} characters)"
 
 
-def _identical_ends_on_a_key(key, rule, nodes, unreadable) -> str | None:
+def _keeps_ends_apart(end, other, **change) -> bool:
+    """Whether `end`, rewritten with `change`, still differs from `other`.
+
+    A refusal's suggested fix that gave a rule two identical ends would only be
+    refused in turn (_identical_ends_on_a_key), so each fix is offered only
+    where this holds.
+    """
+    return not end._replace(**change).same_as(other)
+
+
+def _can_join_on_key(end, other, key) -> bool:
+    """Whether 'join on the key' is a fix for this end: matched on its column's
+    own name, it reads the key column instead, and stays apart from the other end."""
+    return (
+        end.column == end.matched_property
+        and end.column != key
+        and _keeps_ends_apart(end, other, column=key, matched_property=key)
+    )
+
+
+def _either(options: list[str]) -> str:
+    """'Either a, b, or c.', or 'A.' when one option is left."""
+    if len(options) == 1:
+        return f"{options[0][0].upper()}{options[0][1:]}."
+    last = options[-1]
+    joint = ", or, " if last.startswith("if ") else ", or "
+    return f"Either {', '.join(options[:-1])}{joint}{last}."
+
+
+def _identical_ends_on_a_key(
+    key, from_end, to_end, source_file, nodes, unreadable
+) -> str | None:
     """KG-45 SC2: both ends read one column and match it on one node's key.
 
     Every row then links a node to itself. Compared after resolving, so a field
@@ -450,12 +481,7 @@ def _identical_ends_on_a_key(key, rule, nodes, unreadable) -> str | None:
     rule is missing (reported as such) or unreadable, and when the shared
     property is not the key (D2: the build's over-match warning covers that).
     """
-    from_end, to_end = relationship_endpoints(rule)
-    if (from_end.label, from_end.column, from_end.matched_property) != (
-        to_end.label,
-        to_end.column,
-        to_end.matched_property,
-    ):
+    if not from_end.same_as(to_end):
         return None
     label, prop = from_end.label, from_end.matched_property
     if not isinstance(label, str) or not isinstance(prop, str):
@@ -469,7 +495,7 @@ def _identical_ends_on_a_key(key, rule, nodes, unreadable) -> str | None:
     return (
         f"{key}: both ends read '{from_end.column}' and match it on "
         f"'{label}.{node_key}', so every row would link a node to itself. If "
-        f"another column of '{rule.get('source_file')}' holds the {node_key} of "
+        f"another column of '{source_file}' holds the {node_key} of "
         f"the related {label}, use that column on that end and set that end's "
         f"'from_node_property' or 'to_node_property' to '{node_key}'."
     )
@@ -534,6 +560,8 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     # against the whole plan rather than only its own construction. This is
     # what makes a type retroactively invalid when a later relationship joins
     # on it. A non-text value cannot be hashed; it is reported below instead.
+    # Each entry keeps the end and its partner, so a refusal can tell which
+    # fixes would leave the two ends identical.
     joined_columns = {}
     for key, rule in construction_plan.items():
         if (
@@ -541,10 +569,11 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        for end in relationship_endpoints(rule):
+        from_end, to_end = relationship_endpoints(rule)
+        for end, other in ((from_end, to_end), (to_end, from_end)):
             if isinstance(end.matched_property, str):
                 joined_columns.setdefault((end.label, end.matched_property), []).append(
-                    key
+                    (key, end, other)
                 )
 
     def check_endpoint(rel_key, end, other):
@@ -563,31 +592,38 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             return
         others = sorted(c for c in known_columns if c and c != unique_column)
         field = f"{end.side}_node_property"
+        # Each fix is offered only where following it leaves the two ends
+        # different. Keying the node by this end's property cannot do that when
+        # both ends are already the same: both would then match on the key.
+        rekey = [] if end.same_as(other) else [f"key '{label}' by '{prop}'"]
+        match_on_key = _keeps_ends_apart(end, other, matched_property=unique_column)
         if prop == end.column:
-            # Joining this end on the key is no fix when the other end already
-            # reads the key of the same label: both ends would then be identical.
-            join_on_key = (
-                ""
-                if (other.label, other.column, other.matched_property)
-                == (label, unique_column, unique_column)
-                else f"join on '{unique_column}', "
-            )
+            options = list(rekey)
+            if _can_join_on_key(end, other, unique_column):
+                options.append(f"join on '{unique_column}'")
+            if match_on_key:
+                options.append(
+                    f"if '{prop}' holds the '{unique_column}' of a '{label}' under "
+                    f"another name, keep the column and set '{field}' to "
+                    f"'{unique_column}'"
+                )
             problems.append(
                 f"{rel_key}: {end.side} join column '{prop}' is not a column of the "
                 f"'{label}' node, which is keyed by '{unique_column}' with properties "
-                f"{others}. This join would match zero rows. Either key '{label}' by "
-                f"'{prop}', {join_on_key}or, if '{prop}' holds the "
-                f"'{unique_column}' of a '{label}' under another name, keep the column "
-                f"and set '{field}' to '{unique_column}'."
+                f"{others}. This join would match zero rows. {_either(options)}"
             )
         else:
+            target = (
+                f"'{unique_column}' or one of those properties"
+                if match_on_key
+                else "one of those properties"
+            )
+            set_property = f"set '{field}' to {target}"
             problems.append(
                 f"{rel_key}: the {end.side} end matches its column '{end.column}' on "
                 f"'{label}.{prop}', but '{prop}' is not a property of the '{label}' "
                 f"node, which is keyed by '{unique_column}' with properties {others}. "
-                f"This join would match zero rows. Either set '{field}' to "
-                f"'{unique_column}' or one of those properties, or key '{label}' by "
-                f"'{prop}'."
+                f"This join would match zero rows. {_either([set_property, *rekey])}"
             )
 
     for key, rule in construction_plan.items():
@@ -613,7 +649,9 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 )
                 continue
             check_endpoint(key, end, other)
-        identical = _identical_ends_on_a_key(key, rule, nodes, unreadable)
+        identical = _identical_ends_on_a_key(
+            key, from_end, to_end, rule.get("source_file"), nodes, unreadable
+        )
         if identical is not None:
             problems.append(identical)
 
@@ -655,9 +693,6 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                     f"typed identifier matches nothing. Drop the type for '{name}'."
                 )
 
-            # Each exit is offered only where following it cannot give the rule
-            # two identical ends, which check_construction_plan_consistency
-            # refuses in turn.
             if rule.get("construction_type") == "relationship":
                 from_end, to_end = relationship_endpoints(rule)
                 joining = [key] if name in (from_end.column, to_end.column) else []
@@ -671,46 +706,47 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 join_target = (
                     own_node_rule.get("unique_column_name") if own_node_rule else None
                 )
-                # Joining on the key means reading the key column on an end
-                # matched on the column's own name; and it fails when the other
-                # end already reads that column on the same label.
-                can_join_on_key = own_end.column == own_end.matched_property and not (
-                    other_end.label == own_end.label and other_end.column == join_target
-                )
+                ends = [(own_end, other_end)]
+                # The typed value is the file column itself, so matching it on
+                # another property would still compare a converted value.
+                can_rematch = False
             else:
                 label = rule.get("label", key)
-                joining = joined_columns.get((label, name), [])
+                joins = joined_columns.get((label, name), [])
+                joining = [rel_key for rel_key, _end, _other in joins]
+                ends = [(end, other) for _rel_key, end, other in joins]
                 own_node_label = label
                 join_target = unique_column
-                can_join_on_key = False
+                can_rematch = True
             if joining:
                 rels = ", ".join(sorted(joining))
+                # Each fix is offered only where following it, on every end
+                # that joins here, leaves that rule's two ends different.
+                options = [f"drop the type for '{name}'"]
                 if join_target is None:
-                    second_exit = (
+                    options.append(
                         f"'{own_node_label}' has no node construction in this plan, "
                         f"so there is no identifier to join on instead"
                     )
-                elif rule.get("construction_type") != "relationship":
-                    # A node property that an end matches on: the fix is on the
-                    # end, not a switch to the key column, which in a
-                    # self-reference would make both ends identical.
-                    second_exit = (
-                        f"set 'from_node_property' or 'to_node_property' to "
-                        f"'{join_target}' on the end of {rels} that matches it"
-                    )
-                elif can_join_on_key:
-                    second_exit = f"join {rels} on '{join_target}' instead"
                 else:
-                    second_exit = None
-                advice = (
-                    f"Either drop the type for '{name}', or {second_exit}."
-                    if second_exit is not None
-                    else f"Drop the type for '{name}'."
-                )
+                    if all(
+                        _can_join_on_key(end, other, join_target) for end, other in ends
+                    ):
+                        options.append(f"join {rels} on '{join_target}' instead")
+                    if can_rematch and all(
+                        _keeps_ends_apart(end, other, matched_property=join_target)
+                        for end, other in ends
+                    ):
+                        options.append(
+                            f"if the column {rels} reads holds the '{join_target}' "
+                            f"of a '{own_node_label}' under another name, set that "
+                            f"end's 'from_node_property' or 'to_node_property' to "
+                            f"'{join_target}'"
+                        )
                 problems.append(
                     f"{key}: '{name}' carries a declared type but {rels} joins on "
                     f"it. Join columns are compared as raw CSV text, so a typed "
-                    f"column matches zero rows with no error. {advice}"
+                    f"column matches zero rows with no error. {_either(options)}"
                 )
 
     return problems

@@ -2391,8 +2391,34 @@ def test_a_typed_relationship_property_whose_other_end_reads_the_key_offers_only
     assert typed[0].endswith("Drop the type for 'supersededBy'.")
 
 
+def _supplier_code_plan():
+    """SUPPLIED_BY reads supplier_code, a stored Supplier property, and types it
+    on the relationship as well."""
+    plan = _typed_plan()
+    plan["Supplier"]["properties"] = ["name", "supplier_code"]
+    plan["SUPPLIED_BY"]["to_node_column"] = "supplier_code"
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_code"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer",
+        "supplier_code": "integer",
+    }
+    return plan
+
+
 def test_a_typed_relationship_property_across_labels_keeps_the_join_exit():
     """The key exit stays where following it cannot give identical ends."""
+    problems = check_construction_plan_consistency(_supplier_code_plan())
+    typed = [p for p in problems if p.startswith("SUPPLIED_BY: 'supplier_code'")]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith(
+        "Either drop the type for 'supplier_code', or join SUPPLIED_BY on "
+        "'supplier_id' instead."
+    )
+
+
+def test_a_typed_relationship_property_on_the_key_column_offers_only_the_drop():
+    """The end already reads the key: 'join on the key' would ask for what is
+    already true."""
     plan = _typed_plan()
     plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_id"]
     plan["SUPPLIED_BY"]["property_types"] = {
@@ -2402,10 +2428,7 @@ def test_a_typed_relationship_property_across_labels_keeps_the_join_exit():
     problems = check_construction_plan_consistency(plan)
     typed = [p for p in problems if p.startswith("SUPPLIED_BY: 'supplier_id'")]
     assert len(typed) == 1, problems
-    assert typed[0].endswith(
-        "Either drop the type for 'supplier_id', or join SUPPLIED_BY on "
-        "'supplier_id' instead."
-    )
+    assert typed[0].endswith("Drop the type for 'supplier_id'.")
 
 
 def test_a_field_less_column_beside_an_end_on_the_key_does_not_offer_to_join_on_it():
@@ -2427,6 +2450,74 @@ def test_a_field_less_column_on_another_label_still_offers_to_join_on_the_key():
     problems = check_construction_plan_consistency(plan)
     assert len(problems) == 1, problems
     assert "join on 'supplier_id'" in problems[0]
+
+
+def _fixes_offered(problem):
+    """The text after 'zero rows ...' that lists the fixes."""
+    return problem.split("zero rows", 1)[1]
+
+
+def test_a_typed_node_property_across_labels_offers_both_key_fixes_conditioned():
+    """Final verification: the cross-label case keeps 'join on the key', and the
+    property fix says when it applies, since following it on a column that
+    does not hold the key would pass approval and match nothing."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["unit_cost", "part_name", "legacy_code"]
+    plan["Part"]["property_types"] = {"legacy_code": "integer"}
+    plan["SUPPLIED_BY"]["from_node_column"] = "legacy_code"
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if p.startswith("Part: 'legacy_code'")]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith(
+        "Either drop the type for 'legacy_code', join SUPPLIED_BY on 'part_id' "
+        "instead, or, if the column SUPPLIED_BY reads holds the 'part_id' of a "
+        "'Part' under another name, set that end's 'from_node_property' or "
+        "'to_node_property' to 'part_id'."
+    )
+
+
+def test_a_typed_node_property_on_a_reverse_reading_self_reference_offers_only_the_drop():
+    """Both ends read itemID; the to end matches it on the typed property.
+    Matching that end on the key instead would make the ends identical."""
+    plan = _typed_item_property_plan(to_node_column="itemID")
+    plan["SUPERSEDED_BY"]["to_node_property"] = "supersededBy"
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if "carries a declared type" in p]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith("Drop the type for 'supersededBy'.")
+
+
+def test_a_misspelled_matched_property_beside_an_end_on_the_key_is_not_told_to_use_the_key():
+    """Both ends read itemID and the from end matches the key: setting the to
+    end's property to the key would make the ends identical."""
+    problems = check_construction_plan_consistency(
+        _item_plan(to_node_column="itemID", to_node_property="itemid")
+    )
+    assert len(problems) == 1, problems
+    fixes = _fixes_offered(problems[0])
+    assert "set 'to_node_property' to one of those properties" in fixes
+    assert "'itemID'" not in fixes
+
+
+def test_a_column_matched_on_the_key_at_one_end_is_not_offered_at_the_other():
+    """The to end reads supersededBy matched on the key; telling the from end,
+    which reads the same column, to do the same would make the ends identical."""
+    plan = _item_plan(from_node_column="supersededBy")
+    problems = [p for p in check_construction_plan_consistency(plan) if "from" in p]
+    assert len(problems) == 1, problems
+    fixes = _fixes_offered(problems[0])
+    assert "set 'from_node_property'" not in fixes
+    assert "join on 'itemID'" in fixes
+
+
+def test_ends_already_identical_are_not_told_to_key_the_node_by_their_column():
+    """Both ends read supersededBy on its own name: keying Item by it would make
+    both ends match it on the key."""
+    plan = _item_plan(("to_node_property",), from_node_column="supersededBy")
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 2, problems
+    for problem in problems:
+        assert "key 'Item' by" not in _fixes_offered(problem), problem
 
 
 def test_approving_a_plan_documents_the_matched_property_not_the_column():

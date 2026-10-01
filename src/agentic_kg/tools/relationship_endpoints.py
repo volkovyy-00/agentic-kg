@@ -16,14 +16,23 @@ without an import cycle.
 
 from typing import Any, NamedTuple, Tuple
 
-SIDES = ("from", "to")
-
 
 class Endpoint(NamedTuple):
     side: str
     label: Any
     column: Any
     matched_property: Any
+
+    def same_as(self, other: "Endpoint") -> bool:
+        """Same label, column and matched property: the side aside, one end.
+
+        A rule whose two ends are the same links each row's node to itself.
+        """
+        return (self.label, self.column, self.matched_property) == (
+            other.label,
+            other.column,
+            other.matched_property,
+        )
 
 
 def is_omitted(value: Any) -> bool:

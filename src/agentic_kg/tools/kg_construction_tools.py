@@ -451,12 +451,19 @@ _RELATIONSHIP_RULE_NAMES = (
 )
 
 
+def _name_error(kind: str, value: Any) -> str | None:
+    try:
+        _checked(kind, value)
+    except InvalidIdentifier as exc:
+        return str(exc)
+    return None
+
+
 def _first_name_error(rule: dict, names: tuple[tuple[str, str], ...]) -> str | None:
     for kind, key in names:
-        try:
-            _checked(kind, rule[key])
-        except InvalidIdentifier as exc:
-            return str(exc)
+        error = _name_error(kind, rule[key])
+        if error is not None:
+            return error
     return None
 
 
@@ -483,10 +490,9 @@ def relationship_rule_name_error(rule: dict) -> str | None:
     if error is not None:
         return error
     for end in relationship_endpoints(rule):
-        try:
-            _checked("property name", end.matched_property)
-        except InvalidIdentifier as exc:
-            return str(exc)
+        error = _name_error("property name", end.matched_property)
+        if error is not None:
+            return error
     return None
 
 
@@ -518,14 +524,12 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     if name_error is not None:
         return tool_error(name_error)
     relationship_type = relationship_construction["relationship_type"]
-    from_label = relationship_construction["from_node_label"]
-    to_label = relationship_construction["to_node_label"]
-    from_column = relationship_construction["from_node_column"]
-    to_column = relationship_construction["to_node_column"]
     # KG-45: each end matches its node on the resolved property, reading the
     # value from its file column. The name check above has already indexed the
     # required keys, so the ends are present.
     from_end, to_end = relationship_endpoints(relationship_construction)
+    from_label, from_column = from_end.label, from_end.column
+    to_label, to_column = to_end.label, to_end.column
 
     source_file = relationship_construction["source_file"]
     properties = relationship_construction["properties"]
