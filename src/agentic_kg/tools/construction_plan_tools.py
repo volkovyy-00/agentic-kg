@@ -11,11 +11,16 @@ graphdb = get_graphdb()
 
 from .file_tools import APPROVED_FILES, search_file
 from .join_property_check import check_joined_properties_hold_one_value
-from .kg_construction_tools import node_rule_name_error, relationship_rule_name_error
+from .kg_construction_tools import (
+    matched_property_name_error,
+    node_rule_name_error,
+    required_relationship_name_error,
+)
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
 )
+from .relationship_endpoints import is_omitted, relationship_endpoints
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
@@ -25,8 +30,16 @@ APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 # then fails the file check instead.
 _NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
-    "column cannot: if it is a key or join column, choose another column or tell "
-    "the user it cannot be used."
+    "column cannot, and neither can a node property, which is a column of the "
+    "node's own file: if it is a key, a join column or a matched node property, "
+    "choose another column or tell the user it cannot be used."
+)
+# A relationship end can also name the node property it is matched on (KG-45);
+# only a refusal of that property says this.
+_RELATIONSHIP_NAME_HINT = (
+    f"{_NAME_HINT} A matched node property must be spelled exactly as the node "
+    "stores it, with no surrounding spaces; omit it when the node stores the "
+    "value under the column's own name."
 )
 
 #  Tool: Propose Node Construction
@@ -220,35 +233,53 @@ def propose_relationship_construction(
     proposed_properties: list[str],
     tool_context: ToolContext,
     proposed_property_types: Optional[dict] = None,
+    from_node_property: Optional[str] = None,
+    to_node_property: Optional[str] = None,
 ) -> dict:
     """Propose a relationship construction for an approved file that supports the user goal.
 
     The construction will be added to the proposed construction plan dictionary under using proposed_relationship_type as the key.
+
+    Each end reads one column of the approved file and matches that value against
+    one property of the end's node. By default the property has the column's own
+    name. When the column holds the node's key (or another of its properties)
+    under a different name -- including a column holding the key of another node
+    with the same label -- pass that property as from_node_property or
+    to_node_property; the column itself stays the file's column.
 
     The construction entry will be a dictionary with the following keys:
     - property_types: An optional map of property name to declared type, one of
       "integer", "float" or "boolean". A property absent from this map is stored
       as text. Never declare a type for from_node_column or to_node_column: they
       are compared against the stored node property as raw text, so typing them
-      makes the relationship match nothing.
+      makes the relationship match nothing. The same holds for the node property
+      an end is matched on: declare no type for it on its node either.
 
-    The relationship type, both node labels and both join column names must each
-    be a letter or underscore followed by letters, digits or underscores. Cypher
-    keywords such as Order or END are fine. A column whose header breaks this
-    rule (such as 'Order ID') cannot be a join column; renaming it in the
-    proposal will not help.
+    The relationship type, both node labels, both join column names and both node
+    property names must each be a letter or underscore followed by letters, digits
+    or underscores. Cypher keywords such as Order or END are fine. A column whose
+    header breaks this rule (such as 'Order ID') cannot be a join column; renaming
+    it in the proposal will not help.
 
     Args:
         approved_file: The approved file to propose a relationship construction for
         proposed_relationship_type: The proposed label for constructed relationships
         from_node_label: The label of the source node
-        from_node_column: The name of the column within the approved file that will be used to uniquely identify source nodes
+        from_node_column: The column of the approved file whose value identifies
+            the from node of each row
         to_node_label: The label of the target node
-        to_node_column: The name of the column within the approved file that will be used to uniquely identify target nodes
+        to_node_column: The column of the approved file whose value identifies
+            the to node of each row
         proposed_properties: The columns of the approved file to store on each
             constructed relationship
         proposed_property_types: Optional map of property name to "integer",
             "float" or "boolean". Omit or pass {} to store every property as text.
+        from_node_property: Optional. The property of the from node that the
+            from_node_column value is matched against. Omit it when the from node
+            stores that value under the column's own name.
+        to_node_property: Optional. The property of the to node that the
+            to_node_column value is matched against. Omit it when the to node
+            stores that value under the column's own name.
 
     Returns:
         dict: A dictionary containing metadata about the content.
@@ -285,11 +316,24 @@ def propose_relationship_construction(
         # that reads as "typed" and fail on .items(). Absent means text.
         "property_types": proposed_property_types or {},
     }
+    # KG-45: stored only when given, so a plan that never uses the field stays
+    # byte-identical. "" counts as omitted (is_omitted); anything else is kept
+    # so the name check below refuses it rather than dropping it.
+    for side, value in (("from", from_node_property), ("to", to_node_property)):
+        if not is_omitted(value):
+            relationship_construction_rule[f"{side}_node_property"] = value
 
     # Names first, before the file is read (KG-44): see propose_node_construction.
-    name_error = relationship_rule_name_error(relationship_construction_rule)
+    # The same two checks, in the build's order, as relationship_rule_name_error.
+    # The sentence on spelling a matched property comes only with that check's
+    # refusal: for a type, label or column it would point at a field that is fine.
+    name_error = required_relationship_name_error(relationship_construction_rule)
+    hint = _NAME_HINT
+    if name_error is None:
+        name_error = matched_property_name_error(relationship_construction_rule)
+        hint = _RELATIONSHIP_NAME_HINT
     if name_error is not None:
-        return tool_error(f"{name_error} {_NAME_HINT}")
+        return tool_error(f"{name_error} {hint}")
 
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
@@ -330,7 +374,8 @@ def propose_relationship_constructions(
             'approved_file', 'proposed_relationship_type', 'from_node_label',
             'from_node_column', 'to_node_label', 'to_node_column',
             'proposed_properties' and the optional 'proposed_property_types',
-            matching the arguments of 'propose_relationship_construction'
+            'from_node_property' and 'to_node_property', matching the arguments
+            of 'propose_relationship_construction'
 
     Returns:
         dict: Includes a 'status' key ('success' or 'error').
@@ -340,15 +385,23 @@ def propose_relationship_constructions(
     proposed = []
     for index, relationship_construction in enumerate(relationship_constructions):
         result = propose_relationship_construction(
-            relationship_construction.get("approved_file", ""),
-            relationship_construction.get("proposed_relationship_type", ""),
-            relationship_construction.get("from_node_label", ""),
-            relationship_construction.get("from_node_column", ""),
-            relationship_construction.get("to_node_label", ""),
-            relationship_construction.get("to_node_column", ""),
-            relationship_construction.get("proposed_properties", []),
-            tool_context,
-            relationship_construction.get("proposed_property_types", {}),
+            approved_file=relationship_construction.get("approved_file", ""),
+            proposed_relationship_type=relationship_construction.get(
+                "proposed_relationship_type", ""
+            ),
+            from_node_label=relationship_construction.get("from_node_label", ""),
+            from_node_column=relationship_construction.get("from_node_column", ""),
+            to_node_label=relationship_construction.get("to_node_label", ""),
+            to_node_column=relationship_construction.get("to_node_column", ""),
+            proposed_properties=relationship_construction.get(
+                "proposed_properties", []
+            ),
+            tool_context=tool_context,
+            proposed_property_types=relationship_construction.get(
+                "proposed_property_types", {}
+            ),
+            from_node_property=relationship_construction.get("from_node_property"),
+            to_node_property=relationship_construction.get("to_node_property"),
         )
         if result["status"] == "error":
             return tool_error(
@@ -405,6 +458,74 @@ def _bounded_repr(value: Any) -> str:
     return f"{text[:MAX_ECHOED_VALUE_LENGTH]}... ({len(text)} characters)"
 
 
+def _keeps_ends_apart(end, other, **change) -> bool:
+    """Whether `end`, rewritten with `change`, still differs from `other`.
+
+    A refusal's suggested fix that gave a rule two identical ends would only be
+    refused in turn (_identical_ends), so each fix is offered only
+    where this holds.
+    """
+    return not end._replace(**change).same_as(other)
+
+
+def _can_join_on_key(end, other, key) -> bool:
+    """Whether 'join on the key' is a fix for this end: matched on its column's
+    own name, it reads the key column instead, and stays apart from the other end."""
+    return (
+        end.column == end.matched_property
+        and end.column != key
+        and _keeps_ends_apart(end, other, column=key, matched_property=key)
+    )
+
+
+def _either(options: list[str]) -> str:
+    """'Either a, b, or c.', or 'A.' when one option is left."""
+    if len(options) == 1:
+        return f"{options[0][0].upper()}{options[0][1:]}."
+    last = options[-1]
+    joint = ", or, " if last.startswith("if ") else ", or "
+    return f"Either {', '.join(options[:-1])}{joint}{last}."
+
+
+def _identical_ends(
+    key, from_end, to_end, source_file, nodes, unreadable
+) -> str | None:
+    """Both ends read one column and match it on one property of one label (KG-45).
+
+    Each row then links every node holding its value to each node holding it,
+    itself included: on a key, one self-loop per row. On a property holding one
+    value per node no join warning fires at the build.
+    Compared after resolving, so a field omitted and a field set to the column
+    are the same rule. Silent when the node rule is missing or unreadable, and
+    when the node does not carry the property: those are reported already.
+    """
+    if not from_end.same_as(to_end):
+        return None
+    label, prop = from_end.label, from_end.matched_property
+    if not isinstance(label, str) or not isinstance(prop, str):
+        return None
+    node_rule = nodes.get(label)
+    if node_rule is None or label in unreadable:
+        return None
+    node_key = node_rule.get("unique_column_name")
+    if prop not in {node_key, *(node_rule.get("properties") or [])}:
+        return None
+    problem = (
+        f"{key}: both ends read '{from_end.column}' and match it on "
+        f"'{label}.{prop}', so each row would link every '{label}' holding the "
+        f"row's value to each one holding it, itself included."
+    )
+    # As in check_endpoint: with no key there is nothing to name, so the fix
+    # is keying the node first.
+    if not isinstance(node_key, str) or node_key == "":
+        return f"{problem} Key '{label}' by the column that identifies it first."
+    return (
+        f"{problem} If another column of '{source_file}' holds the {node_key} of "
+        f"the related {label}, use that column on that end and set that end's "
+        f"'from_node_property' or 'to_node_property' to '{node_key}'."
+    )
+
+
 def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
     """Find internal inconsistencies between relationship joins and node constructions.
 
@@ -459,9 +580,13 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             f"fixed."
         )
 
-    # Every column a relationship joins on, so a property can be checked against
-    # the whole plan rather than only its own construction. This is what makes a
-    # type retroactively invalid when a later relationship joins on it.
+    # Every node property a relationship matches on (KG-45: the resolved
+    # matched property, never the file column), so a property can be checked
+    # against the whole plan rather than only its own construction. This is
+    # what makes a type retroactively invalid when a later relationship joins
+    # on it. A non-text value cannot be hashed; it is reported below instead.
+    # Each entry keeps the end and its partner, so a refusal can tell which
+    # fixes would leave the two ends identical.
     joined_columns = {}
     for key, rule in construction_plan.items():
         if (
@@ -469,30 +594,66 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        for label, column in (
-            (rule.get("from_node_label"), rule.get("from_node_column")),
-            (rule.get("to_node_label"), rule.get("to_node_column")),
-        ):
-            joined_columns.setdefault((label, column), []).append(key)
+        from_end, to_end = relationship_endpoints(rule)
+        for end, other in ((from_end, to_end), (to_end, from_end)):
+            if isinstance(end.matched_property, str):
+                joined_columns.setdefault((end.label, end.matched_property), []).append(
+                    (key, end, other)
+                )
 
-    def check_endpoint(rel_key, side, label, column):
+    def check_endpoint(rel_key, end, other):
+        label, prop = end.label, end.matched_property
         node_rule = nodes.get(label)
         if node_rule is None:
             problems.append(
-                f"{rel_key}: {side} node label '{label}' has no node construction in the plan."
+                f"{rel_key}: {end.side} node label '{label}' has no node construction in the plan."
             )
             return
         if label in unreadable:
             return
         unique_column = node_rule.get("unique_column_name")
         known_columns = {unique_column, *(node_rule.get("properties") or [])}
-        if column not in known_columns:
+        if prop in known_columns:
+            return
+        others = sorted(c for c in known_columns if c and c != unique_column)
+        field = f"{end.side}_node_property"
+        # Each fix is offered only where following it leaves the two ends
+        # different. Keying the node by this end's property cannot do that when
+        # both ends are already the same: they would stay the same. A node
+        # rule with no key gets no key-based fix, which could only name 'None';
+        # keying it is then the fix.
+        has_key = isinstance(unique_column, str) and unique_column != ""
+        rekey = [] if has_key and end.same_as(other) else [f"key '{label}' by '{prop}'"]
+        match_on_key = has_key and _keeps_ends_apart(
+            end, other, matched_property=unique_column
+        )
+        if prop == end.column:
+            options = list(rekey)
+            if has_key and _can_join_on_key(end, other, unique_column):
+                options.append(f"join on '{unique_column}'")
+            if match_on_key:
+                options.append(
+                    f"if '{prop}' holds the '{unique_column}' of a '{label}' under "
+                    f"another name, keep the column and set '{field}' to "
+                    f"'{unique_column}'"
+                )
             problems.append(
-                f"{rel_key}: {side} join column '{column}' is not a column of the "
+                f"{rel_key}: {end.side} join column '{prop}' is not a column of the "
                 f"'{label}' node, which is keyed by '{unique_column}' with properties "
-                f"{sorted(c for c in known_columns if c and c != unique_column)}. "
-                f"This join would match zero rows. Either key '{label}' by '{column}' "
-                f"or join on '{unique_column}'."
+                f"{others}. This join would match zero rows. {_either(options)}"
+            )
+        else:
+            target = (
+                f"'{unique_column}' or one of those properties"
+                if match_on_key
+                else "one of those properties"
+            )
+            set_property = f"set '{field}' to {target}"
+            problems.append(
+                f"{rel_key}: the {end.side} end matches its column '{end.column}' on "
+                f"'{label}.{prop}', but '{prop}' is not a property of the '{label}' "
+                f"node, which is keyed by '{unique_column}' with properties {others}. "
+                f"This join would match zero rows. {_either([set_property, *rekey])}"
             )
 
     for key, rule in construction_plan.items():
@@ -501,10 +662,37 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        check_endpoint(
-            key, "from", rule.get("from_node_label"), rule.get("from_node_column")
+        from_end, to_end = relationship_endpoints(rule)
+        for end, other in ((from_end, to_end), (to_end, from_end)):
+            property_given = not is_omitted(rule.get(f"{end.side}_node_property"))
+            if property_given and not isinstance(end.column, str):
+                # The checks below read the given property, never the column,
+                # but the build's name check refuses a non-text column too.
+                problems.append(
+                    f"{key}: '{end.side}_node_column' must be a column name, got "
+                    f"{_bounded_repr(end.column)}. The {end.side} end reads "
+                    f"nothing until it is one."
+                )
+            if not isinstance(end.matched_property, str):
+                # Name the field that supplied the value: with the property
+                # omitted, it came from the column.
+                field = (
+                    f"{end.side}_node_property"
+                    if property_given
+                    else f"{end.side}_node_column"
+                )
+                problems.append(
+                    f"{key}: '{field}' must be a property name, got "
+                    f"{_bounded_repr(end.matched_property)}. The {end.side} end "
+                    f"matches nothing until it is one."
+                )
+                continue
+            check_endpoint(key, end, other)
+        identical = _identical_ends(
+            key, from_end, to_end, rule.get("source_file"), nodes, unreadable
         )
-        check_endpoint(key, "to", rule.get("to_node_label"), rule.get("to_node_column"))
+        if identical is not None:
+            problems.append(identical)
 
     # Declared property types. Three rules, all refusing at approval time rather
     # than failing much later at import time.
@@ -545,42 +733,62 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 )
 
             if rule.get("construction_type") == "relationship":
-                joining = (
-                    [key]
-                    if name
-                    in (rule.get("from_node_column"), rule.get("to_node_column"))
-                    else []
+                from_end, to_end = relationship_endpoints(rule)
+                joining = [key] if name in (from_end.column, to_end.column) else []
+                own_end, other_end = (
+                    (from_end, to_end)
+                    if name == from_end.column
+                    else (to_end, from_end)
                 )
-                own_node_label = (
-                    rule.get("from_node_label")
-                    if name == rule.get("from_node_column")
-                    else rule.get("to_node_label")
-                )
+                own_node_label = own_end.label
                 own_node_rule = nodes.get(own_node_label)
                 join_target = (
                     own_node_rule.get("unique_column_name") if own_node_rule else None
                 )
+                ends = [(own_end, other_end)]
+                # The typed value is the file column itself, so matching it on
+                # another property would still compare a converted value.
+                can_rematch = False
             else:
                 label = rule.get("label", key)
-                joining = joined_columns.get((label, name), [])
+                joins = joined_columns.get((label, name), [])
+                joining = [rel_key for rel_key, _end, _other in joins]
+                ends = [(end, other) for _rel_key, end, other in joins]
                 own_node_label = label
                 join_target = unique_column
+                can_rematch = True
             if joining:
-                if join_target is not None:
-                    second_exit = (
-                        f"join {', '.join(sorted(joining))} on '{join_target}' instead"
-                    )
-                else:
-                    second_exit = (
+                # A rule whose two ends both match this property joins on it
+                # once, not twice.
+                rels = ", ".join(sorted(set(joining)))
+                # Each fix is offered only where following it, on every end
+                # that joins here, leaves that rule's two ends different. A
+                # typed key is already what both key fixes would match on.
+                options = [f"drop the type for '{name}'"]
+                if join_target is None:
+                    options.append(
                         f"'{own_node_label}' has no node construction in this plan, "
                         f"so there is no identifier to join on instead"
                     )
+                elif name != join_target:
+                    if all(
+                        _can_join_on_key(end, other, join_target) for end, other in ends
+                    ):
+                        options.append(f"join {rels} on '{join_target}' instead")
+                    if can_rematch and all(
+                        _keeps_ends_apart(end, other, matched_property=join_target)
+                        for end, other in ends
+                    ):
+                        options.append(
+                            f"if the column {rels} reads holds the '{join_target}' "
+                            f"of a '{own_node_label}' under another name, set that "
+                            f"end's 'from_node_property' or 'to_node_property' to "
+                            f"'{join_target}'"
+                        )
                 problems.append(
-                    f"{key}: '{name}' carries a declared type but "
-                    f"{', '.join(sorted(joining))} joins on it. Join columns are "
-                    f"compared as raw CSV text, so a typed column matches zero "
-                    f"rows with no error. Either drop the type for '{name}', or "
-                    f"{second_exit}."
+                    f"{key}: '{name}' carries a declared type but {rels} joins on "
+                    f"it. Join columns are compared as raw CSV text, so a typed "
+                    f"column matches zero rows with no error. {_either(options)}"
                 )
 
     return problems
@@ -714,13 +922,15 @@ def _read_plan_for_approval(
 def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Approve the proposed construction plan, if it can actually be built.
 
-    Approval is refused when a relationship construction joins on a column the
-    referenced node does not carry, or names an endpoint label that has no node
-    construction in the plan, or joins on a node property that holds more than
-    one value per node, or when it leaves an approved file's reference
-    column with no node in the plan that carries it reachably -- in every one
-    of these cases the plan cannot build the graph that was described to the
-    user no matter what was said in conversation.
+    Approval is refused when a relationship construction matches an end on a
+    property the referenced node does not carry, or reads one column at both
+    ends and matches it on the same node property (linking every node to itself),
+    or names an endpoint label that has no node construction in the plan, or
+    joins on a node property that holds more than one value per node, or when it
+    leaves an approved file's reference column with no node in the plan that
+    carries it reachably -- in every one of these cases the plan cannot build
+    the graph that was described to the user no matter what was said in
+    conversation.
     """
     construction_plan, problems, unverified = _read_plan_for_approval(tool_context)
     if construction_plan is None:
@@ -812,7 +1022,8 @@ def get_proposed_construction_plan_with_approval_check(
                 "This plan can be approved right now: "
                 "'approve_proposed_construction_plan' will accept it as it stands. "
                 "That is all this tool knows: it checks joins, endpoint labels, "
-                "typed columns, whether each joined node property holds one value "
+                "typed columns, relationships whose two ends are the same node, "
+                "whether each joined node property holds one value "
                 "per node, and whether every approved file's reference "
                 "columns can still be reached, not whether the plan is the right "
                 "one. When your instruction has you presenting this plan, show it "

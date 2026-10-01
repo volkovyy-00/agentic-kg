@@ -199,6 +199,17 @@ legitimately match those. The key-group reading counts a row with no cell for th
 value, and a present blank cell as a value, because the loader skips the write for the first and
 overwrites with the second (KG-22).
 
+A relationship end reads one file column and matches its value on one node property: `<side>_node_property`,
+defaulting to the column's own name (KG-45). Every reader of a relationship's ends goes through
+`relationship_endpoints` (`tools/relationship_endpoints.py`), so the node-side checks (an endpoint's property
+exists, a typed property is not joined, a joined property holds one value) see the matched property, never the
+file column. Only the typed-relationship-property refusal stays on the file columns, since coercion would change
+the value the join reads. `check_construction_plan_consistency` also refuses a rule whose two ends read the same
+column and match it on the same node property: every row would link each node holding its value to every node
+holding it, itself included (on a key, one self-loop per row), and on a property holding one value per node no join
+warning fires at the build. Its own refusal messages offer a fix only where following it
+keeps the rule's two ends different.
+
 ### Handoff confirmation gates
 
 Three phase exits are gated so a `finished` transfer needs more than the model's own reading of the
@@ -313,23 +324,32 @@ ragged row's absent key. A typed column failing on more than half a batch's non-
 that rule with an error rather than half-typing the property — but only once at least
 `TYPE_FAILURE_MIN_SAMPLE` (2) values are present, since one bad value out of one row cannot tell a
 wrong type declaration from a single data-entry typo. Identifiers and any column a
-relationship joins on may not be typed; `check_construction_plan_consistency` refuses such a plan at
+relationship joins on or node property an end is matched on may not be typed; `check_construction_plan_consistency` refuses such a plan at
 approval time.
 
-Labels, relationship types and key/join column names, which Cypher cannot parameterise, are checked with
+Labels, relationship types and key/join column and matched node property names, which Cypher cannot parameterise, are checked with
 `common/cypher_identifiers.checked()` (a plain identifier — letter or underscore, then letters, digits or
 underscores; Cypher keywords such as `Order` are allowed) and written into the query text backtick-quoted with
 `quote()` — never passed as Cypher `$()` dynamic labels, which cannot use a uniqueness index. Names read back
 from the database are only quoted, never checked. The rule is enforced where names enter the plan and again at the
 build, not among the approval-time plan checks: the propose tools refuse a bad name through `node_rule_name_error`
-/ `relationship_rule_name_error` (`tools/kg_construction_tools.py`), with the build's own message followed by a
-hint that a label or type can be renamed but a file column cannot, before reading the file, and those tools (plus
+/ `relationship_rule_name_error` (`tools/kg_construction_tools.py`; the relationship tool calls its two parts in
+turn), with the build's own message followed by a
+hint that a label or type can be renamed but a file column cannot (and, for a bad matched node property, how
+to spell or omit it), before reading the file, and those tools (plus
 the remove tools) are the only writers of the plan (KG-44). The build keeps its own check as a second guard, since
 `load_nodes_from_csv` and `create_uniqueness_constraint` can be called directly. A new path that writes plan rules
 must run those helpers too, or move them into `check_construction_plan_consistency`. The loaders' `ToolResult`s
 include `nodes_in_graph` / `relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
 collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
 wrote, so a re-run against a non-empty graph will include prior data too.
+
+The relationship loader matches each end's node on its matched property with the file column's value, and skips
+a row whose value is blank on either join column (`value_types.is_blank`: no cell, empty or whitespace only)
+before coercion. `rows_skipped` counts those rows. A value that is not blank is matched as the file holds it,
+padding included, like the raw text the node loader stored, so `" 8"` matches only a node property padded alike.
+The under- and over-match warnings compare `rows_matched` with the rows left, and a file blank in every row gets
+one "nothing was linked" warning instead.
 
 ### Grounding: `graphrag_agent_v2`
 

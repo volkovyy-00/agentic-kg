@@ -590,3 +590,183 @@ def test_over_matching_join_warns_without_changing_what_is_written(
     )
     assert rels["records"][0]["c"] == 64
     assert loaded["relationships_in_graph"] == 64
+
+
+# --- KG-45: a column holding another row's key under a different name ---------
+
+
+# The rows of data/traders-utf8/employees.csv that matter here, written inline:
+# that folder is excluded locally and is not in git, so a fresh clone lacks it.
+# 9 rows; employee 2 has a blank reportsTo; the other 8 name an employeeID here.
+EMPLOYEES_CSV = (
+    "employeeID,employeeName,reportsTo\n"
+    "1,Nancy Davolio,8\n"
+    "2,Andrew Fuller,\n"
+    "3,Janet Leverling,8\n"
+    "4,Margaret Peacock,8\n"
+    "5,Steven Buchanan,2\n"
+    "6,Michael Suyama,5\n"
+    "7,Robert King,5\n"
+    "8,Laura Callahan,2\n"
+    "9,Anne Dodsworth,5\n"
+)
+
+
+@pytest.fixture
+def employees_source(neo4j_graph, tmp_path, monkeypatch):
+    """Point SOURCE_URI at a tmp folder holding EMPLOYEES_CSV. Depends on
+    neo4j_graph so it runs after that fixture sets SOURCE_URI to data/bom, and
+    wins."""
+    (tmp_path / "employees.csv").write_text(EMPLOYEES_CSV)
+    from agentic_kg.common.config import reset_settings
+
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    reset_settings()
+    yield
+    reset_settings()
+
+
+EMPLOYEE_PLAN = {
+    "Employee": {
+        "construction_type": "node",
+        "source_file": "employees.csv",
+        "label": "Employee",
+        "unique_column_name": "employeeID",
+        "properties": ["employeeName"],
+    },
+    "REPORTS_TO": {
+        "construction_type": "relationship",
+        "source_file": "employees.csv",
+        "relationship_type": "REPORTS_TO",
+        "from_node_label": "Employee",
+        "from_node_column": "employeeID",
+        "to_node_label": "Employee",
+        "to_node_column": "reportsTo",
+        "to_node_property": "employeeID",
+        "properties": [],
+    },
+}
+
+
+def test_a_column_holding_another_rows_key_links_each_row_to_that_row(
+    neo4j_graph, employees_source, monkeypatch
+):
+    """AC1 / AC4: employees.csv has 9 rows, 1 with a blank reportsTo;
+    the other 8 name an employeeID in the file. Exact counts, not 'some'."""
+    import agentic_kg.tools.cypher_tools as cypher_tools
+    import agentic_kg.tools.kg_construction_tools as kg
+    from agentic_kg.tools.construction_plan_tools import (
+        check_construction_plan_consistency,
+    )
+
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+
+    def count(query):
+        return neo4j_graph.send_query(query)["records"][0]["c"]
+
+    assert check_construction_plan_consistency(EMPLOYEE_PLAN) == []
+
+    result = kg.construct_domain_graph(EMPLOYEE_PLAN)
+    assert result["status"] == "success", result.get("error_message")
+    assert "warnings" not in result, result.get("warnings")
+
+    loaded = result["domain_graph_constructed"]["REPORTS_TO"]["rows_loaded"]
+    assert loaded["rows"] == 9
+    assert loaded["rows_skipped"] == 1
+    assert loaded["rows_matched"] == 8
+    assert loaded["relationships_in_graph"] == 8
+
+    assert (
+        count("MATCH (:Employee)-[r:REPORTS_TO]->(:Employee) RETURN count(r) AS c") == 8
+    )
+    assert count("MATCH (e:Employee)-[r:REPORTS_TO]->(e) RETURN count(r) AS c") == 0
+    assert (
+        count(
+            "MATCH (e:Employee)-[:REPORTS_TO]->() WITH e, count(*) AS n "
+            "WHERE n <> 1 RETURN count(e) AS c"
+        )
+        == 0
+    ), "every employee with a manager has exactly one"
+    assert (
+        count(
+            "MATCH (e:Employee {employeeID: '2'}) "
+            "WHERE NOT (e)-[:REPORTS_TO]->() RETURN count(e) AS c"
+        )
+        == 1
+    ), "the blank reportsTo row links nothing"
+
+
+@pytest.fixture
+def parts_source(neo4j_graph, tmp_path, monkeypatch):
+    (tmp_path / "parts.csv").write_text(
+        "partID,partName,madeBy\nP1,Bolt,S1\nP2,Nut,S2\nP3,Washer,\nP4,Pin,S1\n"
+    )
+    (tmp_path / "suppliers.csv").write_text("supplierID,name\nS1,Acme\nS2,Globex\n")
+    from agentic_kg.common.config import reset_settings
+
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    reset_settings()
+    yield
+    reset_settings()
+
+
+PARTS_PLAN = {
+    "Part": {
+        "construction_type": "node",
+        "source_file": "parts.csv",
+        "label": "Part",
+        "unique_column_name": "partID",
+        "properties": ["partName"],
+    },
+    "Supplier": {
+        "construction_type": "node",
+        "source_file": "suppliers.csv",
+        "label": "Supplier",
+        "unique_column_name": "supplierID",
+        "properties": ["name"],
+    },
+    "MADE_BY": {
+        "construction_type": "relationship",
+        "source_file": "parts.csv",
+        "relationship_type": "MADE_BY",
+        "from_node_label": "Part",
+        "from_node_column": "partID",
+        "to_node_label": "Supplier",
+        "to_node_column": "madeBy",
+        "to_node_property": "supplierID",
+        "properties": [],
+    },
+}
+
+
+def test_a_column_holding_another_labels_key_links_across_labels(
+    neo4j_graph, parts_source, monkeypatch
+):
+    import agentic_kg.tools.cypher_tools as cypher_tools
+    import agentic_kg.tools.kg_construction_tools as kg
+    from agentic_kg.tools.construction_plan_tools import (
+        check_construction_plan_consistency,
+    )
+
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+
+    def count(query):
+        return neo4j_graph.send_query(query)["records"][0]["c"]
+
+    assert check_construction_plan_consistency(PARTS_PLAN) == []
+    result = kg.construct_domain_graph(PARTS_PLAN)
+    assert result["status"] == "success", result.get("error_message")
+    assert "warnings" not in result, result.get("warnings")
+
+    loaded = result["domain_graph_constructed"]["MADE_BY"]["rows_loaded"]
+    assert loaded["rows_skipped"] == 1
+    assert count("MATCH (:Part)-[r:MADE_BY]->(:Supplier) RETURN count(r) AS c") == 3
+    assert (
+        count(
+            "MATCH (:Part {partID: 'P4'})-[:MADE_BY]->(:Supplier {supplierID: 'S1'}) "
+            "RETURN count(*) AS c"
+        )
+        == 1
+    )

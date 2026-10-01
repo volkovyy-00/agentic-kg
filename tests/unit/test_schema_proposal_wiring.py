@@ -125,6 +125,22 @@ def test_proposed_property_types_stays_optional_in_the_declaration(fn):
     assert "proposed_property_types" not in required
 
 
+def test_the_matched_properties_stay_optional_in_the_declaration():
+    """Same contract as proposed_property_types: a propose call that leaves the
+    new fields out must not be rejected by the declaration."""
+    from google.adk.tools.function_tool import FunctionTool
+
+    schema = (
+        FunctionTool(propose_relationship_construction)
+        ._get_declaration()
+        .parameters_json_schema
+        or {}
+    )
+    for name in ("from_node_property", "to_node_property"):
+        assert name in schema.get("properties", {}), name
+        assert name not in schema.get("required", []), name
+
+
 @pytest.mark.parametrize(
     "fn", [propose_node_construction, propose_relationship_construction]
 )
@@ -467,3 +483,66 @@ def test_the_coordinator_splits_a_second_retry_on_the_read_tool():
 def test_the_coordinator_reads_the_stopped_kind():
     words = _instruction_words()
     assert "calls its verdict a mechanical check finding" in words
+
+
+# --- KG-45 ---------------------------------------------------------------------
+
+BOTH = ("schema_proposal_agent_v1", "schema_critic_agent_v1")
+
+
+def _flat(name):
+    """The instruction with whitespace collapsed, so a pinned phrase may wrap."""
+    return " ".join(variants[name]["instruction"].split())
+
+
+@pytest.mark.parametrize("name", BOTH)
+def test_both_instructions_explain_the_matched_property(name):
+    instruction = _flat(name)
+    assert "'from_node_property'" in instruction
+    assert "'to_node_property'" in instruction
+    assert "never the relationship file's column" in instruction, "collapse_check"
+    assert "all three together" in instruction, "a swap moves the properties too"
+
+
+def test_the_revision_paragraph_names_the_matched_properties():
+    instruction = _flat("schema_proposal_agent_v1")
+    assert "a re-proposal that omits them" in instruction
+    assert "set it to the new identifier" in instruction
+
+
+def test_the_proposer_says_how_to_write_a_reference_under_another_name():
+    instruction = _flat("schema_proposal_agent_v1")
+    assert "holds another node's key under a different name" in instruction
+
+
+def test_the_proposers_steps_keep_a_matched_property_untyped():
+    """The numbered step the model follows says it, not only the rules block."""
+    instruction = _flat("schema_proposal_agent_v1")
+    step = instruction[instruction.index("8. Never declare a type") :]
+    step = step[: step.index("9. ")]
+    assert "any relationship end is matched on" in step
+    assert "joins on or is matched on a typed property" in step
+
+
+def test_the_critic_rejects_a_reference_matched_under_its_own_name():
+    instruction = _flat("schema_critic_agent_v1")
+    assert "links nodes sharing the value" in instruction
+
+
+@pytest.mark.parametrize("name", BOTH)
+@pytest.mark.parametrize("word", ["employee", "manager", "reportsto", "northwind"])
+def test_no_instruction_borrows_one_datasets_vocabulary(name, word):
+    assert word not in variants[name]["instruction"].lower()
+
+
+def test_the_critic_instruction_renders_against_a_bare_state():
+    """A literal {word} would be read as a state key and raise KeyError,
+    killing the critic's turn. The critic has no placeholders, so rendering
+    must hand back the template unchanged."""
+    ctx = SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            session=SimpleNamespace(state={}), artifact_service=None
+        )
+    )
+    template = variants["schema_critic_agent_v1"]["instruction"]
+    assert asyncio.run(inject_session_state(template, ctx)) == template

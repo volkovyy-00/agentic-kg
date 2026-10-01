@@ -320,3 +320,18 @@ def test_step_six_gloss_covers_over_matching_too():
     # The asymmetry is deliberate: under-match is a half-the-rows threshold,
     # over-match has no slack at all.
     assert "far below or far above" not in instruction
+
+
+def test_step_six_reports_skipped_rows_as_a_count_not_a_warning():
+    """KG-45: rows with a blank join value are counted, never warned about, and
+    the gloss keeps the ban on calling match counts pairs."""
+    from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent.variants import (
+        variants as construction_variants,
+    )
+
+    instruction = " ".join(
+        construction_variants["graph_construction_agent_v1"]["instruction"].split()
+    )
+    assert "'rows_skipped'" in instruction
+    assert "not a warning" in instruction
+    assert "pair" not in instruction.lower()

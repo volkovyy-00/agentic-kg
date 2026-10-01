@@ -98,6 +98,8 @@ variants = {
            so the graph usually holds fewer. Report node counts from 'nodes_in_graph' and relationship
            counts from 'relationships_in_graph'. If either is absent, say how many rows were processed
            and count the label or type yourself with 'read_neo4j_cypher' before quoting a number.
+           If a relationship's 'rows_skipped' is above 0, say that many of its rows had a blank join value
+           and created no relationship. That is a count, not a warning: never put it in a warnings section.
         7. invite the user to try some questions that you'll answer using the 'read_neo4j_cypher' tool.
            Say plainly, once, that you are the one answering: you run Cypher directly and do not carry
            the retrieval agent's grounding checks, so this is a quick sanity check rather than the

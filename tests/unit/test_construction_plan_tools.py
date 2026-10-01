@@ -40,6 +40,7 @@ from agentic_kg.tools.file_tools import APPROVED_FILES
 from agentic_kg.tools.reference_reachability import (
     check_reference_columns_are_reachable,
 )
+from agentic_kg.tools.relationship_endpoints import Endpoint
 
 
 class FakeToolContext:
@@ -1692,14 +1693,26 @@ CHARACTER_RULE = (
 # can be renamed, a file column cannot.
 NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
-    "column cannot: if it is a key or join column, choose another column or tell "
-    "the user it cannot be used."
+    "column cannot, and neither can a node property, which is a column of the "
+    "node's own file: if it is a key, a join column or a matched node property, "
+    "choose another column or tell the user it cannot be used."
+)
+RELATIONSHIP_NAME_HINT = (
+    f"{NAME_HINT} A matched node property must be spelled exactly as the node "
+    "stores it, with no surrounding spaces; omit it when the node stores the "
+    "value under the column's own name."
 )
 
 
 def _proposal(build_text):
     """What the propose tools report: the build's own text, then NAME_HINT."""
     return f"{build_text} {NAME_HINT}"
+
+
+def _rel_proposal(build_text):
+    """What a relationship propose tool reports for a bad matched node property:
+    the hint also says how to spell or omit it."""
+    return f"{build_text} {RELATIONSHIP_NAME_HINT}"
 
 
 def _node_rule(label, key):
@@ -1948,4 +1961,742 @@ def test_a_non_string_name_is_refused_not_crashed_on(ctx, any_column_exists):
     assert result["status"] == "error"
     assert result["error_message"] == _proposal(
         f"Invalid label: '123'. {CHARACTER_RULE}"
+    )
+
+
+# --- KG-45: an end may name the node property its column is matched on --------
+
+
+def _propose_item(ctx, **kwargs):
+    """Item.supersededBy holds another item's itemID."""
+    return propose_relationship_construction(
+        "items.csv",
+        "SUPERSEDED_BY",
+        "Item",
+        "itemID",
+        "Item",
+        "supersededBy",
+        [],
+        ctx,
+        **kwargs,
+    )
+
+
+def _item_rule(**extra):
+    """The rule propose_relationship_construction stores for _propose_item."""
+    rule = {
+        "construction_type": "relationship",
+        "source_file": "items.csv",
+        "relationship_type": "SUPERSEDED_BY",
+        "from_node_label": "Item",
+        "from_node_column": "itemID",
+        "to_node_label": "Item",
+        "to_node_column": "supersededBy",
+        "properties": [],
+        "property_types": {},
+    }
+    rule.update(extra)
+    return rule
+
+
+def test_the_matched_property_is_stored_on_its_end(ctx, any_column_exists):
+    result = _propose_item(ctx, to_node_property="itemID")
+    assert result["status"] == "success", result.get("error_message")
+    rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"]
+    assert rule == _item_rule(to_node_property="itemID")
+    assert "from_node_property" not in rule
+
+
+@pytest.mark.parametrize("omitted", [None, ""])
+def test_an_omitted_matched_property_leaves_no_key(ctx, any_column_exists, omitted):
+    """A plan that never uses the field stays byte-identical to before KG-45."""
+    _propose_item(ctx, from_node_property=omitted, to_node_property=omitted)
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"] == _item_rule()
+
+
+@pytest.mark.parametrize(
+    "value", ["has space", "1id", " itemID", "item-id", [], 0, {}], ids=repr
+)
+def test_a_bad_matched_property_is_refused_before_the_file_is_read(
+    ctx, monkeypatch, value
+):
+    searched = []
+    _only_these_columns_exist(monkeypatch, {"itemID", "supersededBy"}, searched)
+    result = _propose_item(ctx, to_node_property=value)
+    expected = (
+        f"Invalid property name in 'to_node_property': '{value}'. {CHARACTER_RULE}"
+    )
+    assert result["status"] == "error"
+    assert result["error_message"] == _rel_proposal(expected)
+    # The build refuses the stored shape with the same text.
+    assert result["error_message"] == _rel_proposal(
+        kg.import_relationships(_item_rule(to_node_property=value))["error_message"]
+    )
+    assert searched == [], "a bad name must be reported without reading the file"
+    assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
+
+
+def test_a_bad_matched_property_names_its_end(ctx, any_column_exists):
+    result = _propose_item(ctx, from_node_property="item id")
+    assert result["error_message"] == _rel_proposal(
+        f"Invalid property name in 'from_node_property': 'item id'. {CHARACTER_RULE}"
+    )
+
+
+def test_a_bad_column_is_reported_before_a_bad_matched_property(ctx, any_column_exists):
+    result = propose_relationship_construction(
+        "items.csv",
+        "SUPERSEDED_BY",
+        "Item",
+        "itemID",
+        "Item",
+        "superseded by",
+        [],
+        ctx,
+        to_node_property="has space",
+    )
+    assert result["error_message"] == _proposal(
+        f"Invalid column name: 'superseded by'. {CHARACTER_RULE}"
+    )
+
+
+def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkeypatch):
+    """The matched property is a node property: parts.csv has no supplierID
+    column and must not need one (KG-50 edits the file-column check next)."""
+    searched = []
+    _only_these_columns_exist(monkeypatch, {"partID", "madeBy"}, searched)
+    result = propose_relationship_construction(
+        "parts.csv",
+        "MADE_BY",
+        "Part",
+        "partID",
+        "Supplier",
+        "madeBy",
+        [],
+        ctx,
+        to_node_property="supplierID",
+    )
+    assert result["status"] == "success", result.get("error_message")
+    assert searched == ["partID", "madeBy"]
+
+
+def test_a_relationship_batch_keeps_each_entrys_matched_property(
+    ctx, any_column_exists
+):
+    """A test that fails if a batch entry's field is dropped. The typed
+    property sits next to the new fields, so a positional call that shifted
+    proposed_property_types would fail here too."""
+    result = propose_relationship_constructions(
+        [
+            {
+                "approved_file": "items.csv",
+                "proposed_relationship_type": "SUPERSEDED_BY",
+                "from_node_label": "Item",
+                "from_node_column": "itemID",
+                "to_node_label": "Item",
+                "to_node_column": "supersededBy",
+                "proposed_properties": ["rank"],
+                "proposed_property_types": {"rank": "integer"},
+                "to_node_property": "itemID",
+            },
+            {
+                "approved_file": "parts.csv",
+                "proposed_relationship_type": "MAKES",
+                "from_node_label": "Supplier",
+                "from_node_column": "madeBy",
+                "from_node_property": "supplierID",
+                "to_node_label": "Part",
+                "to_node_column": "partID",
+                "proposed_properties": [],
+            },
+        ],
+        ctx,
+    )
+    assert result["status"] == "success", result.get("error_message")
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert plan["SUPERSEDED_BY"]["to_node_property"] == "itemID"
+    assert plan["SUPERSEDED_BY"]["property_types"] == {"rank": "integer"}
+    assert "from_node_property" not in plan["SUPERSEDED_BY"]
+    assert plan["MAKES"]["from_node_property"] == "supplierID"
+    assert "to_node_property" not in plan["MAKES"]
+
+
+def test_an_empty_matched_property_in_a_batch_entry_is_omitted(ctx, any_column_exists):
+    propose_relationship_constructions(
+        [
+            {
+                "approved_file": "items.csv",
+                "proposed_relationship_type": "SUPERSEDED_BY",
+                "from_node_label": "Item",
+                "from_node_column": "itemID",
+                "from_node_property": "",
+                "to_node_label": "Item",
+                "to_node_column": "supersededBy",
+                "to_node_property": "",
+                "proposed_properties": [],
+            }
+        ],
+        ctx,
+    )
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"] == _item_rule()
+
+
+def test_the_batch_key_list_names_the_matched_properties():
+    doc = propose_relationship_constructions.__doc__ or ""
+    assert "'from_node_property'" in doc
+    assert "'to_node_property'" in doc
+
+
+# --- KG-45 approval: checks read the matched property ------------------------
+
+
+def _item_plan(drop=(), **rel_overrides):
+    """Item keyed by itemID; SUPERSEDED_BY reads supersededBy and matches it on
+    Item.itemID. `drop` removes relationship keys; overrides patch them."""
+    rel = {
+        "construction_type": "relationship",
+        "source_file": "items.csv",
+        "relationship_type": "SUPERSEDED_BY",
+        "from_node_label": "Item",
+        "from_node_column": "itemID",
+        "to_node_label": "Item",
+        "to_node_column": "supersededBy",
+        "to_node_property": "itemID",
+        "properties": [],
+        "property_types": {},
+    }
+    rel.update(rel_overrides)
+    for key in drop:
+        rel.pop(key, None)
+    return {
+        "Item": {
+            "construction_type": "node",
+            "source_file": "items.csv",
+            "label": "Item",
+            "unique_column_name": "itemID",
+            "properties": ["title", "rank"],
+            "property_types": {},
+        },
+        "SUPERSEDED_BY": rel,
+    }
+
+
+def test_a_column_matched_on_the_key_under_another_name_is_consistent():
+    assert check_construction_plan_consistency(_item_plan()) == []
+
+
+@pytest.mark.parametrize(
+    "drop, overrides",
+    [
+        (("to_node_property",), {"to_node_column": "itemID"}),
+        ((), {"to_node_column": "itemID", "to_node_property": "itemID"}),
+        (
+            (),
+            {
+                "to_node_column": "itemID",
+                "to_node_property": "itemID",
+                "from_node_property": "itemID",
+            },
+        ),
+    ],
+    ids=["field-omitted", "field-set-to-key", "both-fields-set"],
+)
+def test_identical_ends_on_the_key_are_refused(drop, overrides):
+    """Resolving first makes 'omitted' and 'set to the key' the same rule."""
+    problems = check_construction_plan_consistency(_item_plan(drop, **overrides))
+    assert len(problems) == 1, problems
+    problem = problems[0]
+    for fragment in (
+        "SUPERSEDED_BY: both ends read 'itemID'",
+        "'Item.itemID'",
+        "itself included",
+        "another column of 'items.csv'",
+        "'from_node_property' or 'to_node_property'",
+    ):
+        assert fragment in problem, fragment
+
+
+def test_a_rule_differing_only_by_the_matched_property_is_accepted():
+    plan = _item_plan(to_node_column="itemID", to_node_property="title")
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_identical_ends_on_a_non_key_property_are_refused_too():
+    """A property holding one value per node matches each row's node to itself,
+    and no join warning fires at the build, so the key is not special."""
+    plan = _item_plan(
+        ("to_node_property",), from_node_column="title", to_node_column="title"
+    )
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1, problems
+    for fragment in (
+        "SUPERSEDED_BY: both ends read 'title'",
+        "'Item.title'",
+        "itself included",
+        "set that end's 'from_node_property' or 'to_node_property' to 'itemID'",
+    ):
+        assert fragment in problems[0], fragment
+
+
+@pytest.mark.parametrize("no_key", [None, ""], ids=repr)
+def test_identical_ends_on_a_node_without_a_key_are_told_to_key_it(no_key):
+    """There is no key to name, so the fix cannot be 'set it to the key'."""
+    plan = _item_plan(
+        ("to_node_property",), from_node_column="title", to_node_column="title"
+    )
+    plan["Item"]["unique_column_name"] = no_key
+    identical = [
+        p for p in check_construction_plan_consistency(plan) if "itself included" in p
+    ]
+    assert len(identical) == 1, identical
+    assert identical[0].endswith("Key 'Item' by the column that identifies it first.")
+    assert "None" not in identical[0]
+    assert "_node_property" not in identical[0]
+
+
+def test_ends_on_different_labels_are_never_identical():
+    plan = _item_plan(("to_node_property",), to_node_column="itemID")
+    plan["Bundle"] = {
+        "construction_type": "node",
+        "source_file": "bundles.csv",
+        "label": "Bundle",
+        "unique_column_name": "itemID",
+        "properties": [],
+    }
+    plan["SUPERSEDED_BY"]["to_node_label"] = "Bundle"
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_identical_ends_on_a_missing_node_rule_give_only_the_missing_node_problem():
+    plan = _item_plan(("to_node_property",), to_node_column="itemID")
+    del plan["Item"]
+    problems = check_construction_plan_consistency(plan)
+    assert problems
+    assert all("has no node construction" in p for p in problems), problems
+
+
+def test_identical_ends_on_an_unreadable_node_rule_give_no_identical_refusal():
+    plan = _item_plan(("to_node_property",), to_node_column="itemID")
+    plan["Item"]["properties"] = "title"
+    problems = check_construction_plan_consistency(plan)
+    assert not any("itself" in p for p in problems), problems
+
+
+def test_a_matched_property_the_node_does_not_carry_is_refused():
+    """AC2, with the field set: the message names the property, the column and
+    both fixes."""
+    problems = check_construction_plan_consistency(_item_plan(to_node_property="sku"))
+    assert len(problems) == 1, problems
+    for fragment in (
+        "'Item.sku'",
+        "'supersededBy'",
+        "zero rows",
+        "set 'to_node_property' to 'itemID'",
+        "key 'Item' by 'sku'",
+    ):
+        assert fragment in problems[0], fragment
+
+
+def test_a_field_less_column_the_node_does_not_carry_names_the_new_fix():
+    """The old substrings survive and the new way out is offered."""
+    problems = check_construction_plan_consistency(_item_plan(("to_node_property",)))
+    assert len(problems) == 1, problems
+    for fragment in (
+        "to join column 'supersededBy'",
+        "zero rows",
+        "set 'to_node_property' to 'itemID'",
+    ):
+        assert fragment in problems[0], fragment
+
+
+def test_a_typed_node_property_matched_through_the_field_is_refused():
+    """AC3: joined_columns is keyed by the matched property."""
+    plan = _item_plan(to_node_property="rank")
+    plan["Item"]["property_types"] = {"rank": "integer"}
+    problems = check_construction_plan_consistency(plan)
+    assert any(
+        "Item: 'rank' carries a declared type but SUPERSEDED_BY joins on it" in p
+        for p in problems
+    ), problems
+
+
+def test_a_typed_node_property_named_like_a_file_column_is_not_refused():
+    """The file column 'rank' is matched on itemID, so Item.rank is not joined."""
+    plan = _item_plan(to_node_column="rank")
+    plan["Item"]["property_types"] = {"rank": "integer"}
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_a_typed_relationship_property_on_a_join_file_column_is_still_refused():
+    plan = _item_plan(
+        properties=["supersededBy"], property_types={"supersededBy": "integer"}
+    )
+    problems = check_construction_plan_consistency(plan)
+    assert any(
+        "'supersededBy' carries a declared type but SUPERSEDED_BY joins on it" in p
+        for p in problems
+    ), problems
+
+
+@pytest.mark.parametrize("value", [[], ["itemID"], {}, {"a": 1}, 0, 5], ids=repr)
+def test_a_non_text_matched_property_is_reported_not_crashed_on(value):
+    problems = check_construction_plan_consistency(_item_plan(to_node_property=value))
+    assert any(
+        p.startswith("SUPERSEDED_BY: 'to_node_property' must be a property name")
+        for p in problems
+    ), problems
+
+
+def test_a_non_text_column_is_reported_under_its_own_field():
+    plan = _item_plan(("to_node_property",), to_node_column=["supersededBy"])
+    problems = check_construction_plan_consistency(plan)
+    assert any(
+        p.startswith("SUPERSEDED_BY: 'to_node_column' must be a property name")
+        for p in problems
+    ), problems
+
+
+def test_approval_refuses_identical_ends_on_the_key(ctx):
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = _item_plan(
+        ("to_node_property",), to_node_column="itemID"
+    )
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "error"
+    assert "itself included" in result["error_message"]
+    assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+# --- KG-45 final review: refusal advice never leads into identical ends -------
+
+
+def _typed_item_property_plan(**rel_overrides):
+    """Item keyed by itemID with supersededBy stored (and typed) as a property;
+    SUPERSEDED_BY reads itemID -> supersededBy and, with no field, matches
+    supersededBy on Item.supersededBy."""
+    plan = _item_plan(("to_node_property",), **rel_overrides)
+    plan["Item"]["properties"] = ["title", "supersededBy"]
+    plan["Item"]["property_types"] = {"supersededBy": "integer"}
+    return plan
+
+
+def test_a_typed_node_property_refusal_does_not_say_to_join_on_the_key():
+    """Node branch: 'join SUPERSEDED_BY on itemID instead' reads as 'use the
+    key column' and, in a self-reference, gives two identical ends."""
+    problems = check_construction_plan_consistency(_typed_item_property_plan())
+    typed = [p for p in problems if "carries a declared type" in p]
+    assert len(typed) == 1, problems
+    message = typed[0]
+    assert message.startswith(
+        "Item: 'supersededBy' carries a declared type but SUPERSEDED_BY joins on it"
+    )
+    assert "on 'itemID' instead" not in message
+    assert "'from_node_property' or 'to_node_property'" in message
+    assert "'itemID'" in message
+
+
+def test_following_the_node_property_advice_is_not_refused_as_identical_ends():
+    """Node branch: apply the advice literally (set the end's property to
+    the key, drop the type) and the plan is consistent."""
+    plan = _typed_item_property_plan(to_node_property="itemID")
+    plan["Item"]["property_types"] = {}
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_a_typed_relationship_property_on_a_self_reference_offers_only_the_drop():
+    """Relationship branch: the end's column is matched on another property,
+    so 'join on the key' would give identical ends. Only the drop is offered,
+    and the sentence is still complete."""
+    plan = _item_plan(
+        properties=["supersededBy"], property_types={"supersededBy": "integer"}
+    )
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if "carries a declared type" in p]
+    assert len(typed) == 1, problems
+    message = typed[0]
+    assert message.startswith(
+        "SUPERSEDED_BY: 'supersededBy' carries a declared type but SUPERSEDED_BY "
+        "joins on it"
+    )
+    assert "on 'itemID' instead" not in message
+    assert "Either" not in message
+    assert message.endswith("Drop the type for 'supersededBy'.")
+
+
+def test_a_typed_relationship_property_whose_other_end_reads_the_key_offers_only_the_drop():
+    """Relationship branch, field omitted: the other end already reads the
+    key on the same label, so joining this end on the key makes them identical."""
+    plan = _typed_item_property_plan(
+        properties=["supersededBy"], property_types={"supersededBy": "integer"}
+    )
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if p.startswith("SUPERSEDED_BY: 'supersededBy'")]
+    assert len(typed) == 1, problems
+    assert "on 'itemID' instead" not in typed[0]
+    assert "Either" not in typed[0]
+    assert typed[0].endswith("Drop the type for 'supersededBy'.")
+
+
+def _supplier_code_plan():
+    """SUPPLIED_BY reads supplier_code, a stored Supplier property, and types it
+    on the relationship as well."""
+    plan = _typed_plan()
+    plan["Supplier"]["properties"] = ["name", "supplier_code"]
+    plan["SUPPLIED_BY"]["to_node_column"] = "supplier_code"
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_code"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer",
+        "supplier_code": "integer",
+    }
+    return plan
+
+
+def test_a_typed_relationship_property_across_labels_keeps_the_join_exit():
+    """The key exit stays where following it cannot give identical ends."""
+    problems = check_construction_plan_consistency(_supplier_code_plan())
+    typed = [p for p in problems if p.startswith("SUPPLIED_BY: 'supplier_code'")]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith(
+        "Either drop the type for 'supplier_code', or join SUPPLIED_BY on "
+        "'supplier_id' instead."
+    )
+
+
+def test_a_typed_relationship_property_on_the_key_column_offers_only_the_drop():
+    """The end already reads the key: 'join on the key' would ask for what is
+    already true."""
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_id"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer",
+        "supplier_id": "integer",
+    }
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if p.startswith("SUPPLIED_BY: 'supplier_id'")]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith("Drop the type for 'supplier_id'.")
+
+
+def test_a_field_less_column_beside_an_end_on_the_key_does_not_offer_to_join_on_it():
+    """The other end already reads itemID on Item, so 'join on itemID' for
+    this end gives identical ends. The other two fixes stay, grammatical."""
+    plan = _item_plan(("to_node_property",))
+    plan["Item"]["properties"] = ["title"]
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1, problems
+    message = problems[0]
+    assert "join on 'itemID'" not in message
+    assert "set 'to_node_property' to 'itemID'" in message
+    assert "Either key 'Item' by 'supersededBy', or, if 'supersededBy' holds" in message
+
+
+def test_a_field_less_column_on_another_label_still_offers_to_join_on_the_key():
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["to_node_column"] = "vendor_id"
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1, problems
+    assert "join on 'supplier_id'" in problems[0]
+
+
+def _end(side, column, matched_property=None, label="Item"):
+    return Endpoint(side, label, column, matched_property or column)
+
+
+# The fix filter as a table: one row per (end, other, key) shape, so a change to
+# what counts as "the same ends" fails here rather than in one message's wording.
+@pytest.mark.parametrize(
+    "end, other, key, offered",
+    [
+        (
+            _end("from", "legacy_code", label="Part"),
+            _end("to", "sid", label="Supplier"),
+            "part_id",
+            True,
+        ),
+        (_end("to", "supersededBy"), _end("from", "itemID"), "itemID", False),
+        (_end("to", "supersededBy"), _end("from", "parentID"), "itemID", True),
+        (_end("to", "ref", "itemID"), _end("from", "title"), "itemID", False),
+        (_end("to", "itemID"), _end("from", "title"), "itemID", False),
+    ],
+    ids=[
+        "cross-label",
+        "self-reference-would-become-identical",
+        "self-reference-other-end-not-the-key",
+        "already-matched-under-another-name",
+        "already-the-key",
+    ],
+)
+def test_join_on_the_key_is_offered_only_where_it_keeps_the_ends_apart(
+    end, other, key, offered
+):
+    assert cpt._can_join_on_key(end, other, key) is offered
+
+
+@pytest.mark.parametrize(
+    "end, other, change, apart",
+    [
+        (
+            _end("to", "ref"),
+            _end("from", "itemID"),
+            {"matched_property": "itemID"},
+            True,
+        ),
+        (
+            _end("to", "itemID", "title"),
+            _end("from", "itemID"),
+            {"matched_property": "itemID"},
+            False,
+        ),
+        (_end("to", "itemID", label="Bundle"), _end("from", "itemID"), {}, True),
+        (
+            _end("to", "itemID"),
+            _end("from", "itemID"),
+            {"matched_property": "title"},
+            True,
+        ),
+    ],
+    ids=[
+        "other-column",
+        "same-column-onto-the-same-property",
+        "other-label",
+        "moved-off",
+    ],
+)
+def test_a_fix_keeps_the_ends_apart_only_if_the_rewritten_end_differs(
+    end, other, change, apart
+):
+    assert cpt._keeps_ends_apart(end, other, **change) is apart
+
+
+def _fixes_offered(problem):
+    """The text after 'zero rows ...' that lists the fixes."""
+    return problem.split("zero rows", 1)[1]
+
+
+def test_a_typed_node_property_across_labels_offers_both_key_fixes_conditioned():
+    """The cross-label case keeps 'join on the key', and the
+    property fix says when it applies, since following it on a column that
+    does not hold the key would pass approval and match nothing."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["unit_cost", "part_name", "legacy_code"]
+    plan["Part"]["property_types"] = {"legacy_code": "integer"}
+    plan["SUPPLIED_BY"]["from_node_column"] = "legacy_code"
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if p.startswith("Part: 'legacy_code'")]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith(
+        "Either drop the type for 'legacy_code', join SUPPLIED_BY on 'part_id' "
+        "instead, or, if the column SUPPLIED_BY reads holds the 'part_id' of a "
+        "'Part' under another name, set that end's 'from_node_property' or "
+        "'to_node_property' to 'part_id'."
+    )
+
+
+def test_a_typed_node_property_on_a_reverse_reading_self_reference_offers_only_the_drop():
+    """Both ends read itemID; the to end matches it on the typed property.
+    Matching that end on the key instead would make the ends identical."""
+    plan = _typed_item_property_plan(to_node_column="itemID")
+    plan["SUPERSEDED_BY"]["to_node_property"] = "supersededBy"
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if "carries a declared type" in p]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith("Drop the type for 'supersededBy'.")
+
+
+def test_a_misspelled_matched_property_beside_an_end_on_the_key_is_not_told_to_use_the_key():
+    """Both ends read itemID and the from end matches the key: setting the to
+    end's property to the key would make the ends identical."""
+    problems = check_construction_plan_consistency(
+        _item_plan(to_node_column="itemID", to_node_property="itemid")
+    )
+    assert len(problems) == 1, problems
+    fixes = _fixes_offered(problems[0])
+    assert "set 'to_node_property' to one of those properties" in fixes
+    assert "'itemID'" not in fixes
+
+
+def test_a_column_matched_on_the_key_at_one_end_is_not_offered_at_the_other():
+    """The to end reads supersededBy matched on the key; telling the from end,
+    which reads the same column, to do the same would make the ends identical."""
+    plan = _item_plan(from_node_column="supersededBy")
+    problems = [p for p in check_construction_plan_consistency(plan) if "from" in p]
+    assert len(problems) == 1, problems
+    fixes = _fixes_offered(problems[0])
+    assert "set 'from_node_property'" not in fixes
+    assert "join on 'itemID'" in fixes
+
+
+def test_ends_already_identical_are_not_told_to_key_the_node_by_their_column():
+    """Both ends read supersededBy on its own name: keying Item by it would make
+    both ends match it on the key."""
+    plan = _item_plan(("to_node_property",), from_node_column="supersededBy")
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 2, problems
+    for problem in problems:
+        assert "key 'Item' by" not in _fixes_offered(problem), problem
+
+
+def test_a_typed_property_both_ends_match_names_the_relationship_once():
+    """Both ends of one rule match Item.title: the refusal names it once."""
+    plan = _item_plan(to_node_property="title", from_node_property="title")
+    plan["Item"]["property_types"] = {"title": "integer"}
+    plan["Item"]["properties"] = ["title", "rank", "supersededBy"]
+    plan["SUPERSEDED_BY"]["from_node_column"] = "rank"
+    typed = [
+        p
+        for p in check_construction_plan_consistency(plan)
+        if p.startswith("Item: 'title'")
+    ]
+    assert len(typed) == 1, typed
+    assert "SUPERSEDED_BY, SUPERSEDED_BY" not in typed[0]
+    assert "but SUPERSEDED_BY joins on it" in typed[0]
+
+
+def test_a_typed_key_is_not_told_to_match_on_itself():
+    """Every end joined on the key already matches the key, so neither key fix
+    is offered: they would change nothing."""
+    plan = _item_plan()
+    plan["Item"]["property_types"] = {"itemID": "integer"}
+    typed = [
+        p
+        for p in check_construction_plan_consistency(plan)
+        if "carries a declared type" in p
+    ]
+    assert len(typed) == 1, typed
+    assert typed[0].endswith("Drop the type for 'itemID'.")
+
+
+def test_a_non_text_column_beside_a_given_property_is_reported():
+    """The checks read the given property, not the column, but the build's name
+    check refuses a non-text column, so approval must not pass it."""
+    problems = check_construction_plan_consistency(
+        _item_plan(to_node_column=["supersededBy"])
+    )
+    assert any(
+        p.startswith("SUPERSEDED_BY: 'to_node_column' must be a column name")
+        for p in problems
+    ), problems
+
+
+@pytest.mark.parametrize("prop", [None, "sku"], ids=["field-omitted", "field-set"])
+def test_a_node_without_a_key_is_offered_no_fix_naming_none(prop):
+    """With no unique_column_name every key-based fix could only name 'None';
+    keying the node is the fix left."""
+    plan = _item_plan(
+        ("to_node_property",) if prop is None else (), to_node_property=prop
+    )
+    del plan["Item"]["unique_column_name"]
+    problems = check_construction_plan_consistency(plan)
+    assert problems, problems
+    for problem in problems:
+        fixes = _fixes_offered(problem)
+        assert "'None'" not in fixes, problem
+        assert "key 'item' by" in fixes.lower(), problem
+
+
+def test_approving_a_plan_documents_the_matched_property_not_the_column():
+    doc = approve_proposed_construction_plan.__doc__ or ""
+    assert "joins on a column the" not in " ".join(doc.split())
+    assert (
+        "matches an end on a property the referenced node does not carry"
+        in " ".join(doc.split())
     )

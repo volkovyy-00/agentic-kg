@@ -6,6 +6,7 @@ failures propagate, without a Neo4j instance.
 
 import pytest
 
+from agentic_kg.common.value_types import CONVERTED, UNCONVERTIBLE
 from agentic_kg.tools import kg_construction_tools as kg
 
 
@@ -569,6 +570,8 @@ def test_import_relationships_warns_when_matches_exceed_rows(monkeypatch, one_ba
     assert "knows.csv" in warning
     assert "KNOWS matched both endpoints 3 times from 1 rows" in warning
     assert "(Person.id -> Person.name)" in warning
+    # The count is rows sent, while the result's 'rows' counts skipped rows too.
+    assert "rows read" not in warning
     assert "pairs" not in warning, (
         "rows_matched counts one per (row x from-match x to-match) combination, "
         "not distinct endpoint pairs -- 64 rows fanning out to 426 matches still "
@@ -1341,3 +1344,232 @@ def test_a_single_present_failing_value_in_the_whole_file_still_loads(
     result = kg.load_nodes_from_csv("p.csv", "P", "id", ["cost"], {"cost": "float"})
 
     assert result["status"] == "success", result.get("error_message")
+
+
+# --- KG-45: match on the named property; skip blank join rows -----------------
+
+ITEM_REL_RULE = {
+    "source_file": "items.csv",
+    "relationship_type": "SUPERSEDED_BY",
+    "from_node_label": "Item",
+    "from_node_column": "itemID",
+    "to_node_label": "Item",
+    "to_node_column": "supersededBy",
+    "to_node_property": "itemID",
+    "properties": [],
+}
+ITEM_HEADER = ["itemID", "supersededBy", "rank"]
+
+
+def _batches(monkeypatch, *batches, header=ITEM_HEADER):
+    def fake_batches(relative_path, batch_size=1000):
+        for batch in batches:
+            yield header, batch
+
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+# Rows 2-4 are blank on the to side: empty, whitespace only, and a short row
+# with no cell at all. Rows 1 and 5 name a real item.
+ITEM_ROWS = [
+    {"itemID": "1", "supersededBy": "2", "rank": "5"},
+    {"itemID": "2", "supersededBy": "", "rank": "x"},
+    {"itemID": "3", "supersededBy": "  ", "rank": "x"},
+    {"itemID": "4"},
+    {"itemID": "5", "supersededBy": "1", "rank": "7"},
+]
+
+
+def _load_query_and_params(db):
+    loads = [(q, p) for q, p in db.queries if q.lstrip().startswith("UNWIND")]
+    assert len(loads) == 1, loads
+    return loads[0]
+
+
+def test_an_end_matches_on_its_named_property_with_the_columns_value(
+    fake_db, monkeypatch
+):
+    _batches(monkeypatch, ITEM_ROWS)
+    result = kg.import_relationships(dict(ITEM_REL_RULE))
+    assert result["status"] == "success", result.get("error_message")
+    query, params = _load_query_and_params(fake_db)
+    assert "(from_node:`Item` { `itemID` : row[$from_node_column] })" in query
+    assert "(to_node:`Item` { `itemID` : row[$to_node_column] })" in query
+    assert params["from_node_column"] == "itemID"
+    assert params["to_node_column"] == "supersededBy"
+
+
+@pytest.mark.parametrize("with_field", [True, False], ids=["named", "field-less"])
+def test_rows_blank_on_a_join_column_are_skipped_and_counted(
+    fake_db, monkeypatch, with_field
+):
+    """AC4 for both rule shapes: skipping reads file columns before any query."""
+    rule = dict(ITEM_REL_RULE)
+    if not with_field:
+        del rule["to_node_property"]
+    _batches(monkeypatch, ITEM_ROWS)
+    result = kg.import_relationships(rule)
+    _query, params = _load_query_and_params(fake_db)
+    assert [row["itemID"] for row in params["rows"]] == ["1", "5"]
+    loaded = result["rows_loaded"]
+    assert loaded["rows"] == 5, "rows still counts every row read"
+    assert loaded["rows_skipped"] == 3
+
+
+def test_a_row_blank_on_the_from_side_is_skipped_too(fake_db, monkeypatch):
+    _batches(
+        monkeypatch,
+        [
+            {"itemID": "", "supersededBy": "2"},
+            {"itemID": "1", "supersededBy": "2"},
+        ],
+    )
+    result = kg.import_relationships(dict(ITEM_REL_RULE))
+    _query, params = _load_query_and_params(fake_db)
+    assert params["rows"] == [{"itemID": "1", "supersededBy": "2"}]
+    assert result["rows_loaded"]["rows_skipped"] == 1
+
+
+def test_skipped_rows_add_nothing_to_the_type_tallies(fake_db, monkeypatch):
+    _batches(monkeypatch, ITEM_ROWS)
+    rule = {
+        **ITEM_REL_RULE,
+        "properties": ["rank"],
+        "property_types": {"rank": "integer"},
+    }
+    result = kg.import_relationships(rule)
+    totals = result["rows_loaded"]["type_conversion"]["rank"]
+    assert totals[CONVERTED] == 2
+    assert totals[UNCONVERTIBLE] == 0, "the skipped rows' 'x' values were tallied"
+
+
+def test_an_all_skipped_batch_sends_no_query(fake_db, monkeypatch):
+    _batches(
+        monkeypatch,
+        [{"itemID": "1", "supersededBy": ""}],
+        [{"itemID": "5", "supersededBy": "1"}],
+    )
+    kg.import_relationships(dict(ITEM_REL_RULE))
+    _query, params = _load_query_and_params(fake_db)
+    assert params["rows"] == [{"itemID": "5", "supersededBy": "1"}]
+
+
+def test_rows_skipped_is_present_when_nothing_is_skipped(fake_db, one_batch):
+    result = kg.import_relationships(dict(REL_RULE))
+    assert result["rows_loaded"]["rows_skipped"] == 0
+
+
+def test_the_under_match_warning_leaves_skipped_rows_out(monkeypatch):
+    """1 match from 2 non-blank rows is not below half; counted against all 5
+    rows read it would be, and the build would warn about blank rows."""
+    _batches(monkeypatch, ITEM_ROWS)
+    db = FakeGraphDb(
+        responses=[{"status": "success", "records": [{"rows_matched": 1}]}]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    result = kg.import_relationships(dict(ITEM_REL_RULE))
+    assert "warning" not in result["rows_loaded"], result["rows_loaded"].get("warning")
+
+
+def test_the_under_match_warning_counts_only_rows_with_both_values(monkeypatch):
+    _batches(monkeypatch, ITEM_ROWS)
+    db = FakeGraphDb(
+        responses=[{"status": "success", "records": [{"rows_matched": 0}]}]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    warning = kg.import_relationships(dict(ITEM_REL_RULE))["rows_loaded"]["warning"]
+    assert "only 0 of 2 rows matched both endpoints" in warning
+    assert "(3 rows with a blank join value were left out)" in warning
+    assert "pair" not in warning.lower()
+
+
+def test_the_over_match_warning_leaves_skipped_rows_out(monkeypatch):
+    """3 matches from 2 non-blank rows is an over-match, which 3 of 5 hides."""
+    _batches(monkeypatch, ITEM_ROWS)
+    db = FakeGraphDb(
+        responses=[{"status": "success", "records": [{"rows_matched": 3}]}]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    warning = kg.import_relationships(dict(ITEM_REL_RULE))["rows_loaded"]["warning"]
+    assert "SUPERSEDED_BY matched both endpoints 3 times from 2 rows" in warning
+    assert "(Item.itemID -> Item.itemID (column 'supersededBy'))" in warning
+    assert "(3 rows with a blank join value were left out)" in warning
+    assert "pair" not in warning.lower()
+
+
+def test_a_file_blank_in_every_row_warns_that_nothing_was_linked(fake_db, monkeypatch):
+    _batches(
+        monkeypatch,
+        [{"itemID": "1", "supersededBy": ""}, {"itemID": "2", "supersededBy": " "}],
+    )
+    result = kg.import_relationships(dict(ITEM_REL_RULE))
+    loaded = result["rows_loaded"]
+    assert loaded["rows_skipped"] == 2
+    warning = loaded["warning"]
+    assert warning.startswith("items.csv: all 2 rows are blank in a join column")
+    assert "nothing was linked" in warning
+    assert "only" not in warning, "the under-match warning must not fire as well"
+    assert "pair" not in warning.lower()
+
+
+def test_a_field_less_warning_reads_as_before(monkeypatch, one_batch):
+    """Endpoint text names the column only where it differs, so a rule without
+    the field keeps its old text."""
+    db = FakeGraphDb(
+        responses=[{"status": "success", "records": [{"rows_matched": 3}]}]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    warning = kg.import_relationships(dict(REL_RULE))["rows_loaded"]["warning"]
+    assert "(Person.id -> Person.name)" in warning
+    assert "column '" not in warning
+
+
+def test_partial_failure_summary_names_skipped_rows(monkeypatch):
+    monkeypatch.setattr(
+        kg, "import_nodes", lambda rule: {"status": "error", "error_message": "boom"}
+    )
+    monkeypatch.setattr(
+        kg,
+        "import_relationships",
+        lambda rule: {
+            "status": "success",
+            "rows_loaded": {
+                "source_file": "items.csv",
+                "rows": 9,
+                "rows_matched": 8,
+                "rows_skipped": 1,
+                "relationships_in_graph": 8,
+            },
+        },
+    )
+    plan = {
+        "Item": {"construction_type": "node", "label": "Item"},
+        "SUPERSEDED_BY": {
+            "construction_type": "relationship",
+            "relationship_type": "SUPERSEDED_BY",
+        },
+    }
+    message = kg.construct_domain_graph(plan)["error_message"]
+    assert (
+        "SUPERSEDED_BY (8 relationships now in graph, 9 rows read, 1 skipped)"
+        in message
+    )
+
+
+def test_a_load_failure_counts_only_the_rows_it_sent(monkeypatch):
+    """A skipped row was never sent, so it is not among the rows committed
+    when a later batch fails."""
+    _batches(
+        monkeypatch,
+        [{"itemID": "1", "supersededBy": ""}, {"itemID": "5", "supersededBy": "1"}],
+        [{"itemID": "2", "supersededBy": "5"}],
+    )
+    db = FakeGraphDb(
+        responses=[
+            {"status": "success", "records": [{"rows_matched": 1}]},
+            {"status": "error", "error_message": "boom"},
+        ]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    message = kg.import_relationships(dict(ITEM_REL_RULE))["error_message"]
+    assert "load failed after 1 rows committed" in message
