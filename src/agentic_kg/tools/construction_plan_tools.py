@@ -28,7 +28,9 @@ _NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
     "column cannot, and neither can a node property, which is a column of the "
     "node's own file: if it is a key, a join column or a matched node property, "
-    "choose another column or tell the user it cannot be used."
+    "choose another column or tell the user it cannot be used. A matched node "
+    "property must be spelled exactly as the node stores it, with no surrounding "
+    "spaces; omit it when the node stores the value under the column's own name."
 )
 
 #  Tool: Propose Node Construction
@@ -545,7 +547,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                     key
                 )
 
-    def check_endpoint(rel_key, end):
+    def check_endpoint(rel_key, end, other):
         label, prop = end.label, end.matched_property
         node_rule = nodes.get(label)
         if node_rule is None:
@@ -562,11 +564,19 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         others = sorted(c for c in known_columns if c and c != unique_column)
         field = f"{end.side}_node_property"
         if prop == end.column:
+            # Joining this end on the key is no fix when the other end already
+            # reads the key of the same label: both ends would then be identical.
+            join_on_key = (
+                ""
+                if (other.label, other.column, other.matched_property)
+                == (label, unique_column, unique_column)
+                else f"join on '{unique_column}', "
+            )
             problems.append(
                 f"{rel_key}: {end.side} join column '{prop}' is not a column of the "
                 f"'{label}' node, which is keyed by '{unique_column}' with properties "
                 f"{others}. This join would match zero rows. Either key '{label}' by "
-                f"'{prop}', join on '{unique_column}', or, if '{prop}' holds the "
+                f"'{prop}', {join_on_key}or, if '{prop}' holds the "
                 f"'{unique_column}' of a '{label}' under another name, keep the column "
                 f"and set '{field}' to '{unique_column}'."
             )
@@ -586,7 +596,8 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             or rule.get("construction_type") != "relationship"
         ):
             continue
-        for end in relationship_endpoints(rule):
+        from_end, to_end = relationship_endpoints(rule)
+        for end, other in ((from_end, to_end), (to_end, from_end)):
             if not isinstance(end.matched_property, str):
                 # Name the field that supplied the value: with the property
                 # omitted, it came from the column.
@@ -601,7 +612,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                     f"matches nothing until it is one."
                 )
                 continue
-            check_endpoint(key, end)
+            check_endpoint(key, end, other)
         identical = _identical_ends_on_a_key(key, rule, nodes, unreadable)
         if identical is not None:
             problems.append(identical)
@@ -644,36 +655,62 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                     f"typed identifier matches nothing. Drop the type for '{name}'."
                 )
 
+            # Each exit is offered only where following it cannot give the rule
+            # two identical ends, which check_construction_plan_consistency
+            # refuses in turn.
             if rule.get("construction_type") == "relationship":
                 from_end, to_end = relationship_endpoints(rule)
                 joining = [key] if name in (from_end.column, to_end.column) else []
-                own_end = from_end if name == from_end.column else to_end
+                own_end, other_end = (
+                    (from_end, to_end)
+                    if name == from_end.column
+                    else (to_end, from_end)
+                )
                 own_node_label = own_end.label
                 own_node_rule = nodes.get(own_node_label)
                 join_target = (
                     own_node_rule.get("unique_column_name") if own_node_rule else None
+                )
+                # Joining on the key means reading the key column on an end
+                # matched on the column's own name; and it fails when the other
+                # end already reads that column on the same label.
+                can_join_on_key = own_end.column == own_end.matched_property and not (
+                    other_end.label == own_end.label and other_end.column == join_target
                 )
             else:
                 label = rule.get("label", key)
                 joining = joined_columns.get((label, name), [])
                 own_node_label = label
                 join_target = unique_column
+                can_join_on_key = False
             if joining:
-                if join_target is not None:
-                    second_exit = (
-                        f"join {', '.join(sorted(joining))} on '{join_target}' instead"
-                    )
-                else:
+                rels = ", ".join(sorted(joining))
+                if join_target is None:
                     second_exit = (
                         f"'{own_node_label}' has no node construction in this plan, "
                         f"so there is no identifier to join on instead"
                     )
+                elif rule.get("construction_type") != "relationship":
+                    # A node property that an end matches on: the fix is on the
+                    # end, not a switch to the key column, which in a
+                    # self-reference would make both ends identical.
+                    second_exit = (
+                        f"set 'from_node_property' or 'to_node_property' to "
+                        f"'{join_target}' on the end of {rels} that matches it"
+                    )
+                elif can_join_on_key:
+                    second_exit = f"join {rels} on '{join_target}' instead"
+                else:
+                    second_exit = None
+                advice = (
+                    f"Either drop the type for '{name}', or {second_exit}."
+                    if second_exit is not None
+                    else f"Drop the type for '{name}'."
+                )
                 problems.append(
-                    f"{key}: '{name}' carries a declared type but "
-                    f"{', '.join(sorted(joining))} joins on it. Join columns are "
-                    f"compared as raw CSV text, so a typed column matches zero "
-                    f"rows with no error. Either drop the type for '{name}', or "
-                    f"{second_exit}."
+                    f"{key}: '{name}' carries a declared type but {rels} joins on "
+                    f"it. Join columns are compared as raw CSV text, so a typed "
+                    f"column matches zero rows with no error. {advice}"
                 )
 
     return problems
@@ -807,15 +844,15 @@ def _read_plan_for_approval(
 def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Approve the proposed construction plan, if it can actually be built.
 
-    Approval is refused when a relationship construction joins on a column the
-    referenced node does not carry, or reads one column at both ends and matches
-    it on the same node's key (linking every node to itself), or names an
-    endpoint label that has no node
-    construction in the plan, or joins on a node property that holds more than
-    one value per node, or when it leaves an approved file's reference
-    column with no node in the plan that carries it reachably -- in every one
-    of these cases the plan cannot build the graph that was described to the
-    user no matter what was said in conversation.
+    Approval is refused when a relationship construction matches an end on a
+    property the referenced node does not carry, or reads one column at both
+    ends and matches it on the same node's key (linking every node to itself),
+    or names an endpoint label that has no node construction in the plan, or
+    joins on a node property that holds more than one value per node, or when it
+    leaves an approved file's reference column with no node in the plan that
+    carries it reachably -- in every one of these cases the plan cannot build
+    the graph that was described to the user no matter what was said in
+    conversation.
     """
     construction_plan, problems, unverified = _read_plan_for_approval(tool_context)
     if construction_plan is None:

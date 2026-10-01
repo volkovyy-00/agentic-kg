@@ -1694,7 +1694,9 @@ NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
     "column cannot, and neither can a node property, which is a column of the "
     "node's own file: if it is a key, a join column or a matched node property, "
-    "choose another column or tell the user it cannot be used."
+    "choose another column or tell the user it cannot be used. A matched node "
+    "property must be spelled exactly as the node stores it, with no surrounding "
+    "spaces; omit it when the node stores the value under the column's own name."
 )
 
 
@@ -2317,3 +2319,120 @@ def test_approval_refuses_identical_ends_on_the_key(ctx):
     assert result["status"] == "error"
     assert "link a node to itself" in result["error_message"]
     assert APPROVED_CONSTRUCTION_PLAN not in ctx.state
+
+
+# --- KG-45 final review: refusal advice never leads into identical ends -------
+
+
+def _typed_item_property_plan(**rel_overrides):
+    """Item keyed by itemID with supersededBy stored (and typed) as a property;
+    SUPERSEDED_BY reads itemID -> supersededBy and, with no field, matches
+    supersededBy on Item.supersededBy."""
+    plan = _item_plan(("to_node_property",), **rel_overrides)
+    plan["Item"]["properties"] = ["title", "supersededBy"]
+    plan["Item"]["property_types"] = {"supersededBy": "integer"}
+    return plan
+
+
+def test_a_typed_node_property_refusal_does_not_say_to_join_on_the_key():
+    """F1, node branch: 'join SUPERSEDED_BY on itemID instead' reads as 'use the
+    key column' and, in a self-reference, gives two identical ends."""
+    problems = check_construction_plan_consistency(_typed_item_property_plan())
+    typed = [p for p in problems if "carries a declared type" in p]
+    assert len(typed) == 1, problems
+    message = typed[0]
+    assert message.startswith(
+        "Item: 'supersededBy' carries a declared type but SUPERSEDED_BY joins on it"
+    )
+    assert "on 'itemID' instead" not in message
+    assert "'from_node_property' or 'to_node_property'" in message
+    assert "'itemID'" in message
+
+
+def test_following_the_node_property_advice_is_not_refused_as_identical_ends():
+    """F1, node branch: apply the advice literally (set the end's property to
+    the key, drop the type) and the plan is consistent."""
+    plan = _typed_item_property_plan(to_node_property="itemID")
+    plan["Item"]["property_types"] = {}
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_a_typed_relationship_property_on_a_self_reference_offers_only_the_drop():
+    """F1, relationship branch: the end's column is matched on another property,
+    so 'join on the key' would give identical ends. Only the drop is offered,
+    and the sentence is still complete."""
+    plan = _item_plan(
+        properties=["supersededBy"], property_types={"supersededBy": "integer"}
+    )
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if "carries a declared type" in p]
+    assert len(typed) == 1, problems
+    message = typed[0]
+    assert message.startswith(
+        "SUPERSEDED_BY: 'supersededBy' carries a declared type but SUPERSEDED_BY "
+        "joins on it"
+    )
+    assert "on 'itemID' instead" not in message
+    assert "Either" not in message
+    assert message.endswith("Drop the type for 'supersededBy'.")
+
+
+def test_a_typed_relationship_property_whose_other_end_reads_the_key_offers_only_the_drop():
+    """F1, relationship branch, field omitted: the other end already reads the
+    key on the same label, so joining this end on the key makes them identical."""
+    plan = _typed_item_property_plan(
+        properties=["supersededBy"], property_types={"supersededBy": "integer"}
+    )
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if p.startswith("SUPERSEDED_BY: 'supersededBy'")]
+    assert len(typed) == 1, problems
+    assert "on 'itemID' instead" not in typed[0]
+    assert "Either" not in typed[0]
+    assert typed[0].endswith("Drop the type for 'supersededBy'.")
+
+
+def test_a_typed_relationship_property_across_labels_keeps_the_join_exit():
+    """The key exit stays where following it cannot give identical ends."""
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["properties"] = ["lead_time_days", "supplier_id"]
+    plan["SUPPLIED_BY"]["property_types"] = {
+        "lead_time_days": "integer",
+        "supplier_id": "integer",
+    }
+    problems = check_construction_plan_consistency(plan)
+    typed = [p for p in problems if p.startswith("SUPPLIED_BY: 'supplier_id'")]
+    assert len(typed) == 1, problems
+    assert typed[0].endswith(
+        "Either drop the type for 'supplier_id', or join SUPPLIED_BY on "
+        "'supplier_id' instead."
+    )
+
+
+def test_a_field_less_column_beside_an_end_on_the_key_does_not_offer_to_join_on_it():
+    """F2: the other end already reads itemID on Item, so 'join on itemID' for
+    this end gives identical ends. The other two fixes stay, grammatical."""
+    plan = _item_plan(("to_node_property",))
+    plan["Item"]["properties"] = ["title"]
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1, problems
+    message = problems[0]
+    assert "join on 'itemID'" not in message
+    assert "set 'to_node_property' to 'itemID'" in message
+    assert "Either key 'Item' by 'supersededBy', or, if 'supersededBy' holds" in message
+
+
+def test_a_field_less_column_on_another_label_still_offers_to_join_on_the_key():
+    plan = _typed_plan()
+    plan["SUPPLIED_BY"]["to_node_column"] = "vendor_id"
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1, problems
+    assert "join on 'supplier_id'" in problems[0]
+
+
+def test_approving_a_plan_documents_the_matched_property_not_the_column():
+    doc = approve_proposed_construction_plan.__doc__ or ""
+    assert "joins on a column the" not in " ".join(doc.split())
+    assert (
+        "matches an end on a property the referenced node does not carry"
+        in " ".join(doc.split())
+    )
