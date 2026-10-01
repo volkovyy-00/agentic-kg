@@ -570,6 +570,8 @@ def test_import_relationships_warns_when_matches_exceed_rows(monkeypatch, one_ba
     assert "knows.csv" in warning
     assert "KNOWS matched both endpoints 3 times from 1 rows" in warning
     assert "(Person.id -> Person.name)" in warning
+    # The count is rows sent, while the result's 'rows' counts skipped rows too.
+    assert "rows read" not in warning
     assert "pairs" not in warning, (
         "rows_matched counts one per (row x from-match x to-match) combination, "
         "not distinct endpoint pairs -- 64 rows fanning out to 426 matches still "

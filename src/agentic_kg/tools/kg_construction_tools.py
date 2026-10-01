@@ -95,6 +95,8 @@ __all__ = [
     "build_graph_from_construction_rules",
     "node_rule_name_error",
     "relationship_rule_name_error",
+    "required_relationship_name_error",
+    "matched_property_name_error",
 ]
 
 
@@ -578,11 +580,11 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # A join column missing from the header makes row[$..._node_column] null,
     # which matches no node and silently produces zero relationships rather
     # than an error. Check the header before sending anything.
-    rows_read = 0
-    rows_skipped = 0
     # rows_read counts every row, skipped or not; rows_sent only the rows sent
     # and committed: what a failure message may claim is in the graph, and
-    # what the join warnings compare matches against.
+    # what the join warnings compare matches against. The difference, once
+    # the loop is done, is the rows skipped.
+    rows_read = 0
     rows_sent = 0
     rows_matched = 0
     totals: Dict[str, Any] = {}
@@ -615,7 +617,6 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
                 if not (is_blank(row.get(from_column)) or is_blank(row.get(to_column)))
             ]
             rows_read += len(batch)
-            rows_skipped += len(batch) - len(kept)
             if not kept:
                 continue
             rows, tallies = _coerce_batch(kept, typed_types)
@@ -657,6 +658,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         logger.exception("%s: read failed", source_file)
         return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
 
+    rows_skipped = rows_read - rows_sent
     loaded = {
         "source_file": source_file,
         "rows": rows_read,
@@ -712,7 +714,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
         )
 
     # The opposite direction, and it needs no slack. A relationship row states
-    # one instance-level fact, so more endpoint matches than rows read means a
+    # one instance-level fact, so more endpoint matches than rows sent means a
     # join column matched a group of nodes where the row named one of them.
     # Not an error: joining on a stored property is legitimate and this module
     # cannot know that property's real cardinality -- but it is always worth a
@@ -729,7 +731,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             f"{source_file}: {relationship_type} matched both endpoints "
             f"{rows_matched} times from {rows_sent} rows "
             f"({ends}){left_out} — more "
-            "matches than rows read means at least one join column matched more "
+            "matches than rows means at least one join column matched more "
             "than one node instead of the one the row identifies. Check whether "
             "the join column identifies one node or a group of them."
         )
