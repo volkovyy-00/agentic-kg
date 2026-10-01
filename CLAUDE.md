@@ -68,6 +68,8 @@ uv run pyright        # must report 0 errors
   APOC-only (`apoc.meta.data`/`apoc.meta.graph`), and a stock `neo4j:5` image doesn't have it.
 - If using colima instead of Docker Desktop, integration tests need:
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
+  Without a reachable Docker every integration module skips instead of failing, so check the result is
+  "N passed", not "N skipped".
 - Ruff config is `pyproject.toml`'s `[tool.ruff]`; pyright's is `[tool.pyright]` (`basic` mode, `src` only).
   Drop `--check` from `ruff format` to fix locally.
 - This repo is a GitHub fork of `neo4j-contrib/agentic-kg`; a clone may also carry an `upstream` remote
@@ -136,10 +138,7 @@ Agent(name=AGENT_NAME, instruction=variants[AGENT_NAME]["instruction"], tools=va
 ```
 
 When adding a capability to an agent, edit the currently-selected variant; add a new numbered one only when an
-A/B comparison is wanted (as with `graphrag_agent`). Keep the dict shape. Some
-`variants.py` files reference tools/names that aren't imported into that file (leftover from course scaffolding) —
-if you hit a `NameError` there, check whether the referenced symbol exists elsewhere in `tools/` and add the import
-rather than assuming the whole file is broken.
+A/B comparison is wanted (as with `graphrag_agent`). Keep the dict shape.
 
 ### State passing: ADK session state, not return values
 
@@ -382,7 +381,7 @@ in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.
 `_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
 Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
 
-The code default and `.env.example` are `openai/gpt-4o` / `openai/gpt-4o-mini`; the models actually used live
+The code default and `.env.example` are `openai/gpt-4o-mini` (conversational) / `openai/gpt-4o` (reasoning); the models actually used live
 only in each developer's untracked `.env`. LiteLLM's `model_cost` lacks some OpenRouter-only models and then
 estimates their cost as 0 — OpenRouter returns the real `cost` / `cost_details` on the response, which is what to
 read if you add cost tracking.
