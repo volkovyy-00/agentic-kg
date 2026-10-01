@@ -28,9 +28,14 @@ _NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
     "column cannot, and neither can a node property, which is a column of the "
     "node's own file: if it is a key, a join column or a matched node property, "
-    "choose another column or tell the user it cannot be used. A matched node "
-    "property must be spelled exactly as the node stores it, with no surrounding "
-    "spaces; omit it when the node stores the value under the column's own name."
+    "choose another column or tell the user it cannot be used."
+)
+# A relationship end can also name the node property it is matched on (KG-45);
+# a node proposal has no such field, so only relationship refusals say this.
+_RELATIONSHIP_NAME_HINT = (
+    f"{_NAME_HINT} A matched node property must be spelled exactly as the node "
+    "stores it, with no surrounding spaces; omit it when the node stores the "
+    "value under the column's own name."
 )
 
 #  Tool: Propose Node Construction
@@ -317,7 +322,7 @@ def propose_relationship_construction(
     # Names first, before the file is read (KG-44): see propose_node_construction.
     name_error = relationship_rule_name_error(relationship_construction_rule)
     if name_error is not None:
-        return tool_error(f"{name_error} {_NAME_HINT}")
+        return tool_error(f"{name_error} {_RELATIONSHIP_NAME_HINT}")
 
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
@@ -595,12 +600,17 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         field = f"{end.side}_node_property"
         # Each fix is offered only where following it leaves the two ends
         # different. Keying the node by this end's property cannot do that when
-        # both ends are already the same: they would stay the same.
-        rekey = [] if end.same_as(other) else [f"key '{label}' by '{prop}'"]
-        match_on_key = _keeps_ends_apart(end, other, matched_property=unique_column)
+        # both ends are already the same: they would stay the same. A node
+        # rule with no key gets no key-based fix, which could only name 'None';
+        # keying it is then the fix.
+        has_key = isinstance(unique_column, str) and unique_column != ""
+        rekey = [] if has_key and end.same_as(other) else [f"key '{label}' by '{prop}'"]
+        match_on_key = has_key and _keeps_ends_apart(
+            end, other, matched_property=unique_column
+        )
         if prop == end.column:
             options = list(rekey)
-            if _can_join_on_key(end, other, unique_column):
+            if has_key and _can_join_on_key(end, other, unique_column):
                 options.append(f"join on '{unique_column}'")
             if match_on_key:
                 options.append(
@@ -635,13 +645,22 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
             continue
         from_end, to_end = relationship_endpoints(rule)
         for end, other in ((from_end, to_end), (to_end, from_end)):
+            property_given = not is_omitted(rule.get(f"{end.side}_node_property"))
+            if property_given and not isinstance(end.column, str):
+                # The checks below read the given property, never the column,
+                # but the build's name check refuses a non-text column too.
+                problems.append(
+                    f"{key}: '{end.side}_node_column' must be a column name, got "
+                    f"{_bounded_repr(end.column)}. The {end.side} end reads "
+                    f"nothing until it is one."
+                )
             if not isinstance(end.matched_property, str):
                 # Name the field that supplied the value: with the property
                 # omitted, it came from the column.
                 field = (
-                    f"{end.side}_node_column"
-                    if is_omitted(rule.get(f"{end.side}_node_property"))
-                    else f"{end.side}_node_property"
+                    f"{end.side}_node_property"
+                    if property_given
+                    else f"{end.side}_node_column"
                 )
                 problems.append(
                     f"{key}: '{field}' must be a property name, got "
