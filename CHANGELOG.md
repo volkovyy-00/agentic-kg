@@ -8,6 +8,22 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.9.0] - 2026-10-01
+
+### Added
+- **A relationship end can name the node property it is matched on (#NN, KG-45)**: `from_node_property` and
+  `to_node_property`, on the rule and on both propose tools. A column holding another row's key under a
+  different name, such as a reference to a row of the same file or to another label's key, now builds one
+  edge per row. Approval refuses a rule whose two ends read the same column and match it on the same node's
+  key, since every row would link a node to itself. A relationship load reports `rows_skipped`.
+
+### Fixed
+- **A reference under a different name no longer builds wrong edges (#NN, KG-45)**: every rule a model could
+  write for such a column linked nodes sharing a value, or built self-loops, and approval accepted them all.
+  A row whose join value is blank, empty or whitespace only now links nothing. Before, a blank value matched
+  any node that stored the same blank, which could link a node to itself. Such rows are counted, and the
+  match warnings leave them out.
+
 ## [0.8.1] - 2026-09-29
 
 ### Fixed
