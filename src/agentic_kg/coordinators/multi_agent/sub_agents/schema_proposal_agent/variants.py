@@ -55,9 +55,15 @@ _VALIDATION_RULES = """
 
             Join keys for relationships -- use 'collapse_check' (this is where plausible-looking
             schemas silently fail):
-            - A relationship's 'from_column' and 'to_column' must each be either the corresponding
-              node's declared unique identifier, or a property guaranteed to have exactly one
-              distinct value across every source row that collapses into that node instance.
+            - Each end of a relationship reads one column of the relationship's file
+              ('from_node_column' / 'to_node_column') and matches its value against one property of
+              that end's node ('from_node_property' / 'to_node_property'). The property defaults to
+              the column's own name. Set it when the column holds that node's key, or another of its
+              properties, under a different name -- including a column holding the key of another
+              node with the same label.
+            - The property each end is matched on must be either that node's declared unique
+              identifier, or a property guaranteed to have exactly one distinct value across every
+              source row that collapses into that node instance.
             - Why: node loading MERGEs on the unique identifier and then overwrites all other
               properties from each row, so whichever row loads last wins. A column that varies
               across the rows collapsing into one node survives with a single arbitrary value.
@@ -66,7 +72,9 @@ _VALIDATION_RULES = """
             - Never use a collapsed per-row column as a join key. Do not even retain such per-row
               columns as node properties: put per-row data on the relationship, or drop it.
             - Call 'collapse_check' with the node's source file, the node's declared unique
-              identifier as 'node_key_column', and the candidate join column as 'candidate_column'.
+              identifier as 'node_key_column', and the property the end is matched on as
+              'candidate_column' -- the node property, never the relationship file's column. An end
+              matched on the node's declared unique identifier needs no 'collapse_check'.
               The join key is safe only if 'survives_collapse' is true (that is,
               'groups_with_conflicts' is 0) AND 'row_count' is above 0. A file holding a header and
               no data rows reports 'survives_collapse' true because nothing collapsed -- that is
@@ -81,9 +89,11 @@ _VALIDATION_RULES = """
               breakage.
 
             Join coverage -- use 'join_preview':
-            - For every relationship, call 'join_preview' with the two source files and the two join
-              columns to estimate what fraction of raw CSV values on each side finds a match in the
-              other file. This is a pre-collapse check only and never replaces 'collapse_check'.
+            - For every relationship end, call 'join_preview' with the relationship's file and that
+              end's column as one side, and the node's source file and the property the end is
+              matched on as the other, to estimate what fraction of raw CSV values on each side finds
+              a match in the other file. This is a pre-collapse check only and never replaces
+              'collapse_check'.
             - If coverage is not near 100% on both sides, either fix the join key (a collapsed
               per-row column is the usual cause) or, if the source data simply does not overlap,
               keep the relationship and report the approximate coverage, so the human can decide
@@ -107,17 +117,19 @@ _VALIDATION_RULES = """
               column is not that type -- do not declare it.
             - The allowed types are exactly 'integer', 'float' and 'boolean'. Anything else,
               including dates, stays text.
-            - NEVER declare a type for a node's 'unique_column_name', and NEVER declare a type
-              for a column any relationship joins on. Join columns and identifiers are compared
-              as raw text from the CSV, so a typed column matches zero rows with no error at
-              all. If a relationship needs to join on a column, that column stays text.
+            - NEVER declare a type for a node's 'unique_column_name', for a column any relationship
+              reads as an end's column, or for a node property any relationship end is matched on.
+              These are compared as raw text from the CSV, so a typed one matches zero rows with no
+              error at all. If a relationship needs to join on a column or property, it stays text.
 
             Direction of relationships (a good name pointing the wrong way is still wrong):
             - The name and the direction are two independent decisions, and a name that reads as
               valid English says nothing about whether the from/to labels are the right way round.
               Renaming a backwards relationship leaves it backwards. When a relationship "reads
-              backwards" or is "inverted", the fix is to swap 'from_node_label'/'from_node_column'
-              with 'to_node_label'/'to_node_column' -- not to rename it.
+              backwards" or is "inverted", the fix is to swap 'from_node_label'/'from_node_column'/
+              'from_node_property' with 'to_node_label'/'to_node_column'/'to_node_property', all three
+              together, since a property left on the old side changes what each end matches -- not to
+              rename it.
             - Read each relationship aloud in both directions: "<FromLabel> <TYPE> <ToLabel>" and
               "<ToLabel> <TYPE> <FromLabel>". Exactly one should be a true statement about the
               domain described by the user goal. Keep that one. If both read badly, the name is
@@ -177,10 +189,14 @@ variants = {
               restates the properties but omits the types silently reverts every declared type back to
               text, and the resulting plan looks identical to the one you meant to keep. Nothing later in
               the workflow can detect that, so restating it is the only protection.
+              The same holds for 'from_node_property' and 'to_node_property': a re-proposal that omits
+              them makes each end match on its column's own name again.
             - If you change a node's 'unique_column_name', you must also update every relationship in the
-              plan that joins to that label, so its join column matches the new identifier. A plan whose
-              relationship joins on a column the referenced node does not carry will be rejected at
-              approval time and builds zero relationships.
+              plan that joins to that label, so its join column matches the new identifier. A relationship
+              matched on the old identifier through 'from_node_property' or 'to_node_property' needs the
+              same care: set it to the new identifier. A plan whose relationship joins on a column the
+              referenced node does not carry will be rejected at approval time and builds zero
+              relationships.
 
             Every file in the approved files list will become either a node or a relationship.
             Determining whether a file likely represents a node or a relationship is based
@@ -214,6 +230,11 @@ variants = {
             - Reference relationship foreign key column names often hint at the destination node and relationship type
             - References may be hierarchical container relationships, with terminology revealing parent-child, "has", "contains", membership, or similar relationship
             - References may be peer relationships, that is often a self-reference to a similar class of nodes. For example, "knows" or "see also"
+            - A reference column often holds another node's key under a different name -- for example a
+              column naming a related row of the same file. Use that column as the end's column and the
+              related node's key as that end's 'from_node_property' or 'to_node_property'. Without it,
+              the end would be matched on a property named like the column, which links nodes sharing
+              the value instead of the node the value identifies.
 
             The resulting schema should be a connected graph, with no isolated components.
 
@@ -244,7 +265,11 @@ variants = {
             3. Use the node vs relationship guidance for deciding whether the file represents a node or a relationship.
             4. For a node file, propose a node construction using the 'propose_node_construction' tool.
             5. If the node contains a reference relationship, use the 'propose_relationship_construction' tool to propose a relationship construction.
-            6. For a relationship file, propose a relationship construction using the 'propose_relationship_construction' tool
+               When the reference column's name differs from the referenced node's key, pass that key as the
+               end's 'from_node_property' or 'to_node_property'.
+            6. For a relationship file, propose a relationship construction using the 'propose_relationship_construction' tool.
+               When a column's name differs from the key of the node it references, pass that key as the
+               end's 'from_node_property' or 'to_node_property'.
             7. For each property you intend to keep on a node or relationship, call
                'column_type_hint' (or 'column_type_hints' for several columns of one file) and
                declare a type for every quantity, duration, price, cost or yes/no flag by passing
@@ -258,11 +283,11 @@ variants = {
                tools when proposing one construction at a time or when you want per-construction errors.
             10. If you need to remove a construction, use the 'remove_node_construction' or 'remove_relationship_construction' tool
             11. Before finalizing any relationship construction, apply the join-key rules above with
-                'collapse_check' for each join column that is not the referenced node's declared unique
-                identifier, then check raw value overlap with 'join_preview'.
+                'collapse_check' for each end whose matched node property is not that node's declared
+                unique identifier, then check raw value overlap with 'join_preview'.
             12. Before finalizing any relationship construction, apply the direction rules above. If the
-                direction is wrong, re-propose the relationship with the from and to endpoints (labels
-                *and* columns) swapped — do not settle for renaming it.
+                direction is wrong, re-propose the relationship with the from and to endpoints (labels, columns
+                *and* node properties) swapped — do not settle for renaming it.
             13. When you are done with construction proposals, use the 'get_proposed_construction_plan' tool to present the plan to the user
         """,
         "tools": [
@@ -312,13 +337,18 @@ variants = {
             - Is every relationship pointing the right way? Apply the direction rules above and reject
               with 'retry' when a relationship is reversed. Say explicitly that the endpoints must be
               swapped, not that the type should be renamed.
+            - Does a relationship end read a column that holds the key of a related node under a
+              different name, but match it on a property named like the column? That links nodes sharing
+              the value instead of the node the value identifies. Reject with 'retry' and say to set that
+              end's 'from_node_property' or 'to_node_property' to the related node's key.
             - Is a property that clearly holds a quantity, duration, price, cost or yes/no flag left
               without a declared type? Call 'column_type_hint' to check what the data supports, and
               reject with 'retry' when a numeric or boolean column is being stored as text.
             - Is a declared type wrong for the data? A high 'unconvertible_count' from
               'column_type_hint' means the build would refuse that column outright.
-            - Is a node's unique identifier, or any column a relationship joins on, given a type?
-              Those must stay text; reject with 'retry' and say which type to drop.
+            - Is a node's unique identifier, a column a relationship reads as an end's column, or a node
+              property a relationship end is matched on given a type? Those must stay text; reject with
+              'retry' and say which type to drop.
 
             Prepare for the task:
             - get the user goal using the 'get_approved_user_goal' tool
