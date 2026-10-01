@@ -483,14 +483,23 @@ def relationship_rule_name_error(rule: dict) -> str | None:
     See node_rule_name_error. The five names in _RELATIONSHIP_RULE_NAMES come
     first, read by direct indexing, so a missing required key still raises the
     KeyError construct_domain_graph reports. Then each end's matched node
-    property (KG-45), resolved: an omitted one is the column just checked, so an
-    older rule without the field can never raise here.
+    property: see matched_property_name_error.
     """
-    error = _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
-    if error is not None:
-        return error
+    return _first_name_error(
+        rule, _RELATIONSHIP_RULE_NAMES
+    ) or matched_property_name_error(rule)
+
+
+def matched_property_name_error(rule: dict) -> str | None:
+    """The refusal for the first unusable matched node property, or None (KG-45).
+
+    Resolved, so an omitted one is its end's column. Checked after the columns,
+    that case never fails here, so the refusal names the field that was given.
+    """
     for end in relationship_endpoints(rule):
-        error = _name_error("property name", end.matched_property)
+        error = _name_error(
+            f"property name in '{end.side}_node_property'", end.matched_property
+        )
         if error is not None:
             return error
     return None
@@ -566,7 +575,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     rows_committed = 0
     rows_skipped = 0
     # Rows actually sent and committed: what a failure message may claim is in
-    # the graph. rows_committed also counts skipped rows, as rows read.
+    # the graph, and what the join warnings compare matches against.
+    # rows_committed also counts skipped rows, as rows read.
     rows_sent = 0
     rows_matched = 0
     totals: Dict[str, Any] = {}
@@ -677,21 +687,20 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # Skipped rows (KG-45) never reached the query, so both join warnings
     # compare matches against the rows that did. A file blank in every row gets
     # one join warning of its own instead: there is nothing to compare.
-    considered = rows_committed - rows_skipped
     ends = f"{describe_end(from_end)} -> {describe_end(to_end)}"
     left_out = (
         f" ({rows_skipped} rows with a blank join value were left out)"
         if rows_skipped
         else ""
     )
-    if rows_committed and not considered:
+    if rows_committed and not rows_sent:
         warnings.append(
             f"{source_file}: all {rows_committed} rows are blank in a join column "
             f"({ends}), so nothing was linked by {relationship_type}."
         )
-    elif considered and rows_matched < considered / 2:
+    elif rows_sent and rows_matched < rows_sent / 2:
         warnings.append(
-            f"{source_file}: only {rows_matched} of {considered} rows matched both "
+            f"{source_file}: only {rows_matched} of {rows_sent} rows matched both "
             f"endpoints ({ends}){left_out} — check whether the join columns actually "
             "match. A join column that is a per-row property collapsed during node "
             "loading will match few or no rows."
@@ -710,10 +719,10 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # "pairs" here would state a number the query cannot support, and would be
     # wrong in the case this check was built from: 64 rows fanning out to 426
     # matches still describe only 64 distinct pairs.
-    if considered and rows_matched > considered:
+    if rows_sent and rows_matched > rows_sent:
         warnings.append(
             f"{source_file}: {relationship_type} matched both endpoints "
-            f"{rows_matched} times from {considered} rows "
+            f"{rows_matched} times from {rows_sent} rows "
             f"({ends}){left_out} — more "
             "matches than rows read means at least one join column matched more "
             "than one node instead of the one the row identifies. Check whether "

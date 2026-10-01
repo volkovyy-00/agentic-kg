@@ -11,7 +11,11 @@ graphdb = get_graphdb()
 
 from .file_tools import APPROVED_FILES, search_file
 from .join_property_check import check_joined_properties_hold_one_value
-from .kg_construction_tools import node_rule_name_error, relationship_rule_name_error
+from .kg_construction_tools import (
+    matched_property_name_error,
+    node_rule_name_error,
+    relationship_rule_name_error,
+)
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -31,7 +35,7 @@ _NAME_HINT = (
     "choose another column or tell the user it cannot be used."
 )
 # A relationship end can also name the node property it is matched on (KG-45);
-# a node proposal has no such field, so only relationship refusals say this.
+# only a refusal of that property says this.
 _RELATIONSHIP_NAME_HINT = (
     f"{_NAME_HINT} A matched node property must be spelled exactly as the node "
     "stores it, with no surrounding spaces; omit it when the node stores the "
@@ -322,7 +326,14 @@ def propose_relationship_construction(
     # Names first, before the file is read (KG-44): see propose_node_construction.
     name_error = relationship_rule_name_error(relationship_construction_rule)
     if name_error is not None:
-        return tool_error(f"{name_error} {_RELATIONSHIP_NAME_HINT}")
+        # The sentence on spelling a matched property only when one failed: for
+        # a type, label or column it would send the model to a field that is fine.
+        hint = (
+            _RELATIONSHIP_NAME_HINT
+            if name_error == matched_property_name_error(relationship_construction_rule)
+            else _NAME_HINT
+        )
+        return tool_error(f"{name_error} {hint}")
 
     # quick sanity check -- does the approved file have the from_node_column?
     search_results = search_file(approved_file, from_node_column)
@@ -498,10 +509,16 @@ def _identical_ends(
     node_key = node_rule.get("unique_column_name")
     if prop not in {node_key, *(node_rule.get("properties") or [])}:
         return None
-    return (
+    problem = (
         f"{key}: both ends read '{from_end.column}' and match it on "
-        f"'{label}.{prop}', so every row would link a node to itself. If "
-        f"another column of '{source_file}' holds the {node_key} of "
+        f"'{label}.{prop}', so every row would link a node to itself."
+    )
+    # As in check_endpoint: with no key there is nothing to name, so the fix
+    # is keying the node first.
+    if not isinstance(node_key, str) or node_key == "":
+        return f"{problem} Key '{label}' by the column that identifies it first."
+    return (
+        f"{problem} If another column of '{source_file}' holds the {node_key} of "
         f"the related {label}, use that column on that end and set that end's "
         f"'from_node_property' or 'to_node_property' to '{node_key}'."
     )

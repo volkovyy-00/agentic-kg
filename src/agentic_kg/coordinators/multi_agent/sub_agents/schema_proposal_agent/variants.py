@@ -274,9 +274,10 @@ variants = {
                'column_type_hint' (or 'column_type_hints' for several columns of one file) and
                declare a type for every quantity, duration, price, cost or yes/no flag by passing
                'proposed_property_types' to the propose tool. Apply the property-type rules above.
-            8. Never declare a type for a node's unique identifier, or for a column a relationship
-               joins on. If you later add a relationship that joins on a typed property, remove that
-               property's type in the same revision — approval refuses a plan that has both.
+            8. Never declare a type for a node's unique identifier, for a column a relationship
+               reads as an end's column, or for a node property any relationship end is matched on.
+               If you later add a relationship that joins on or is matched on a typed property, remove
+               that property's type in the same revision — approval refuses a plan that has both.
             9. When you have several nodes or relationships ready to propose at once, prefer the batch
                tools 'propose_node_constructions' / 'propose_relationship_constructions', which take a
                list of constructions and record them in one call. Either form is fine; use the singular

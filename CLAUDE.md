@@ -333,8 +333,8 @@ underscores; Cypher keywords such as `Order` are allowed) and written into the q
 from the database are only quoted, never checked. The rule is enforced where names enter the plan and again at the
 build, not among the approval-time plan checks: the propose tools refuse a bad name through `node_rule_name_error`
 / `relationship_rule_name_error` (`tools/kg_construction_tools.py`), with the build's own message followed by a
-hint that a label or type can be renamed but a file column cannot (and, for a relationship, how to spell or omit
-a matched node property), before reading the file, and those tools (plus
+hint that a label or type can be renamed but a file column cannot (and, for a bad matched node property, how
+to spell or omit it), before reading the file, and those tools (plus
 the remove tools) are the only writers of the plan (KG-44). The build keeps its own check as a second guard, since
 `load_nodes_from_csv` and `create_uniqueness_constraint` can be called directly. A new path that writes plan rules
 must run those helpers too, or move them into `check_construction_plan_consistency`. The loaders' `ToolResult`s
@@ -344,8 +344,10 @@ wrote, so a re-run against a non-empty graph will include prior data too.
 
 The relationship loader matches each end's node on its matched property with the file column's value, and skips
 a row whose value is blank on either join column (`value_types.is_blank`: no cell, empty or whitespace only)
-before coercion. `rows_skipped` counts those rows. The under- and over-match warnings compare `rows_matched`
-with the rows left, and a file blank in every row gets one "nothing was linked" warning instead.
+before coercion. `rows_skipped` counts those rows. A value that is not blank is matched as the file holds it,
+padding included, like the raw text the node loader stored, so `" 8"` matches only a node property padded alike.
+The under- and over-match warnings compare `rows_matched` with the rows left, and a file blank in every row gets
+one "nothing was linked" warning instead.
 
 ### Grounding: `graphrag_agent_v2`
 

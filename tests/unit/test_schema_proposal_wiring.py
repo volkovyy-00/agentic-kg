@@ -515,6 +515,15 @@ def test_the_proposer_says_how_to_write_a_reference_under_another_name():
     assert "holds another node's key under a different name" in instruction
 
 
+def test_the_proposers_steps_keep_a_matched_property_untyped():
+    """The numbered step the model follows says it, not only the rules block."""
+    instruction = _flat("schema_proposal_agent_v1")
+    step = instruction[instruction.index("8. Never declare a type") :]
+    step = step[: step.index("9. ")]
+    assert "any relationship end is matched on" in step
+    assert "joins on or is matched on a typed property" in step
+
+
 def test_the_critic_rejects_a_reference_matched_under_its_own_name():
     instruction = _flat("schema_critic_agent_v1")
     assert "links nodes sharing the value" in instruction

@@ -1704,13 +1704,13 @@ RELATIONSHIP_NAME_HINT = (
 
 
 def _proposal(build_text):
-    """What the node propose tools report: the build's own text, then NAME_HINT."""
+    """What the propose tools report: the build's own text, then NAME_HINT."""
     return f"{build_text} {NAME_HINT}"
 
 
 def _rel_proposal(build_text):
-    """What the relationship propose tools report: a node property can also be
-    matched, so their hint says how to spell or omit it."""
+    """What a relationship propose tool reports for a bad matched node property:
+    the hint also says how to spell or omit it."""
     return f"{build_text} {RELATIONSHIP_NAME_HINT}"
 
 
@@ -1812,8 +1812,8 @@ def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(
     args = _rel_args(**override)
     result = _propose_rel(args, ctx)
     assert result["status"] == "error"
-    assert result["error_message"] == _rel_proposal(expected)
-    assert result["error_message"] == _rel_proposal(
+    assert result["error_message"] == _proposal(expected)
+    assert result["error_message"] == _proposal(
         kg.import_relationships(_rel_rule(args))["error_message"]
     )
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
@@ -1859,8 +1859,8 @@ def test_the_first_bad_name_reported_is_the_one_the_build_checks_first(
     pair is pinned, so swapping any two checks fails a case."""
     args = _rel_args(**override)
     result = _propose_rel(args, ctx)
-    assert result["error_message"] == _rel_proposal(expected)
-    assert result["error_message"] == _rel_proposal(
+    assert result["error_message"] == _proposal(expected)
+    assert result["error_message"] == _proposal(
         kg.import_relationships(_rel_rule(args))["error_message"]
     )
 
@@ -1895,7 +1895,7 @@ def test_a_bad_name_is_reported_before_the_file_is_searched(
     assert node["error_message"] == _proposal(
         f"Invalid column name: 'order id'. {CHARACTER_RULE}"
     )
-    assert rel["error_message"] == _rel_proposal(
+    assert rel["error_message"] == _proposal(
         f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
     )
     assert searched == [], "a bad name must be reported without reading the file"
@@ -1938,7 +1938,7 @@ def test_a_relationship_batch_keeps_the_entries_before_a_bad_name(
     result = propose_relationship_constructions([good, bad], ctx)
     assert result["status"] == "error"
     assert result["error_message"].endswith(
-        _rel_proposal(f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}")
+        _proposal(f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}")
     )
     assert list(ctx.state[PROPOSED_CONSTRUCTION_PLAN]) == ["SET"]
 
@@ -2022,7 +2022,9 @@ def test_a_bad_matched_property_is_refused_before_the_file_is_read(
     searched = []
     _only_these_columns_exist(monkeypatch, {"itemID", "supersededBy"}, searched)
     result = _propose_item(ctx, to_node_property=value)
-    expected = f"Invalid property name: '{value}'. {CHARACTER_RULE}"
+    expected = (
+        f"Invalid property name in 'to_node_property': '{value}'. {CHARACTER_RULE}"
+    )
     assert result["status"] == "error"
     assert result["error_message"] == _rel_proposal(expected)
     # The build refuses the stored shape with the same text.
@@ -2031,6 +2033,13 @@ def test_a_bad_matched_property_is_refused_before_the_file_is_read(
     )
     assert searched == [], "a bad name must be reported without reading the file"
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
+
+
+def test_a_bad_matched_property_names_its_end(ctx, any_column_exists):
+    result = _propose_item(ctx, from_node_property="item id")
+    assert result["error_message"] == _rel_proposal(
+        f"Invalid property name in 'from_node_property': 'item id'. {CHARACTER_RULE}"
+    )
 
 
 def test_a_bad_column_is_reported_before_a_bad_matched_property(ctx, any_column_exists):
@@ -2045,7 +2054,7 @@ def test_a_bad_column_is_reported_before_a_bad_matched_property(ctx, any_column_
         ctx,
         to_node_property="has space",
     )
-    assert result["error_message"] == _rel_proposal(
+    assert result["error_message"] == _proposal(
         f"Invalid column name: 'superseded by'. {CHARACTER_RULE}"
     )
 
@@ -2226,6 +2235,24 @@ def test_identical_ends_on_a_non_key_property_are_refused_too():
         "set that end's 'from_node_property' or 'to_node_property' to 'itemID'",
     ):
         assert fragment in problems[0], fragment
+
+
+@pytest.mark.parametrize("no_key", [None, ""], ids=repr)
+def test_identical_ends_on_a_node_without_a_key_are_told_to_key_it(no_key):
+    """There is no key to name, so the fix cannot be 'set it to the key'."""
+    plan = _item_plan(
+        ("to_node_property",), from_node_column="title", to_node_column="title"
+    )
+    plan["Item"]["unique_column_name"] = no_key
+    identical = [
+        p
+        for p in check_construction_plan_consistency(plan)
+        if "link a node to itself" in p
+    ]
+    assert len(identical) == 1, identical
+    assert identical[0].endswith("Key 'Item' by the column that identifies it first.")
+    assert "None" not in identical[0]
+    assert "_node_property" not in identical[0]
 
 
 def test_ends_on_different_labels_are_never_identical():
