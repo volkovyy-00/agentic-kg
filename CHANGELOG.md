@@ -14,8 +14,8 @@ There is no `[Unreleased]` section.
 - **A relationship end can name the node property it is matched on (#72, KG-45)**: `from_node_property` and
   `to_node_property`, on the rule and on both propose tools. A column holding another row's key under a
   different name, such as a reference to a row of the same file or to another label's key, now builds one
-  edge per row. Approval refuses a rule whose two ends read the same column and match it on the same node's
-  key, since every row would link a node to itself. A relationship load reports `rows_skipped`.
+  edge per row. Approval refuses a rule whose two ends read the same column and match it on the same node
+  property, since every row would link a node to itself. A relationship load reports `rows_skipped`.
 
 ### Fixed
 - **A reference under a different name no longer builds wrong edges (#72, KG-45)**: every rule a model could

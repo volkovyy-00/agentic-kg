@@ -2064,7 +2064,7 @@ def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkey
 def test_a_relationship_batch_keeps_each_entrys_matched_property(
     ctx, any_column_exists
 ):
-    """SC7: a test that fails if a batch entry's field is dropped. The typed
+    """A test that fails if a batch entry's field is dropped. The typed
     property sits next to the new fields, so a positional call that shifted
     proposed_property_types would fail here too."""
     result = propose_relationship_constructions(
@@ -2183,7 +2183,7 @@ def test_a_column_matched_on_the_key_under_another_name_is_consistent():
     ids=["field-omitted", "field-set-to-key", "both-fields-set"],
 )
 def test_identical_ends_on_the_key_are_refused(drop, overrides):
-    """SC2: resolving first makes 'omitted' and 'set to the key' the same rule."""
+    """Resolving first makes 'omitted' and 'set to the key' the same rule."""
     problems = check_construction_plan_consistency(_item_plan(drop, **overrides))
     assert len(problems) == 1, problems
     problem = problems[0]
@@ -2202,12 +2202,21 @@ def test_a_rule_differing_only_by_the_matched_property_is_accepted():
     assert check_construction_plan_consistency(plan) == []
 
 
-def test_identical_ends_on_a_non_key_property_are_not_refused():
-    """D2: left to the build's over-match warning."""
+def test_identical_ends_on_a_non_key_property_are_refused_too():
+    """A property holding one value per node matches each row's node to itself,
+    and no join warning fires at the build, so the key is not special."""
     plan = _item_plan(
         ("to_node_property",), from_node_column="title", to_node_column="title"
     )
-    assert check_construction_plan_consistency(plan) == []
+    problems = check_construction_plan_consistency(plan)
+    assert len(problems) == 1, problems
+    for fragment in (
+        "SUPERSEDED_BY: both ends read 'title'",
+        "'Item.title'",
+        "link a node to itself",
+        "set that end's 'from_node_property' or 'to_node_property' to 'itemID'",
+    ):
+        assert fragment in problems[0], fragment
 
 
 def test_ends_on_different_labels_are_never_identical():
@@ -2227,7 +2236,8 @@ def test_identical_ends_on_a_missing_node_rule_give_only_the_missing_node_proble
     plan = _item_plan(("to_node_property",), to_node_column="itemID")
     del plan["Item"]
     problems = check_construction_plan_consistency(plan)
-    assert problems and all("has no node construction" in p for p in problems)
+    assert problems
+    assert all("has no node construction" in p for p in problems), problems
 
 
 def test_identical_ends_on_an_unreadable_node_rule_give_no_identical_refusal():
@@ -2335,7 +2345,7 @@ def _typed_item_property_plan(**rel_overrides):
 
 
 def test_a_typed_node_property_refusal_does_not_say_to_join_on_the_key():
-    """F1, node branch: 'join SUPERSEDED_BY on itemID instead' reads as 'use the
+    """Node branch: 'join SUPERSEDED_BY on itemID instead' reads as 'use the
     key column' and, in a self-reference, gives two identical ends."""
     problems = check_construction_plan_consistency(_typed_item_property_plan())
     typed = [p for p in problems if "carries a declared type" in p]
@@ -2350,7 +2360,7 @@ def test_a_typed_node_property_refusal_does_not_say_to_join_on_the_key():
 
 
 def test_following_the_node_property_advice_is_not_refused_as_identical_ends():
-    """F1, node branch: apply the advice literally (set the end's property to
+    """Node branch: apply the advice literally (set the end's property to
     the key, drop the type) and the plan is consistent."""
     plan = _typed_item_property_plan(to_node_property="itemID")
     plan["Item"]["property_types"] = {}
@@ -2358,7 +2368,7 @@ def test_following_the_node_property_advice_is_not_refused_as_identical_ends():
 
 
 def test_a_typed_relationship_property_on_a_self_reference_offers_only_the_drop():
-    """F1, relationship branch: the end's column is matched on another property,
+    """Relationship branch: the end's column is matched on another property,
     so 'join on the key' would give identical ends. Only the drop is offered,
     and the sentence is still complete."""
     plan = _item_plan(
@@ -2378,7 +2388,7 @@ def test_a_typed_relationship_property_on_a_self_reference_offers_only_the_drop(
 
 
 def test_a_typed_relationship_property_whose_other_end_reads_the_key_offers_only_the_drop():
-    """F1, relationship branch, field omitted: the other end already reads the
+    """Relationship branch, field omitted: the other end already reads the
     key on the same label, so joining this end on the key makes them identical."""
     plan = _typed_item_property_plan(
         properties=["supersededBy"], property_types={"supersededBy": "integer"}
@@ -2432,7 +2442,7 @@ def test_a_typed_relationship_property_on_the_key_column_offers_only_the_drop():
 
 
 def test_a_field_less_column_beside_an_end_on_the_key_does_not_offer_to_join_on_it():
-    """F2: the other end already reads itemID on Item, so 'join on itemID' for
+    """The other end already reads itemID on Item, so 'join on itemID' for
     this end gives identical ends. The other two fixes stay, grammatical."""
     plan = _item_plan(("to_node_property",))
     plan["Item"]["properties"] = ["title"]
@@ -2458,7 +2468,7 @@ def _fixes_offered(problem):
 
 
 def test_a_typed_node_property_across_labels_offers_both_key_fixes_conditioned():
-    """Final verification: the cross-label case keeps 'join on the key', and the
+    """The cross-label case keeps 'join on the key', and the
     property fix says when it applies, since following it on a column that
     does not hold the key would pass approval and match nothing."""
     plan = _typed_plan()
@@ -2518,6 +2528,36 @@ def test_ends_already_identical_are_not_told_to_key_the_node_by_their_column():
     assert len(problems) == 2, problems
     for problem in problems:
         assert "key 'Item' by" not in _fixes_offered(problem), problem
+
+
+def test_a_typed_property_both_ends_match_names_the_relationship_once():
+    """Both ends of one rule match Item.title: the refusal names it once."""
+    plan = _item_plan(to_node_property="title", from_node_property="title")
+    plan["Item"]["property_types"] = {"title": "integer"}
+    plan["Item"]["properties"] = ["title", "rank", "supersededBy"]
+    plan["SUPERSEDED_BY"]["from_node_column"] = "rank"
+    typed = [
+        p
+        for p in check_construction_plan_consistency(plan)
+        if p.startswith("Item: 'title'")
+    ]
+    assert len(typed) == 1, typed
+    assert "SUPERSEDED_BY, SUPERSEDED_BY" not in typed[0]
+    assert "but SUPERSEDED_BY joins on it" in typed[0]
+
+
+def test_a_typed_key_is_not_told_to_match_on_itself():
+    """Every end joined on the key already matches the key, so neither key fix
+    is offered: they would change nothing."""
+    plan = _item_plan()
+    plan["Item"]["property_types"] = {"itemID": "integer"}
+    typed = [
+        p
+        for p in check_construction_plan_consistency(plan)
+        if "carries a declared type" in p
+    ]
+    assert len(typed) == 1, typed
+    assert typed[0].endswith("Drop the type for 'itemID'.")
 
 
 def test_approving_a_plan_documents_the_matched_property_not_the_column():

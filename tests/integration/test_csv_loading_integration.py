@@ -651,7 +651,7 @@ EMPLOYEE_PLAN = {
 def test_a_column_holding_another_rows_key_links_each_row_to_that_row(
     neo4j_graph, employees_source, monkeypatch
 ):
-    """SC1 / AC1 / AC4: employees.csv has 9 rows, 1 with a blank reportsTo;
+    """AC1 / AC4: employees.csv has 9 rows, 1 with a blank reportsTo;
     the other 8 name an employeeID in the file. Exact counts, not 'some'."""
     import agentic_kg.tools.cypher_tools as cypher_tools
     import agentic_kg.tools.kg_construction_tools as kg

@@ -205,8 +205,9 @@ defaulting to the column's own name (KG-45). Every reader of a relationship's en
 exists, a typed property is not joined, a joined property holds one value) see the matched property, never the
 file column. Only the typed-relationship-property refusal stays on the file columns, since coercion would change
 the value the join reads. `check_construction_plan_consistency` also refuses a rule whose two ends read the same
-column and match it on the same node's key: every row would link a node to itself. Identical ends on a non-key
-property are left to the build's over-match warning.
+column and match it on the same node property: every row would link a node to itself, and on a property holding
+one value per node no join warning fires at the build. Its own refusal messages offer a fix only where following it
+keeps the rule's two ends different.
 
 ### Handoff confirmation gates
 

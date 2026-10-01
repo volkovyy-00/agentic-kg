@@ -1552,3 +1552,22 @@ def test_partial_failure_summary_names_skipped_rows(monkeypatch):
         "SUPERSEDED_BY (8 relationships now in graph, 9 rows read, 1 skipped)"
         in message
     )
+
+
+def test_a_load_failure_counts_only_the_rows_it_sent(monkeypatch):
+    """A skipped row was never sent, so it is not among the rows committed
+    when a later batch fails."""
+    _batches(
+        monkeypatch,
+        [{"itemID": "1", "supersededBy": ""}, {"itemID": "5", "supersededBy": "1"}],
+        [{"itemID": "2", "supersededBy": "5"}],
+    )
+    db = FakeGraphDb(
+        responses=[
+            {"status": "success", "records": [{"rows_matched": 1}]},
+            {"status": "error", "error_message": "boom"},
+        ]
+    )
+    monkeypatch.setattr(kg, "graphdb", db)
+    message = kg.import_relationships(dict(ITEM_REL_RULE))["error_message"]
+    assert "load failed after 1 rows committed" in message

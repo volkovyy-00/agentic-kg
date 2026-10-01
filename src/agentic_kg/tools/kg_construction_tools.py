@@ -565,6 +565,9 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # than an error. Check the header before sending anything.
     rows_committed = 0
     rows_skipped = 0
+    # Rows actually sent and committed: what a failure message may claim is in
+    # the graph. rows_committed also counts skipped rows, as rows read.
+    rows_sent = 0
     rows_matched = 0
     totals: Dict[str, Any] = {}
     try:
@@ -604,7 +607,7 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             # and on a refusal the totals are discarded with the error anyway.
             _merge_tallies(totals, tallies)
             failure = _type_failure(
-                tallies, totals, typed_types, source_file, rows_committed
+                tallies, totals, typed_types, source_file, rows_sent
             )
             if failure is not None:
                 return tool_error(failure)
@@ -622,12 +625,13 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             )
             if result["status"] == "error":
                 return tool_error(
-                    f"{source_file}: load failed after {rows_committed} rows committed "
+                    f"{source_file}: load failed after {rows_sent} rows committed "
                     f"(the failing batch was rolled back): {result['error_message']}"
                 )
             for record in result.get("records") or []:
                 rows_matched += record.get("rows_matched", 0) or 0
             rows_committed += len(batch)
+            rows_sent += len(kept)
     except FileNotFoundError:
         return tool_error(f"{source_file}: no such source file")
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
