@@ -522,4 +522,5 @@ def test_a_file_column_named_like_a_property_but_matched_on_the_key_is_not_read(
     plan = _several_values_plan()
     plan["SEEN"]["from_node_property"] = "transect_name"
     problems, unverified = check(plan)
-    assert problems == [] and unverified == []
+    assert problems == []
+    assert unverified == []
