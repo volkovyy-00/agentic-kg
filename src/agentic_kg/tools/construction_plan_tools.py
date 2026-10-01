@@ -16,6 +16,7 @@ from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
 )
+from .relationship_endpoints import is_omitted
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
@@ -25,8 +26,9 @@ APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 # then fails the file check instead.
 _NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
-    "column cannot: if it is a key or join column, choose another column or tell "
-    "the user it cannot be used."
+    "column cannot, and neither can a node property, which is a column of the "
+    "node's own file: if it is a key, a join column or a matched node property, "
+    "choose another column or tell the user it cannot be used."
 )
 
 #  Tool: Propose Node Construction
@@ -220,35 +222,53 @@ def propose_relationship_construction(
     proposed_properties: list[str],
     tool_context: ToolContext,
     proposed_property_types: Optional[dict] = None,
+    from_node_property: Optional[str] = None,
+    to_node_property: Optional[str] = None,
 ) -> dict:
     """Propose a relationship construction for an approved file that supports the user goal.
 
     The construction will be added to the proposed construction plan dictionary under using proposed_relationship_type as the key.
+
+    Each end reads one column of the approved file and matches that value against
+    one property of the end's node. By default the property has the column's own
+    name. When the column holds the node's key (or another of its properties)
+    under a different name -- including a column holding the key of another node
+    with the same label -- pass that property as from_node_property or
+    to_node_property; the column itself stays the file's column.
 
     The construction entry will be a dictionary with the following keys:
     - property_types: An optional map of property name to declared type, one of
       "integer", "float" or "boolean". A property absent from this map is stored
       as text. Never declare a type for from_node_column or to_node_column: they
       are compared against the stored node property as raw text, so typing them
-      makes the relationship match nothing.
+      makes the relationship match nothing. The same holds for the node property
+      an end is matched on: declare no type for it on its node either.
 
-    The relationship type, both node labels and both join column names must each
-    be a letter or underscore followed by letters, digits or underscores. Cypher
-    keywords such as Order or END are fine. A column whose header breaks this
-    rule (such as 'Order ID') cannot be a join column; renaming it in the
-    proposal will not help.
+    The relationship type, both node labels, both join column names and both node
+    property names must each be a letter or underscore followed by letters, digits
+    or underscores. Cypher keywords such as Order or END are fine. A column whose
+    header breaks this rule (such as 'Order ID') cannot be a join column; renaming
+    it in the proposal will not help.
 
     Args:
         approved_file: The approved file to propose a relationship construction for
         proposed_relationship_type: The proposed label for constructed relationships
         from_node_label: The label of the source node
-        from_node_column: The name of the column within the approved file that will be used to uniquely identify source nodes
+        from_node_column: The column of the approved file whose value identifies
+            the from node of each row
         to_node_label: The label of the target node
-        to_node_column: The name of the column within the approved file that will be used to uniquely identify target nodes
+        to_node_column: The column of the approved file whose value identifies
+            the to node of each row
         proposed_properties: The columns of the approved file to store on each
             constructed relationship
         proposed_property_types: Optional map of property name to "integer",
             "float" or "boolean". Omit or pass {} to store every property as text.
+        from_node_property: Optional. The property of the from node that the
+            from_node_column value is matched against. Omit it when the from node
+            stores that value under the column's own name.
+        to_node_property: Optional. The property of the to node that the
+            to_node_column value is matched against. Omit it when the to node
+            stores that value under the column's own name.
 
     Returns:
         dict: A dictionary containing metadata about the content.
@@ -285,6 +305,12 @@ def propose_relationship_construction(
         # that reads as "typed" and fail on .items(). Absent means text.
         "property_types": proposed_property_types or {},
     }
+    # KG-45: stored only when given, so a plan that never uses the field stays
+    # byte-identical. "" counts as omitted (is_omitted); anything else is kept
+    # so the name check below refuses it rather than dropping it.
+    for side, value in (("from", from_node_property), ("to", to_node_property)):
+        if not is_omitted(value):
+            relationship_construction_rule[f"{side}_node_property"] = value
 
     # Names first, before the file is read (KG-44): see propose_node_construction.
     name_error = relationship_rule_name_error(relationship_construction_rule)
@@ -330,7 +356,8 @@ def propose_relationship_constructions(
             'approved_file', 'proposed_relationship_type', 'from_node_label',
             'from_node_column', 'to_node_label', 'to_node_column',
             'proposed_properties' and the optional 'proposed_property_types',
-            matching the arguments of 'propose_relationship_construction'
+            'from_node_property' and 'to_node_property', matching the arguments
+            of 'propose_relationship_construction'
 
     Returns:
         dict: Includes a 'status' key ('success' or 'error').
@@ -340,15 +367,23 @@ def propose_relationship_constructions(
     proposed = []
     for index, relationship_construction in enumerate(relationship_constructions):
         result = propose_relationship_construction(
-            relationship_construction.get("approved_file", ""),
-            relationship_construction.get("proposed_relationship_type", ""),
-            relationship_construction.get("from_node_label", ""),
-            relationship_construction.get("from_node_column", ""),
-            relationship_construction.get("to_node_label", ""),
-            relationship_construction.get("to_node_column", ""),
-            relationship_construction.get("proposed_properties", []),
-            tool_context,
-            relationship_construction.get("proposed_property_types", {}),
+            approved_file=relationship_construction.get("approved_file", ""),
+            proposed_relationship_type=relationship_construction.get(
+                "proposed_relationship_type", ""
+            ),
+            from_node_label=relationship_construction.get("from_node_label", ""),
+            from_node_column=relationship_construction.get("from_node_column", ""),
+            to_node_label=relationship_construction.get("to_node_label", ""),
+            to_node_column=relationship_construction.get("to_node_column", ""),
+            proposed_properties=relationship_construction.get(
+                "proposed_properties", []
+            ),
+            tool_context=tool_context,
+            proposed_property_types=relationship_construction.get(
+                "proposed_property_types", {}
+            ),
+            from_node_property=relationship_construction.get("from_node_property"),
+            to_node_property=relationship_construction.get("to_node_property"),
         )
         if result["status"] == "error":
             return tool_error(

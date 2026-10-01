@@ -1692,8 +1692,9 @@ CHARACTER_RULE = (
 # can be renamed, a file column cannot.
 NAME_HINT = (
     "A label or relationship type can be renamed to follow this rule, but a file "
-    "column cannot: if it is a key or join column, choose another column or tell "
-    "the user it cannot be used."
+    "column cannot, and neither can a node property, which is a column of the "
+    "node's own file: if it is a key, a join column or a matched node property, "
+    "choose another column or tell the user it cannot be used."
 )
 
 
@@ -1949,3 +1950,177 @@ def test_a_non_string_name_is_refused_not_crashed_on(ctx, any_column_exists):
     assert result["error_message"] == _proposal(
         f"Invalid label: '123'. {CHARACTER_RULE}"
     )
+
+
+# --- KG-45: an end may name the node property its column is matched on --------
+
+
+def _propose_item(ctx, **kwargs):
+    """Item.supersededBy holds another item's itemID."""
+    return propose_relationship_construction(
+        "items.csv",
+        "SUPERSEDED_BY",
+        "Item",
+        "itemID",
+        "Item",
+        "supersededBy",
+        [],
+        ctx,
+        **kwargs,
+    )
+
+
+def _item_rule(**extra):
+    """The rule propose_relationship_construction stores for _propose_item."""
+    rule = {
+        "construction_type": "relationship",
+        "source_file": "items.csv",
+        "relationship_type": "SUPERSEDED_BY",
+        "from_node_label": "Item",
+        "from_node_column": "itemID",
+        "to_node_label": "Item",
+        "to_node_column": "supersededBy",
+        "properties": [],
+        "property_types": {},
+    }
+    rule.update(extra)
+    return rule
+
+
+def test_the_matched_property_is_stored_on_its_end(ctx, any_column_exists):
+    result = _propose_item(ctx, to_node_property="itemID")
+    assert result["status"] == "success", result.get("error_message")
+    rule = ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"]
+    assert rule == _item_rule(to_node_property="itemID")
+    assert "from_node_property" not in rule
+
+
+@pytest.mark.parametrize("omitted", [None, ""])
+def test_an_omitted_matched_property_leaves_no_key(ctx, any_column_exists, omitted):
+    """A plan that never uses the field stays byte-identical to before KG-45."""
+    _propose_item(ctx, from_node_property=omitted, to_node_property=omitted)
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"] == _item_rule()
+
+
+@pytest.mark.parametrize(
+    "value", ["has space", "1id", " itemID", "item-id", [], 0, {}], ids=repr
+)
+def test_a_bad_matched_property_is_refused_before_the_file_is_read(
+    ctx, monkeypatch, value
+):
+    searched = []
+    _only_these_columns_exist(monkeypatch, {"itemID", "supersededBy"}, searched)
+    result = _propose_item(ctx, to_node_property=value)
+    expected = f"Invalid property name: '{value}'. {CHARACTER_RULE}"
+    assert result["status"] == "error"
+    assert result["error_message"] == _proposal(expected)
+    # The build refuses the stored shape with the same text.
+    assert result["error_message"] == _proposal(
+        kg.import_relationships(_item_rule(to_node_property=value))["error_message"]
+    )
+    assert searched == [], "a bad name must be reported without reading the file"
+    assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
+
+
+def test_a_bad_column_is_reported_before_a_bad_matched_property(ctx, any_column_exists):
+    result = propose_relationship_construction(
+        "items.csv",
+        "SUPERSEDED_BY",
+        "Item",
+        "itemID",
+        "Item",
+        "superseded by",
+        [],
+        ctx,
+        to_node_property="has space",
+    )
+    assert result["error_message"] == _proposal(
+        f"Invalid column name: 'superseded by'. {CHARACTER_RULE}"
+    )
+
+
+def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkeypatch):
+    """The matched property is a node property: parts.csv has no supplierID
+    column and must not need one (KG-50 edits the file-column check next)."""
+    searched = []
+    _only_these_columns_exist(monkeypatch, {"partID", "madeBy"}, searched)
+    result = propose_relationship_construction(
+        "parts.csv",
+        "MADE_BY",
+        "Part",
+        "partID",
+        "Supplier",
+        "madeBy",
+        [],
+        ctx,
+        to_node_property="supplierID",
+    )
+    assert result["status"] == "success", result.get("error_message")
+    assert searched == ["partID", "madeBy"]
+
+
+def test_a_relationship_batch_keeps_each_entrys_matched_property(
+    ctx, any_column_exists
+):
+    """SC7: a test that fails if a batch entry's field is dropped. The typed
+    property sits next to the new fields, so a positional call that shifted
+    proposed_property_types would fail here too."""
+    result = propose_relationship_constructions(
+        [
+            {
+                "approved_file": "items.csv",
+                "proposed_relationship_type": "SUPERSEDED_BY",
+                "from_node_label": "Item",
+                "from_node_column": "itemID",
+                "to_node_label": "Item",
+                "to_node_column": "supersededBy",
+                "proposed_properties": ["rank"],
+                "proposed_property_types": {"rank": "integer"},
+                "to_node_property": "itemID",
+            },
+            {
+                "approved_file": "parts.csv",
+                "proposed_relationship_type": "MAKES",
+                "from_node_label": "Supplier",
+                "from_node_column": "madeBy",
+                "from_node_property": "supplierID",
+                "to_node_label": "Part",
+                "to_node_column": "partID",
+                "proposed_properties": [],
+            },
+        ],
+        ctx,
+    )
+    assert result["status"] == "success", result.get("error_message")
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert plan["SUPERSEDED_BY"]["to_node_property"] == "itemID"
+    assert plan["SUPERSEDED_BY"]["property_types"] == {"rank": "integer"}
+    assert "from_node_property" not in plan["SUPERSEDED_BY"]
+    assert plan["MAKES"]["from_node_property"] == "supplierID"
+    assert "to_node_property" not in plan["MAKES"]
+
+
+def test_an_empty_matched_property_in_a_batch_entry_is_omitted(ctx, any_column_exists):
+    propose_relationship_constructions(
+        [
+            {
+                "approved_file": "items.csv",
+                "proposed_relationship_type": "SUPERSEDED_BY",
+                "from_node_label": "Item",
+                "from_node_column": "itemID",
+                "from_node_property": "",
+                "to_node_label": "Item",
+                "to_node_column": "supersededBy",
+                "to_node_property": "",
+                "proposed_properties": [],
+            }
+        ],
+        ctx,
+    )
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"] == _item_rule()
+
+
+def test_the_batch_key_list_names_the_matched_properties():
+    doc = propose_relationship_constructions.__doc__ or ""
+    assert "'from_node_property'" in doc
+    assert "'to_node_property'" in doc

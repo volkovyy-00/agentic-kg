@@ -30,6 +30,7 @@ from agentic_kg.common.value_types import (
     coerce,
 )
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
+from agentic_kg.tools.relationship_endpoints import relationship_endpoints
 
 logger = logging.getLogger(__name__)
 
@@ -471,9 +472,21 @@ def node_rule_name_error(rule: dict) -> str | None:
 def relationship_rule_name_error(rule: dict) -> str | None:
     """The build's refusal for the first unusable name in a relationship rule, or None.
 
-    See node_rule_name_error.
+    See node_rule_name_error. The five names in _RELATIONSHIP_RULE_NAMES come
+    first, read by direct indexing, so a missing required key still raises the
+    KeyError construct_domain_graph reports. Then each end's matched node
+    property (KG-45), resolved: an omitted one is the column just checked, so an
+    older rule without the field can never raise here.
     """
-    return _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
+    error = _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
+    if error is not None:
+        return error
+    for end in relationship_endpoints(rule):
+        try:
+            _checked("property name", end.matched_property)
+        except InvalidIdentifier as exc:
+            return str(exc)
+    return None
 
 
 def import_nodes(node_construction: dict) -> Dict[str, Any]:

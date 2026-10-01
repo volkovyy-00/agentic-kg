@@ -125,6 +125,22 @@ def test_proposed_property_types_stays_optional_in_the_declaration(fn):
     assert "proposed_property_types" not in required
 
 
+def test_the_matched_properties_stay_optional_in_the_declaration():
+    """Same contract as proposed_property_types: a propose call that leaves the
+    new fields out must not be rejected by the declaration."""
+    from google.adk.tools.function_tool import FunctionTool
+
+    schema = (
+        FunctionTool(propose_relationship_construction)
+        ._get_declaration()
+        .parameters_json_schema
+        or {}
+    )
+    for name in ("from_node_property", "to_node_property"):
+        assert name in schema.get("properties", {}), name
+        assert name not in schema.get("required", []), name
+
+
 @pytest.mark.parametrize(
     "fn", [propose_node_construction, propose_relationship_construction]
 )
