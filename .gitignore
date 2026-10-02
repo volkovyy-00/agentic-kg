@@ -35,3 +35,7 @@ docs/superpowers/
 
 # Local defect/follow-up notes, not a committed project artifact
 docs/backlog/
+
+# Claude Code: per-user settings and session worktrees. Rules and skills under .claude/ are committed.
+.claude/settings.local.json
+.claude/worktrees/
