@@ -215,7 +215,8 @@ class Neo4jForADK:
         cypher_tools._physical_schema, already wraps it in try/except ->
         tool_error. Any new caller must do the same: an unhandled exception
         mid-turn ends the turn with no reply the model can act on, and `adk
-        web` shows the user only a one-line error (see CLAUDE.md).
+        web` shows the user only a one-line error (see
+        .claude/skills/debug-adk-web/SKILL.md).
         """
         return self._connection()[0]
 

@@ -65,7 +65,7 @@ graphrag_agent = Agent(
     # the handoff gate. transfer_guard_callbacks removes it and answers a call
     # made anyway, and carries drop_foreign_context (PR #9's context
     # filtering). The mechanism, and why disallow_transfer_to_parent is NOT
-    # used, are in common/adk_transfer.py and CLAUDE.md, once.
+    # used, are in common/adk_transfer.py, once.
     #
     # Gated only for v2, for the same reason as the reset callback below. v1
     # is the ungated A/B baseline -- its 'finished' transfers unconditionally,

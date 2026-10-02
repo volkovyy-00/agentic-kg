@@ -52,10 +52,11 @@ def test_the_proposal_agent_can_batch_type_hints():
 )
 def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
     """An instruction advertising a tool the agent was not given is the failure
-    mode CLAUDE.md documents for ADK's injected transfer_to_agent: the model
-    follows the advertised path, the name is not in tools_dict, and google-adk
-    2.9 answers with a not-found error -- a wasted model call every time the
-    model follows the advertisement, not a loud error at startup.
+    mode refuse_transfer_to_agent's docstring (common/adk_transfer.py) documents
+    for ADK's injected transfer_to_agent: the model follows the advertised path,
+    the name is not in tools_dict, and google-adk 2.9 answers with a not-found
+    error -- a wasted model call every time the model follows the
+    advertisement, not a loud error at startup.
 
     It happened here: _VALIDATION_RULES is shared text embedded in BOTH agents
     and offers 'column_type_hints', while only the proposal agent held it. Shared

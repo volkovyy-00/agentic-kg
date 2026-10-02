@@ -5,8 +5,8 @@
 `CHANGELOG.md`'s `[0.5.0]` section so it lists everything the tag actually contains (#18). For anything
 that lands after this, check `CHANGELOG.md` and git log, and treat this document as the thing to update.
 This is the "what is this and why does it exist" document.
-For the architecture map you need while editing code, read `CLAUDE.md`. For the PR/branch/CHANGELOG
-workflow, read `CONTRIBUTING.md`. This document deliberately does not duplicate either.
+For how the code fits together, read §2–§4 below, then the docstring of the module you are changing.
+For the PR/branch/CHANGELOG workflow, read `CONTRIBUTING.md`; this document does not duplicate it.
 
 ---
 
@@ -234,7 +234,7 @@ the end-to-end test asserts on what reached the model, never on what the model s
 ## 5. Conventions
 
 See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHANGELOG conventions, and
-`CLAUDE.md` for the architecture map. Only the things most likely to bite you are repeated here:
+§2–§4 plus the module docstrings for the architecture. Only the things most likely to bite you are repeated here:
 
 - **It's a fork, and `gh` knows it.** GitHub lists this repo as a fork of `neo4j-contrib/agentic-kg`, and a
   clone may carry an `upstream` remote pointing there. Without `gh repo set-default volkovyy-00/agentic-kg`,
@@ -283,6 +283,6 @@ bundled furniture example must keep working throughout.
   — and now duplicates logic: `graph_profile.py`'s own numeric-pattern regexes have diverged from
   `value_types.py`'s (the construction path handles negative currency written either way round and
   accounting-parenthesis negatives; the profile's copy does not), a gap #13 knowingly left unclosed.
-- Model configuration drifts from documentation: the models named in `CLAUDE.md` and `CHANGELOG.md` 0.4.0
+- Model configuration drifts from documentation: the models named in `CHANGELOG.md` 0.4.0
   exist only in an untracked `.env`. A fresh clone runs on the `gpt-4o`/`gpt-4o-mini` defaults in
   `.env.example` and `common/config.py`.
