@@ -44,3 +44,19 @@ def _reset_settings_after_test():
     """
     yield
     reset_settings()
+
+
+@pytest.fixture(autouse=True)
+def _reset_encoding_memory():
+    """Forget every remembered encoding decision before and after each test.
+
+    open_source remembers its per-file decision in a module dict keyed by path.
+    The memory:// filesystem is one process-wide store reused by name across
+    tests, so a decision made for one test's /src/a.csv must not answer for the
+    next test's file of the same name.
+    """
+    from agentic_kg.common.file_source import reset_encoding_memory
+
+    reset_encoding_memory()
+    yield
+    reset_encoding_memory()

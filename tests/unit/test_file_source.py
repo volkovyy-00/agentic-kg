@@ -1,4 +1,6 @@
 import io
+import logging
+import os
 
 import fsspec
 import pytest
@@ -72,33 +74,37 @@ def test_relative_path_anchors_to_repo_root_not_cwd(monkeypatch, tmp_path):
     assert str(tmp_path) not in root
 
 
-def test_open_source_reads_non_ascii_content_as_utf8(memory_source, monkeypatch):
-    """open_source's text mode must not fall back to
-    locale.getpreferredencoding(): every bundled CSV under data/bom/ contains
-    non-ASCII (Swedish) characters, so on a non-UTF-8 locale that fallback is
-    silent mojibake in the constructed graph, not an exception. Faking the
-    process locale is not reliably observable by TextIOWrapper (its default
-    encoding is resolved once, not looked up live), so this pins the actual
-    encoding kwarg that reaches fsspec's TextIOWrapper instead.
-    """
-    payload = "Björk café".encode("utf-8")
-    with memory_source.open("/src/nonascii.csv", "wb") as handle:
-        handle.write(payload)
+def test_open_source_never_falls_back_to_the_locale_encoding(
+    memory_source, monkeypatch
+):
+    """open_source's text mode must pass an explicit encoding to fsspec's
+    TextIOWrapper, never leave it to locale.getpreferredencoding(): the bundled
+    CSVs under data/bom/ contain non-ASCII (Swedish) characters, so on a
+    non-UTF-8 locale that fallback is silent mojibake in the constructed graph,
+    not an exception. Faking the locale is not observable (TextIOWrapper resolves
+    its default once), so this spies on the kwarg that reaches it. It must be
+    explicit and one of the two the scan can decide."""
+    with memory_source.open("/src/utf8.csv", "wb") as handle:
+        handle.write("Björk café".encode("utf-8"))
+    with memory_source.open("/src/win.csv", "wb") as handle:
+        handle.write("Björk café".encode("cp1252"))
 
-    captured_kwargs = {}
+    captured = []
     real_text_io_wrapper = io.TextIOWrapper
 
     class _SpyTextIOWrapper(real_text_io_wrapper):
         def __init__(self, buffer, *args, **kwargs):
-            captured_kwargs.update(kwargs)
+            captured.append(kwargs.get("encoding"))
             super().__init__(buffer, *args, **kwargs)
 
     monkeypatch.setattr(io, "TextIOWrapper", _SpyTextIOWrapper)
 
-    with file_source.open_source("nonascii.csv") as handle:
+    with file_source.open_source("utf8.csv") as handle:
+        assert handle.read() == "Björk café"
+    with file_source.open_source("win.csv") as handle:
         assert handle.read() == "Björk café"
 
-    assert captured_kwargs.get("encoding") == "utf-8"
+    assert captured == ["utf-8-sig", "cp1252"]
 
 
 def test_uninstalled_scheme_raises_source_error(monkeypatch):
@@ -340,3 +346,233 @@ def test_a_refusal_is_a_source_error_with_a_self_contained_message():
         f"x.csv {_NOT_TEXT}: it looks like UTF-16 or binary. Re-save it as UTF-8."
     )
     assert "SourceEncodingError" not in message
+
+
+# --- open_source with detection (KG-47) ----------------------------------------
+
+
+def test_open_source_reads_a_windows_1252_file_correctly(memory_source):
+    """Review focus 3: the characters only cp1252 has, which Latin-1 gets wrong."""
+    text = "name\nLuleå\nRössle Sauerkraut\n€5 “quoted” – dash\n"
+    _put(memory_source, "win.csv", text.encode("cp1252"))
+    with file_source.open_source("win.csv") as handle:
+        assert handle.read() == text
+
+
+def test_open_source_drops_a_utf8_bom(memory_source):
+    _put(memory_source, "bom.csv", b"\xef\xbb\xbfid,name\n1,Ada\n")
+    with file_source.open_source("bom.csv") as handle:
+        assert handle.read() == "id,name\n1,Ada\n"
+
+
+def test_open_source_refuses_a_file_that_is_not_text(memory_source):
+    _put(memory_source, "bad.csv", b"id,name\n1,Bj\x81rk\n")
+    with pytest.raises(file_source.SourceEncodingError) as raised:
+        file_source.open_source("bad.csv")
+    message = str(raised.value)
+    assert message.startswith("bad.csv is not valid UTF-8 or Windows-1252 text")
+    assert message.endswith("Re-save it as UTF-8.")
+    assert "SourceEncodingError" not in message
+
+
+def test_the_refusal_names_the_callers_relative_path(memory_source):
+    _put(memory_source, "nested/bad.csv", b"a\x00b")
+    with pytest.raises(file_source.SourceEncodingError, match="nested/bad.csv is not"):
+        file_source.open_source("nested/bad.csv")
+
+
+def test_a_binary_read_is_never_scanned_or_refused(memory_source):
+    _put(memory_source, "blob.bin", b"\x00\x81\xff")
+    with file_source.open_source("blob.bin", "rb") as handle:
+        assert handle.read() == b"\x00\x81\xff"
+
+
+def test_encoding_is_not_a_caller_choice_in_text_read_mode(memory_source):
+    for mode in ("r", "rt"):
+        with pytest.raises(TypeError, match="encoding"):
+            file_source.open_source("top.csv", mode, encoding="latin-1")
+
+
+def test_the_decision_is_remembered_while_the_file_is_unchanged(
+    memory_source, monkeypatch
+):
+    scans = []
+    real_scan = file_source._scan
+
+    def counting_scan(fs, full_path):
+        scans.append(full_path)
+        return real_scan(fs, full_path)
+
+    monkeypatch.setattr(file_source, "_scan", counting_scan)
+    for _ in range(3):
+        file_source.open_source("top.csv").close()
+    assert len(scans) == 1
+
+    _put(memory_source, "top.csv", b"a,b\n1,2\n")  # re-saved: `created` changes
+    file_source.open_source("top.csv").close()
+    assert len(scans) == 2
+
+
+def test_a_resave_in_another_encoding_is_read_correctly_next_call(memory_source):
+    """SC3, same size, on the memory filesystem (its `created` changes)."""
+    _put(memory_source, "x.csv", b"\xc3\xa9")  # "é" as UTF-8, two bytes
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "é"
+    _put(memory_source, "x.csv", b"\xe9\xe9")  # "éé" as cp1252, two bytes
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "éé"
+
+
+def test_a_resave_on_the_local_filesystem_is_read_correctly_next_call(
+    tmp_path, monkeypatch
+):
+    """SC3 on a real filesystem. os.utime forces a different mtime so a coarse
+    timestamp on a CI runner cannot make this flaky."""
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    reset_settings()
+    path = tmp_path / "x.csv"
+    path.write_bytes(b"\xc3\xa9")
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "é"
+    before = path.stat().st_mtime
+    path.write_bytes(b"\xe9\xe9")
+    os.utime(path, (before + 10, before + 10))
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "éé"
+
+
+def test_a_cached_refusal_is_not_sticky(memory_source):
+    """The ticket's own workaround: re-save the file as UTF-8."""
+    _put(memory_source, "x.csv", b"a,\x81\n")
+    with pytest.raises(file_source.SourceEncodingError):
+        file_source.open_source("x.csv")
+    _put(memory_source, "x.csv", "a,é\n".encode("utf-8"))
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "a,é\n"
+
+
+class _BareFs:
+    """The memory filesystem as a backend that reports no freshness field.
+
+    The memory filesystem reports `created`, so it cannot prove the "no field
+    means re-scan every call" rule; this one reports only name, size and type,
+    and records the order of the calls it receives."""
+
+    protocol = "bare"
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.calls = []
+        self.open_kwargs = []
+
+    def exists(self, path):
+        return self.inner.exists(path)
+
+    def invalidate_cache(self, path=None):
+        self.calls.append(("invalidate_cache", path))
+
+    def info(self, path):
+        self.calls.append(("info", path))
+        full = self.inner.info(path)
+        return {"name": full["name"], "size": full["size"], "type": full["type"]}
+
+    def open(self, path, mode="rb", **kwargs):
+        self.calls.append(("open", path, mode))
+        self.open_kwargs.append(kwargs)
+        return self.inner.open(path, mode, **kwargs)
+
+
+@pytest.fixture
+def bare_source(memory_source, monkeypatch):
+    bare = _BareFs(memory_source)
+    monkeypatch.setattr(file_source, "get_source_fs", lambda: (bare, "/src"))
+    return bare
+
+
+def test_a_non_read_text_mode_is_not_scanned_and_keeps_the_utf8_default(bare_source):
+    file_source.open_source("top.csv", "w").close()
+    assert [call[0] for call in bare_source.calls] == ["open"], "no scan, no info"
+    assert bare_source.open_kwargs[-1]["encoding"] == "utf-8"
+
+
+def test_a_backend_with_no_freshness_field_is_rescanned_every_call(bare_source):
+    _put(bare_source.inner, "x.csv", b"\xc3\xa9")
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "é"
+    _put(bare_source.inner, "x.csv", b"\xe9\xe9")  # same size, nothing to tell
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "éé"
+
+
+def test_the_cache_is_invalidated_then_info_read_then_the_file_scanned(bare_source):
+    """invalidate_cache first: s3fs and gcsfs answer info() from the listing cache
+    that find() fills, so without it a re-saved file keeps its old size and ETag.
+    info() before the scan: a change during the scan then fails safe."""
+    file_source.open_source("top.csv").close()
+    path = "/src/top.csv"
+    assert bare_source.calls == [
+        ("invalidate_cache", path),
+        ("info", path),
+        ("open", path, "rb"),
+        ("open", path, "r"),
+    ]
+
+
+def test_a_change_during_the_scan_is_not_trusted(memory_source, monkeypatch):
+    _put(memory_source, "x.csv", b"\xc3\xa9")
+    real_scan = file_source._scan
+
+    def scan_then_resave(fs, full_path):
+        decision = real_scan(fs, full_path)
+        _put(memory_source, "x.csv", b"\xe9\xe9")  # replaced while "scanning"
+        return decision
+
+    monkeypatch.setattr(file_source, "_scan", scan_then_resave)
+    file_source.open_source("x.csv").close()  # stores the PRE-scan fingerprint
+    monkeypatch.setattr(file_source, "_scan", real_scan)
+    with file_source.open_source("x.csv") as handle:
+        assert handle.read() == "éé"
+
+
+def test_the_cache_key_hashes_for_any_protocol_shape():
+    class Fs:
+        def __init__(self, protocol):
+            self.protocol = protocol
+
+    for protocol in ("memory", ("file", "local"), ["file", "local"]):
+        key = (file_source._protocols(Fs(protocol)), "/src/a.csv")
+        assert hash(key) is not None
+    assert file_source._protocols(Fs("memory")) == ("memory",)
+    assert file_source._protocols(Fs(["file", "local"])) == ("file", "local")
+
+
+def test_the_fingerprint_needs_a_size_and_a_freshness_field():
+    fingerprint = file_source._fingerprint
+    assert fingerprint({"name": "a", "size": 3, "type": "file"}) is None
+    assert fingerprint({"size": None, "mtime": 1.0}) is None
+    assert fingerprint({"size": 3, "mtime": None}) is None
+    assert fingerprint({"size": 3, "mtime": 1.0}) == (3, (("mtime", 1.0),))
+    # Names match case-insensitively with underscores removed.
+    assert fingerprint({"size": 3, "ETag": "x"}) == (3, (("ETag", "x"),))
+    assert fingerprint({"size": 3, "LastModified": 5}) == (3, (("LastModified", 5),))
+    assert fingerprint({"size": 3, "last_modified": 5}) == (3, (("last_modified", 5),))
+    assert fingerprint({"size": 3, "ino": 99}) is None, "ino is not a freshness field"
+
+
+def test_a_windows_1252_file_warns_once_per_file_version(memory_source, caplog):
+    logger_name = "agentic_kg.common.file_source"
+    _put(memory_source, "win.csv", "Luleå".encode("cp1252"))
+    _put(memory_source, "ok.csv", "Luleå".encode("utf-8"))
+    with caplog.at_level(logging.WARNING, logger=logger_name):
+        file_source.open_source("win.csv").close()
+        file_source.open_source("win.csv").close()
+        file_source.open_source("ok.csv").close()
+    warnings = [r for r in caplog.records if r.name == logger_name]
+    assert len(warnings) == 1
+    assert "win.csv" in warnings[0].getMessage()
+    assert "Windows-1252" in warnings[0].getMessage()
+
+    _put(memory_source, "win.csv", "Köln".encode("cp1252"))  # a new file version
+    with caplog.at_level(logging.WARNING, logger=logger_name):
+        file_source.open_source("win.csv").close()
+    assert len([r for r in caplog.records if r.name == logger_name]) == 2

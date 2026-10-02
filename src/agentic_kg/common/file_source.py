@@ -264,24 +264,136 @@ def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
     return _outcome(utf8, utf8_ok, has_utf8_bom, cp1252_failure)
 
 
+# info() fields that change when a file is re-saved. A key matches when its
+# lowercased name, with underscores removed, is in this set, so "last_modified",
+# "LastModified" and "lastmodified" are one field. There are no per-backend
+# tables: a backend whose fields are not listed has no fingerprint and its files
+# are re-scanned on every call, which is the safe direction.
+_FRESHNESS_FIELDS = frozenset(
+    {"mtime", "created", "etag", "lastmodified", "updated", "generation", "versionid"}
+)
+
+_decisions: dict[Tuple[Tuple[str, ...], str], Tuple[Tuple[Any, ...], _Decision]] = {}
+
+
+def reset_encoding_memory() -> None:
+    """Forget every remembered decision. For tests: a long-lived process
+    re-scans a changed file by itself, through the fingerprint."""
+    _decisions.clear()
+
+
+def _protocols(fs: AbstractFileSystem) -> Tuple[str, ...]:
+    """`fs.protocol` as a tuple: it is a str on some filesystems and a tuple
+    (("file", "local")) on others, and the cache key has to hash either way."""
+    protocol = fs.protocol
+    return (protocol,) if isinstance(protocol, str) else tuple(protocol)
+
+
+def _fingerprint(info: dict) -> Optional[Tuple[Any, ...]]:
+    """Size plus every freshness field the backend reports, or None.
+
+    None means the file cannot be recognised as unchanged, so the caller scans
+    it again on every call."""
+    size = info.get("size")
+    stamps = sorted(
+        (str(key), value)
+        for key, value in info.items()
+        if value is not None and str(key).lower().replace("_", "") in _FRESHNESS_FIELDS
+    )
+    if size is None or not stamps:
+        return None
+    return (size, tuple(stamps))
+
+
+def _decide(fs: AbstractFileSystem, full_path: str, relative_path: str) -> _Decision:
+    """The file's decision: remembered while it is unchanged, else a fresh scan.
+
+    The fingerprint is read BEFORE the scan and stored with the decision, so a
+    file replaced while it is being scanned carries a stale fingerprint and is
+    scanned again on the next call. invalidate_cache comes first: s3fs and gcsfs
+    answer info() from the directory-listing cache that find() fills, and
+    list_source_files() calls find(), so without it a file re-saved after the
+    listing keeps its old size and ETag. It is a no-op on local and memory.
+    """
+    fs.invalidate_cache(full_path)
+    fingerprint = _fingerprint(fs.info(full_path))
+    key = (_protocols(fs), full_path)
+    if fingerprint is not None:
+        stored = _decisions.get(key)
+        if stored is not None and stored[0] == fingerprint:
+            return stored[1]
+    decision = _scan(fs, full_path)
+    if decision.encoding == "cp1252":
+        logger.warning(
+            "%s is not valid UTF-8, so it is read as Windows-1252; if its accented "
+            "text looks wrong, re-save it as UTF-8",
+            relative_path,
+        )
+    if fingerprint is None:
+        _decisions.pop(key, None)
+    else:
+        _decisions[key] = (fingerprint, decision)
+    return decision
+
+
+def _is_text_read(mode: str) -> bool:
+    return "r" in mode and "b" not in mode and "+" not in mode
+
+
 def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
     """Open a source file by relative name.
 
-    Text mode is the default because clevercsv requires an iterable of str.
+    Every text source file is opened through here and nowhere else: the
+    encoding rule and the refusal below hold for every tool only because of that.
+
+    A text read ("r" or "rt") decides its own encoding from one scan of the
+    whole file: UTF-8 (a BOM is dropped) if it decodes as UTF-8, else
+    Windows-1252, else the file is refused. A NUL byte anywhere, or a UTF-16
+    byte-order mark, is refused too, since Windows-1252 accepts every byte of a
+    UTF-16 file and would read it as silent garbage. The decision is remembered
+    while the file is unchanged (see _decide). Text is the default because
+    clevercsv requires an iterable of str. `encoding=` is not accepted in a text
+    read: a caller choosing its own would bypass the refusal.
+
+    Known limits, accepted: a UTF-8 file with one stray byte reads as
+    Windows-1252 with its other accented text garbled; a file in any other
+    single-byte encoding (Latin-2, Windows-1251) reads with wrong letters and no
+    error, because its bytes decode under Windows-1252; a Windows-1252 file whose
+    bytes happen to be valid UTF-8 reads as UTF-8; a same-size edit inside the
+    backend's timestamp resolution is missed where the backend reports a time
+    field; and the first touch of a file reads all of it, even for a 100-line
+    sample or a header, which on a remote backend is a full download. Binary
+    modes and non-read text modes are not scanned.
 
     Raises:
         FileNotFoundError: if the file does not exist.
         SourceError: if the source location is misconfigured.
+        SourceEncodingError: if a text read finds a file that is not UTF-8 or
+            Windows-1252 text (a SourceError).
+        TypeError: if `encoding` is passed to a text read.
     """
+    text_read = _is_text_read(mode)
+    if text_read and "encoding" in kwargs:
+        raise TypeError(
+            "open_source chooses the encoding of a text file itself; "
+            "do not pass encoding="
+        )
     fs, root = get_source_fs()
     full_path = _full_path(root, relative_path)
     if not fs.exists(full_path):
         raise FileNotFoundError(f"No such source file: {relative_path}")
-    if "b" not in mode:
+    if text_read:
+        decision = _decide(fs, full_path, relative_path)
+        if decision.encoding is None:
+            raise SourceEncodingError(
+                _refusal_message(relative_path, decision.refusal or "")
+            )
+        kwargs.setdefault("newline", "")
+        kwargs["encoding"] = decision.encoding
+    elif "b" not in mode:
         kwargs.setdefault("newline", "")
         # Without an explicit encoding, TextIOWrapper falls back to
-        # locale.getpreferredencoding(False). On a non-UTF-8 locale that is
-        # silent mojibake, not an exception, and every bundled CSV under
-        # data/bom/ contains non-ASCII characters.
+        # locale.getpreferredencoding(False): silent mojibake on a non-UTF-8
+        # locale, not an exception.
         kwargs.setdefault("encoding", "utf-8")
     return fs.open(full_path, mode, **kwargs)
