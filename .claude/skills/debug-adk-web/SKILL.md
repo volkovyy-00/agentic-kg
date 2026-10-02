@@ -19,9 +19,9 @@ Check, cheapest first:
 An exception that escapes the run is not swallowed: on google-adk 2.9, `/run_sse` sends it to the
 browser, which shows a red error event in the chat plus a one-line snackbar.
 
-**Reasoning-model calls failing.** OpenRouter pre-authorizes a call's output-token ceiling against the
-account balance and answers a 402 when the balance cannot cover it (`get_llm()` caps `max_tokens` at
-8192 to bound this). The dev UI shows the red event and snackbar, and the `call_llm` span has no
-attributes. Check the OpenRouter balance and the server log before assuming a code regression.
+**Reasoning-model calls failing.** A 402 from OpenRouter shows as the red event and snackbar, and the
+`call_llm` span has no attributes. Check the OpenRouter balance and the server log before assuming a
+code regression; why the output-token cap exists is at `_LLM_MAX_TOKENS` in
+`src/agentic_kg/common/llm_catalog.py`.
 
 Never reload the tab while a turn is genuinely streaming.
