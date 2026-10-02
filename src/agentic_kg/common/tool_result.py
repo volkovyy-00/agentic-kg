@@ -1,3 +1,14 @@
+"""The one result shape every ADK tool in this package returns.
+
+A tool returns tool_success(key, value) -- {"status": "success", key: value}
+-- or tool_error(message) -- {"status": "error", "error_message": message}.
+Callers read a result through is_success, is_error, get_or_else, get_or_raise,
+map_result and map_error rather than indexing the dict. Do not invent another
+dict shape for a new tool. The one exception is 'finished' (make_finished in
+tools/adk_tools.py and the gated wrappers), which returns a bare {} on success;
+only a gated wrapper's refusal is a tool_error.
+"""
+
 from typing import Any, Callable, Dict, Mapping
 
 # A plain dict, not a TypedDict union: tool_success() stores the payload under a

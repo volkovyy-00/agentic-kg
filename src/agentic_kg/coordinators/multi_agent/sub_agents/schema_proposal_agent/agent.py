@@ -305,6 +305,14 @@ def _plan_problems(state: StateLike) -> list[str]:
 
 
 class CheckStatusAndEscalate(BaseAgent):
+    """The refinement loop's stop-check, run after the critic every iteration.
+
+    It writes `feedback` (on a mechanical problem, text beginning with
+    PLAN_PROBLEM_HEADER's "retry:") and FEEDBACK_KIND_KEY through the event's
+    state_delta, never by mutating ctx.session.state: the loop runs inside an
+    AgentTool, and AgentTool copies only state_delta out of the child session.
+    """
+
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
@@ -379,6 +387,9 @@ class CheckStatusAndEscalate(BaseAgent):
 refinement_loop = LoopAgent(
     name="schema_refinement_loop",
     description="Analyzes approved files to propose a graph construction plan based on user intent and feedback",
+    # At most two iterations: no third exists to repair a problem the second
+    # revision introduces. It still surfaces at approval, which runs the same
+    # checks through find_plan_problems.
     max_iterations=2,
     sub_agents=[
         schema_proposal_agent,

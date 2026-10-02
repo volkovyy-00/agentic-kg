@@ -475,6 +475,12 @@ def node_rule_name_error(rule: dict) -> str | None:
     The propose tools call this too, so a name is refused when it is proposed
     with exactly the text the build would give it (KG-44). A missing key raises
     KeyError, which construct_domain_graph reports per rule.
+
+    The live writers of the plan are the propose and remove tools. Only the
+    propose tools refuse names -- through this function, and through the two
+    parts of relationship_rule_name_error -- and the remove tools only delete.
+    The build still re-checks with checked() in the loaders and in
+    create_uniqueness_constraint, because those can be called directly.
     """
     return _first_name_error(rule, _NODE_RULE_NAMES)
 
@@ -560,7 +566,10 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
     # node loader stored, which is raw CSV text for identifiers. That is why a
     # typed join column is refused at approval time -- see
     # check_construction_plan_consistency. Coercion touches typed_properties
-    # only, which by that rule can never include a join column.
+    # only, which by that rule can never include a join column. So a non-blank
+    # join value is matched exactly as the file holds it, padding included:
+    # " 8" matches only a node property stored as " 8", the raw text the node
+    # loader writes for the same cell.
     query = f"""UNWIND $rows AS row
     MATCH (from_node:{quote(from_label)} {{ {quote(from_end.matched_property)} : row[$from_node_column] }}),
           (to_node:{quote(to_label)} {{ {quote(to_end.matched_property)} : row[$to_node_column] }})
