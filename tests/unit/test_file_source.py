@@ -84,10 +84,8 @@ def test_open_source_never_falls_back_to_the_locale_encoding(
     not an exception. Faking the locale is not observable (TextIOWrapper resolves
     its default once), so this spies on the kwarg that reaches it. It must be
     explicit and one of the two the scan can decide."""
-    with memory_source.open("/src/utf8.csv", "wb") as handle:
-        handle.write("Björk café".encode("utf-8"))
-    with memory_source.open("/src/win.csv", "wb") as handle:
-        handle.write("Björk café".encode("cp1252"))
+    _put(memory_source, "utf8.csv", "Björk café".encode("utf-8"))
+    _put(memory_source, "win.csv", "Björk café".encode("cp1252"))
 
     captured = []
     real_text_io_wrapper = io.TextIOWrapper
@@ -249,7 +247,9 @@ def test_a_truncated_lead_byte_at_the_end_reads_as_cp1252(memory_source):
 
 @pytest.mark.parametrize(
     ("text", "chunk"),
-    [("aé", 2), ("xxxé", 4), ("ééé", 1), ("\ufeffid\n", 1)],
+    # The first three bytes are scanned as a chunk of their own, so each text
+    # starts with three ASCII bytes and the split lands in the chunks after them.
+    [("abcaé", 2), ("abcxxxé", 4), ("abcééé", 1), ("\ufeffidé\n", 1)],
     ids=["split-after-lead", "lead-ends-chunk", "byte-per-chunk", "bom-byte-per-chunk"],
 )
 def test_a_character_split_across_chunks_still_decodes(
@@ -576,3 +576,39 @@ def test_a_windows_1252_file_warns_once_per_file_version(memory_source, caplog):
     with caplog.at_level(logging.WARNING, logger=logger_name):
         file_source.open_source("win.csv").close()
     assert len([r for r in caplog.records if r.name == logger_name]) == 2
+
+
+class _UnseekableFile(io.BytesIO):
+    """A streaming file, like fsspec's HTTPStreamFile: it cannot rewind."""
+
+    def seek(self, *args, **kwargs):
+        raise ValueError("Cannot seek streaming HTTP file")
+
+
+class _StreamingFs:
+    def __init__(self, data):
+        self.data = data
+
+    def open(self, path, mode="rb", **kwargs):
+        return _UnseekableFile(self.data)
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ("Luleå".encode("cp1252"), file_source._Decision("cp1252")),
+        ("Luleå".encode("utf-8"), file_source._Decision("utf-8-sig")),
+        (b"\xef\xbb\xbfid\n", file_source._Decision("utf-8-sig")),
+        (b"", file_source._Decision("utf-8-sig")),
+    ],
+    ids=["cp1252", "utf8", "utf8-bom", "empty"],
+)
+def test_the_scan_needs_no_seek(data, expected):
+    """sample_file and search_file read a streaming file without ever seeking, so
+    a scan that rewinds would break them on a source that could be read before."""
+    assert file_source._scan(_StreamingFs(data), "/x") == expected
+
+
+def test_a_refusal_is_reached_without_a_seek_too():
+    refusal = file_source._scan(_StreamingFs(b"a\x00b"), "/x").refusal
+    assert "NUL byte at offset 1" in refusal

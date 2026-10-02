@@ -12,6 +12,7 @@ place that knows the difference.
 
 import codecs
 import logging
+from itertools import chain
 from pathlib import Path, PureWindowsPath
 from typing import Any, BinaryIO, NamedTuple, Optional, Tuple, cast
 
@@ -239,12 +240,14 @@ def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
     with fs.open(full_path, "rb") as opened:
         # fsspec types read() as str | bytes; a "rb" open yields bytes.
         handle = cast(BinaryIO, opened)
+        # Never seek: fsspec's streaming HTTP file cannot rewind, and sample_file
+        # and search_file read one without trouble. The first three bytes are
+        # checked for a byte-order mark and then scanned as a chunk of their own.
         head = handle.read(3)
         if head[:2] in _UTF16_BOMS:
             return _refused("it looks like UTF-16 or binary (a UTF-16 byte-order mark)")
         has_utf8_bom = head == _UTF8_BOM
-        handle.seek(0)
-        while chunk := handle.read(_SCAN_CHUNK):
+        for chunk in chain((head,), iter(lambda: handle.read(_SCAN_CHUNK), b"")):
             nul = chunk.find(b"\x00")
             if nul != -1:
                 return _refused(
@@ -255,7 +258,10 @@ def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
                     utf8.decode(chunk)
                 except UnicodeDecodeError:
                     utf8_ok = False
-            if cp1252_failure is None:
+            # An all-ASCII chunk decodes under Windows-1252 by definition, so
+            # decoding it would only build a string to throw away (about 70% of
+            # the scan time on an ASCII-heavy file).
+            if cp1252_failure is None and not chunk.isascii():
                 try:
                     chunk.decode("cp1252")
                 except UnicodeDecodeError as exc:
@@ -329,9 +335,7 @@ def _decide(fs: AbstractFileSystem, full_path: str, relative_path: str) -> _Deci
             "text looks wrong, re-save it as UTF-8",
             relative_path,
         )
-    if fingerprint is None:
-        _decisions.pop(key, None)
-    else:
+    if fingerprint is not None:
         _decisions[key] = (fingerprint, decision)
     return decision
 
@@ -388,12 +392,11 @@ def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
             raise SourceEncodingError(
                 _refusal_message(relative_path, decision.refusal or "")
             )
-        kwargs.setdefault("newline", "")
         kwargs["encoding"] = decision.encoding
-    elif "b" not in mode:
+    if "b" not in mode:
         kwargs.setdefault("newline", "")
         # Without an explicit encoding, TextIOWrapper falls back to
         # locale.getpreferredencoding(False): silent mojibake on a non-UTF-8
-        # locale, not an exception.
+        # locale, not an exception. A text read has already set its own above.
         kwargs.setdefault("encoding", "utf-8")
     return fs.open(full_path, mode, **kwargs)
