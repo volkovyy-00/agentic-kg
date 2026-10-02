@@ -76,8 +76,9 @@ def test_search_file_refuses(refused_source):
 def test_search_file_with_an_empty_query_opens_nothing_so_is_not_refused(
     refused_source,
 ):
-    """Review focus 5, and the one place SC2's "every tool" does not apply: an
-    empty query reads no byte. Pinned so nobody 'fixes' it by accident."""
+    """An empty query reads no byte, so search_file does not refuse the file: the
+    one place "every tool refuses" does not apply. Pinned so nobody 'fixes' it by
+    accident."""
     result = file_tools.search_file("readings.csv", "")
     assert result["status"] == "success"
     assert result[file_tools.SEARCH_RESULTS]["metadata"]["lines_found"] == 0

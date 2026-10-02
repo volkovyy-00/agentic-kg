@@ -63,8 +63,8 @@ def test_values_stay_strings(csv_source):
 
 
 def test_a_windows_1252_csv_with_a_semicolon_dialect_splits_and_decodes(csv_source):
-    """Review focus 2: make_csv_reader reads 2048 characters to sniff the dialect,
-    then seek(0)s. That must still work on a cp1252 handle."""
+    """make_csv_reader reads 2048 characters to sniff the dialect, then seek(0)s.
+    That must still work on a cp1252 handle."""
     text = "id;city;price\n1;Luleå;€5\n2;Köln;€7\n"
     with csv_source.open("/csv/win.csv", "wb") as handle:
         handle.write(text.encode("cp1252"))

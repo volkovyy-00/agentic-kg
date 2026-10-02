@@ -274,7 +274,9 @@ def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
 # lowercased name, with underscores removed, is in this set, so "last_modified",
 # "LastModified" and "lastmodified" are one field. There are no per-backend
 # tables: a backend whose fields are not listed has no fingerprint and its files
-# are re-scanned on every call, which is the safe direction.
+# are re-scanned on every call, which is the safe direction. fs.ukey() is not
+# used: it hashes the whole info() dict, so a backend reporting only name, size
+# and type would look unchanged after a same-size edit, where this must re-scan.
 _FRESHNESS_FIELDS = frozenset(
     {"mtime", "created", "etag", "lastmodified", "updated", "generation", "versionid"}
 )
@@ -320,6 +322,10 @@ def _decide(fs: AbstractFileSystem, full_path: str, relative_path: str) -> _Deci
     answer info() from the directory-listing cache that find() fills, and
     list_source_files() calls find(), so without it a file re-saved after the
     listing keeps its old size and ETag. It is a no-op on local and memory.
+
+    The Windows-1252 warning is logged when a decision is made, so once per file
+    version where a fingerprint exists. A backend with no freshness field has no
+    fingerprint: its files are re-scanned, and warned about, on every call.
     """
     fs.invalidate_cache(full_path)
     fingerprint = _fingerprint(fs.info(full_path))
@@ -363,8 +369,10 @@ def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
     Windows-1252 with its other accented text garbled; a file in any other
     single-byte encoding (Latin-2, Windows-1251) reads with wrong letters and no
     error, because its bytes decode under Windows-1252; a Windows-1252 file whose
-    bytes happen to be valid UTF-8 reads as UTF-8; a same-size edit inside the
-    backend's timestamp resolution is missed where the backend reports a time
+    bytes happen to be valid UTF-8 reads as UTF-8; a Windows-1252 file starting
+    with "ÿþ" or "þÿ" is refused as UTF-16 (the byte-order mark is the only signal
+    for UTF-16 text holding no NUL byte, such as Chinese); a same-size edit inside
+    the backend's timestamp resolution is missed where the backend reports a time
     field; and the first touch of a file reads all of it, even for a 100-line
     sample or a header, which on a remote backend is a full download. Binary
     modes and non-read text modes are not scanned.

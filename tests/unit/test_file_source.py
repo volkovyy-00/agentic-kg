@@ -233,8 +233,8 @@ def test_an_empty_file_and_a_bom_only_file_are_utf8(memory_source):
 
 
 def test_valid_utf8_that_cp1252_rejects_is_still_utf8(memory_source):
-    """Review focus 1. 'Ё' is D0 81 and 0x81 is undefined in cp1252; a Devanagari
-    letter can carry 0x8D. A cp1252 failure alone must never refuse a file."""
+    """'Ё' is D0 81 and 0x81 is undefined in cp1252; a Devanagari letter can carry
+    0x8D. A cp1252 failure alone must never refuse a file."""
     _put(memory_source, "a.csv", "Ёлка,नमस्ते\n".encode("utf-8"))
     assert _scan("a.csv") == file_source._Decision("utf-8-sig")
 
@@ -330,8 +330,8 @@ def test_bad_utf8_after_a_utf8_bom_is_refused_not_read_as_cp1252(memory_source):
 
 
 def test_a_file_larger_than_one_real_chunk_is_scanned_in_pieces(memory_source):
-    """Review focus 4, at the real chunk size: 2.5 chunks of ASCII, then one
-    cp1252 byte at the very end, so the offset crosses two chunk boundaries."""
+    """At the real chunk size: 2.5 chunks of ASCII, then one cp1252 byte at the
+    very end, so the offset crosses two chunk boundaries."""
     size = int(file_source._SCAN_CHUNK * 2.5)
     _put(memory_source, "big.csv", b"a" * size + b"\xe9")
     assert _scan("big.csv") == file_source._Decision("cp1252")
@@ -352,7 +352,8 @@ def test_a_refusal_is_a_source_error_with_a_self_contained_message():
 
 
 def test_open_source_reads_a_windows_1252_file_correctly(memory_source):
-    """Review focus 3: the characters only cp1252 has, which Latin-1 gets wrong."""
+    """The characters only cp1252 has (€, curly quotes, a dash), which Latin-1 gets
+    wrong."""
     text = "name\nLuleå\nRössle Sauerkraut\n€5 “quoted” – dash\n"
     _put(memory_source, "win.csv", text.encode("cp1252"))
     with file_source.open_source("win.csv") as handle:
