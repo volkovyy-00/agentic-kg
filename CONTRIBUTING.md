@@ -23,7 +23,7 @@ than copying it — a copy is what goes stale.
 | What is planned, in progress, blocked; why a piece of work was asked for; a handoff between sessions | **Jira ticket** (description + comments) | no — Jira |
 | What changed, in which release | **`CHANGELOG.md`** | yes |
 | Why the code was changed this way | **Commit messages and the PR description** | yes (merge commits keep them in `main`) |
-| Commands, setup traps, the architecture map, rules that hold in every part of the code | **`CLAUDE.md`** — Claude's instructions, budget 150 lines | yes |
+| Commands, setup traps, the architecture map, rules that hold in every part of the code | **`CLAUDE.md`** — Claude's instructions, line budget set in `tests/unit/test_agent_context.py` | yes |
 | A rule a future change to one area must follow and no test catches, as one imperative bullet | **`.claude/rules/<area>.md`** — loads when Claude reads a matching file | yes |
 | Why a piece of code is the way it is, including its ticket key | **The docstring or comment at that code** | yes |
 | How to debug the running app | **`.claude/skills/debug-adk-web/`** | yes |

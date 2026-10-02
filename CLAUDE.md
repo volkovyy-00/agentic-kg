@@ -103,5 +103,5 @@ add a new numbered one only when an A/B comparison is wanted. Keep the dict shap
   `LlmKind`, routed through OpenRouter. Change models in `.env` (`LLM_MODEL_CONVERSATIONAL`,
   `LLM_MODEL_REASONING`), not in code.
 
-<!-- Budget: 150 lines, enforced by tests/unit/test_agent_context.py. The trap-bearing architecture map
+<!-- Line budget: set and enforced in tests/unit/test_agent_context.py. The trap-bearing architecture map
      stays on purpose, whatever /doctor's trim check proposes. -->

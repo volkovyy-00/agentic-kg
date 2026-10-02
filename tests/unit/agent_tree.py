@@ -20,8 +20,9 @@ from google.adk.tools.agent_tool import AgentTool
 import agentic_kg
 
 PACKAGE_DIR = Path(agentic_kg.__file__).parent
-# Plain or annotated (`root_agent: LlmAgent = ...`); never a comparison.
-_ROOT_ASSIGNMENT = re.compile(r"^root_agent\b[^=\n]*=(?!=)", re.MULTILINE)
+# Plain or annotated (`root_agent: LlmAgent = ...`); never an attribute
+# assignment or a comparison of an imported root_agent.
+ROOT_ASSIGNMENT = re.compile(r"^root_agent\s*(?::[^=\n]+)?=(?!=)", re.MULTILINE)
 
 
 @cache
@@ -30,7 +31,7 @@ def root_files() -> list[Path]:
     return [
         path
         for path in sorted(PACKAGE_DIR.rglob("*.py"))
-        if _ROOT_ASSIGNMENT.search(path.read_text())
+        if ROOT_ASSIGNMENT.search(path.read_text())
     ]
 
 

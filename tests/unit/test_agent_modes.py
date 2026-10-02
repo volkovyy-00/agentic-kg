@@ -18,7 +18,13 @@ The rule, keyed on the agent's parent:
 The tree comes from agent_tree.py, shared with test_agent_wiring_guards.py.
 """
 
-from agent_tree import PACKAGE_DIR, all_llm_agents, root_agents, root_files
+from agent_tree import (
+    PACKAGE_DIR,
+    ROOT_ASSIGNMENT,
+    all_llm_agents,
+    root_agents,
+    root_files,
+)
 from google.adk.agents import LlmAgent
 
 
@@ -51,3 +57,23 @@ def test_discovery_reaches_every_coordinator_directory():
     assert expected
     missing = [path for path in expected if path not in root_files()]
     assert not missing, f"no root_agent found in: {missing}"
+
+
+def test_the_root_pattern_matches_root_assignments_only():
+    """root_agents() imports every module the pattern matches and reads its
+    root_agent, so a module that only uses an imported one must not match."""
+    lines = {
+        "root_agent = agent": True,
+        "root_agent: LlmAgent = agent": True,
+        'root_agent.name = "x"': False,
+        "root_agent != other": False,
+        "root_agent <= other": False,
+        "root_agent == other": False,
+        "    root_agent = agent": False,
+    }
+    wrong = [
+        line
+        for line, is_root in lines.items()
+        if bool(ROOT_ASSIGNMENT.search(line)) != is_root
+    ]
+    assert not wrong, f"misread as (not) a root assignment: {wrong}"

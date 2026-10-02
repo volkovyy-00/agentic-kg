@@ -22,6 +22,7 @@ when it never reads that paragraph or compacts it away (KG-55).
   deliberate edit that wiring a new gate should be.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from agent_tree import all_llm_agents
@@ -60,11 +61,25 @@ def _ids(callbacks: list[Any]) -> list[int]:
 
 
 def _names(callbacks: list[Any]) -> list[str]:
-    return [callback.__name__ for callback in callbacks]
+    return [getattr(callback, "__name__", repr(callback)) for callback in callbacks]
 
 
-def _guarding(agent: Any) -> str:
-    """'full', 'none', or which slots hold the wrong part of the set."""
+@dataclass(frozen=True)
+class _GuardReport:
+    """Whether an agent carries any guard callback, and which slots are wrong.
+
+    Full set: carries_any and no wrong slots. None: not carries_any.
+    """
+
+    carries_any: bool
+    wrong_slots: list[str]
+
+    @property
+    def full(self) -> bool:
+        return self.carries_any and not self.wrong_slots
+
+
+def _guard_report(agent: Any) -> _GuardReport:
     expected = {
         slot: _as_list(callbacks)
         for slot, callbacks in transfer_guard_callbacks(gated=True).items()
@@ -74,21 +89,23 @@ def _guarding(agent: Any) -> str:
         slot: [cb for cb in _as_list(getattr(agent, slot)) if id(cb) in guard_ids]
         for slot in _SLOTS
     }
-    if not any(present.values()):
-        return "none"
     wrong = [
-        slot for slot in _SLOTS if _ids(present[slot]) != _ids(expected.get(slot, []))
-    ]
-    if not wrong:
-        return "full"
-    return "partial: " + "; ".join(
         f"{slot} has {_names(present[slot])}, expected {_names(expected.get(slot, []))}"
-        for slot in wrong
-    )
+        for slot in _SLOTS
+        if _ids(present[slot]) != _ids(expected.get(slot, []))
+    ]
+    return _GuardReport(carries_any=any(present.values()), wrong_slots=wrong)
+
+
+_WIRING_FIX = (
+    "Fix: spread **transfer_guard_callbacks(gated=...) into the Agent(...) call "
+    "and wire none of its callbacks by hand; see this module's docstring and "
+    ".claude/rules/handoff-gates.md."
+)
 
 
 def test_the_helper_fills_only_slots_this_file_inspects():
-    """Guards _guarding: a fifth slot would go unchecked."""
+    """Guards _guard_report: a fifth slot would go unchecked."""
     assert set(transfer_guard_callbacks(gated=True)) <= set(_SLOTS)
 
 
@@ -97,7 +114,10 @@ def test_the_turn_end_runs_first_among_the_model_callbacks():
     is pinned here: end_turn_past_hidden_transfer_cap answers in place of the
     model call, and ADK then skips the callbacks after it."""
     first = transfer_guard_callbacks(gated=True)["before_model_callback"][0]
-    assert first is end_turn_past_hidden_transfer_cap
+    assert first is end_turn_past_hidden_transfer_cap, (
+        "end_turn_past_hidden_transfer_cap must stay first in the helper's "
+        "before_model_callback list; see its docstring."
+    )
 
 
 def test_no_agent_sets_output_key():
@@ -106,16 +126,30 @@ def test_no_agent_sets_output_key():
         for agent in all_llm_agents()
         if agent.output_key is not None
     ]
-    assert not offenders, "\n".join(offenders)
+    assert not offenders, "\n".join(
+        [
+            *offenders,
+            "Fix: write a value code reads from a callback (as record_critic_verdict "
+            "does): on google-adk 2.x output_key also stores text written beside "
+            "tool calls. See this module's docstring.",
+        ]
+    )
 
 
 def test_every_agent_carries_the_whole_guard_set_or_none_of_it():
     partial = [
-        f"{agent.name}: {state}"
+        f"{agent.name}: " + "; ".join(report.wrong_slots)
         for agent in all_llm_agents()
-        if (state := _guarding(agent)) not in ("full", "none")
+        if (report := _guard_report(agent)).carries_any and report.wrong_slots
     ]
-    assert not partial, "\n".join(partial)
+    assert not partial, "\n".join(
+        [
+            *partial,
+            _WIRING_FIX,
+            "drop_foreign_context belongs to the set; an agent that needs it alone "
+            "needs a deliberate new option in transfer_guard_callbacks.",
+        ]
+    )
 
 
 def _gated_cases() -> list[tuple[Any, bool]]:
@@ -133,17 +167,26 @@ def test_each_gated_agent_is_guarded_exactly_while_its_gated_variant_is_selected
     for agent, gated in _gated_cases():
         if id(agent) not in in_tree:
             wrong.append(f"{agent.name}: not reached by the agent-tree walk")
-        expected = "full" if gated else "none"
-        if (state := _guarding(agent)) != expected:
-            wrong.append(f"{agent.name}: {state}, expected {expected}")
-    assert not wrong, "\n".join(wrong)
+        report = _guard_report(agent)
+        if gated and not report.full:
+            wrong.append(f"{agent.name}: gated variant selected but not fully guarded")
+        if not gated and report.carries_any:
+            wrong.append(f"{agent.name}: ungated variant selected but carries guards")
+    assert not wrong, "\n".join([*wrong, _WIRING_FIX])
 
 
 def test_every_agent_not_listed_as_gated_carries_no_guard():
     gated = {id(agent) for agent, is_gated in _gated_cases() if is_gated}
     wrong = [
-        f"{agent.name}: {state}"
+        f"{agent.name}: carries guard callbacks"
         for agent in all_llm_agents()
-        if id(agent) not in gated and (state := _guarding(agent)) != "none"
+        if id(agent) not in gated and _guard_report(agent).carries_any
     ]
-    assert not wrong, "\n".join(wrong)
+    assert not wrong, "\n".join(
+        [
+            *wrong,
+            "Fix: a new gated agent goes into _gated_cases() above (read "
+            ".claude/rules/handoff-gates.md first); the coordinator never takes "
+            "the set, because its transfer_to_agent is how the workflow advances.",
+        ]
+    )

@@ -12,7 +12,7 @@ checks make the budget and the homes mechanical:
   below: an unscoped rule loads at launch and saves nothing, and a glob
   matching no listed file is a rule that never loads;
 - every repo path an agent-context file names exists, written from the
-  repo root;
+  repo root, and every code identifier a rule names still exists;
 - no agent-context file carries a ticket key: the why lives in docstrings.
 
 The file list is git's -- tracked plus untracked, minus ignored -- so a file
@@ -40,6 +40,8 @@ _SPAN = re.compile(r"`([^`\n]+)`")
 _PATH_CHARS = re.compile(r"[\w.\-/]+")
 _PATH_SUFFIXES = (".py", ".md", ".toml", ".yml", ".yaml", ".json", ".lock")
 _TICKET_KEY = re.compile(r"\bKG-\d+\b")
+# `name`, `name()`, `Class.method()`, `**helper(arg=...)`: a code identifier.
+_IDENTIFIER = re.compile(r"\*{0,2}([A-Za-z_][\w.]*)(?:\(.*\))?")
 _FRONTMATTER = re.compile(r"\A---\npaths:\n((?:  - \"[^\"\n]+\"\n)+)---\n")
 _PATTERN = re.compile(r'^  - "([^"\n]+)"$', re.MULTILINE)
 
@@ -139,6 +141,33 @@ def test_every_rule_file_is_path_scoped_and_within_budget():
                 "one or more '  - \"<glob>\"' lines, '---'"
             )
     assert not wrong, "\n".join(wrong)
+
+
+@cache
+def _code_words() -> frozenset[str]:
+    """Every word in the listed Python files under src/ and tests/, this one aside."""
+    words: set[str] = set()
+    for path in _listed_files():
+        if path.endswith(".py") and path.startswith(("src/", "tests/")):
+            if REPO / path != Path(__file__).resolve():
+                words.update(re.findall(r"\w+", (REPO / path).read_text()))
+    return frozenset(words)
+
+
+def test_every_rule_identifier_exists_in_the_code():
+    """A rule names code by identifier; a rename would leave it pointing at
+    nothing while the path checks stay green."""
+    missing = [
+        f"{_relative(rule)}: `{span}`"
+        for rule in _rule_files()
+        for span in _SPAN.findall(rule.read_text())
+        if (identifier := _IDENTIFIER.fullmatch(span))
+        and any(part not in _code_words() for part in identifier.group(1).split("."))
+    ]
+    assert not missing, (
+        "named in a rule but found nowhere in src/ or tests/ -- update the rule "
+        "to the new name:\n" + "\n".join(missing)
+    )
 
 
 def test_every_rule_glob_matches_a_listed_file():
