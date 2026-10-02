@@ -40,6 +40,12 @@ _LLM_NUM_RETRIES = 2
 # comfortably under.
 _LLM_MAX_TOKENS = 8192
 
+# Cost tracking, if it is ever added: LiteLLM's model_cost map lacks some
+# OpenRouter-only models, and for those litellm.completion_cost raises "This
+# model isn't mapped yet" while the response_cost it logs is None (litellm
+# 1.84.0). OpenRouter returns the real figure on every response instead:
+# usage.cost (USD) and usage.cost_details.
+
 # The reasoning kind's model may be a dedicated "reasoning" model (e.g. gpt-5)
 # that defaults to its highest internal-reasoning tier on every call. This
 # agent's reasoning workloads (schema proposal/critique) are many small,

@@ -1,13 +1,15 @@
 # Contributing to agentic-kg
 
-This is being developed into a real program, not a teaching artifact (see `CLAUDE.md` for the full
+This is being developed into a real program, not a teaching artifact (see `docs/spec.md` §1 for the full
 positioning note) — treat changes accordingly: prefer the choice that makes a working program over one
 that mirrors the deeplearning.ai course structure it was forked from.
 
 ## Before you start
 
-- Read `CLAUDE.md` — the architecture map (two coordinators, the `variants` pattern, state-passing via
-  ADK session state, tool result conventions) and the invariants a change must not break.
+- Read `docs/spec.md` §2–§4 — the two coordinators, the construction workflow and retrieval grounding —
+  then the docstring of each module you change: that is where its invariants and their reasons live.
+  The rules no test enforces are also listed, one bullet each, in `.claude/rules/` (by area) and
+  `CLAUDE.md` (repo-wide); read the matching file before changing an area.
 - Read the Jira ticket you are working on (project `KG`, <https://stormdoc.atlassian.net/browse/KG>),
   including its comments: that is where the current state of the work is.
 - Set up the project per `README.md` (`uv venv && uv sync`, `.env` from `.env.example`), then run
@@ -23,22 +25,32 @@ than copying it — a copy is what goes stale.
 | What is planned, in progress, blocked; why a piece of work was asked for; a handoff between sessions | **Jira ticket** (description + comments) | no — Jira |
 | What changed, in which release | **`CHANGELOG.md`** | yes |
 | Why the code was changed this way | **Commit messages and the PR description** | yes (merge commits keep them in `main`) |
-| How the system works; invariants a change must not break; commands | **`CLAUDE.md`** | yes |
+| Commands, setup traps, the architecture map, rules that hold in every part of the code | **`CLAUDE.md`** — Claude's instructions, line budget set in `tests/unit/test_agent_context.py` | yes |
+| A rule a future change to one area must follow and no test catches, as one imperative bullet | **`.claude/rules/<area>.md`** — loads when Claude reads a matching file | yes |
+| Why a piece of code is the way it is, including its ticket key | **The docstring or comment at that code** | yes |
+| How to debug the running app | **`.claude/skills/debug-adk-web/`** | yes |
 | What the program is and why it exists | **`docs/spec.md`** | yes |
 | How to contribute | **this file** | yes |
 | Specs, plans and approved intents for a piece of work | **`docs/superpowers/`** — a separate, private git repo nested in the working copy | no — link it from the ticket and the PR by path |
 
 Rules that follow from the table:
 
-- **No status in `CLAUDE.md` or `docs/spec.md`.** "Current work", "latest release", "next up" — those
-  belong to Jira and `CHANGELOG.md`, and go stale anywhere else. `CLAUDE.md` holds what stays true until
-  the code changes.
+- **No status in `CLAUDE.md`, `.claude/` or `docs/spec.md`.** "Current work", "latest release", "next
+  up" — those belong to Jira and `CHANGELOG.md`, and go stale anywhere else. `CLAUDE.md` holds only what
+  every session needs, one bullet or short paragraph per rule; `tests/unit/test_agent_context.py`
+  enforces its budget.
 - **A session that stops mid-ticket leaves a comment on the ticket**: what is done, what is next, and
   anything learned that isn't yet in a commit. The next session starts from the ticket, not from a
   local handoff file.
 - **A decision a later change must not undo** goes in the PR description (*Decisions a future session
-  needs*) and, if it constrains the architecture, in `CLAUDE.md`. A spec under `docs/superpowers/` is the
-  long form, but no one else's clone has it.
+  needs*) and in the docstring at the code that enforces it. Add at most one bullet for it to an area rule
+  in `.claude/rules/` if no test would catch a change that breaks it, or to `CLAUDE.md` if it holds in
+  every part of the code. A spec under `docs/superpowers/` is the long form, but no one else's clone has it.
+- **A review comment that sharpens a rule's wording** is answered in the docstring. Agent-context files
+  (`CLAUDE.md`, `.claude/rules/`, `.claude/skills/`) change only by whole bullets or paragraphs added or
+  removed; either may wrap over several lines, and the line budgets count those lines. A mechanical
+  fix -- a renamed path or identifier the tests flag -- is made in place; the restriction is on adding
+  or rewording a rule.
 - **Something real but out of scope** for the PR you're in becomes a Jira ticket, not a local note.
 
 ## Tickets
@@ -130,6 +142,9 @@ uv run ruff format --check .      # formatting check — run before every PR; dr
 uv run pyright                    # static type check — run before every PR; must report 0 errors, CI fails otherwise
 ```
 
+Without a reachable Docker every integration module skips instead of failing, and a skip is not a pass:
+read the result as "N passed", not "N skipped". On colima, see `README.md` first.
+
 A PR that changes retrieval, construction, or Neo4j access code should include or update unit tests; skip
 only with a stated reason (e.g. "covered by the existing fake in `tests/unit/fakes.py`").
 
@@ -142,11 +157,12 @@ user-visible consequences), the design spec, plan and approved intent live in `d
 repo — commit there with `git -C docs/superpowers …`. A git worktree of this repo does not contain it.
 
 Because no fresh clone has those files, anything another contributor or a later session must know goes
-where it is shared: the Jira ticket, the PR description, and `CLAUDE.md` if it is an architectural
-invariant. Link the spec from the ticket and the PR by path. Skip a spec entirely for tactical bug fixes,
+where it is shared: the Jira ticket, the PR description, and the docstring at the code it constrains
+(plus one bullet in an area rule or `CLAUDE.md`, per *Where project knowledge lives*). Link the spec from
+the ticket and the PR by path. Skip a spec entirely for tactical bug fixes,
 refactors, or anything whose rationale fits in the PR description.
 
 ## Getting help
 
-Check `CLAUDE.md`'s architecture section first — most "why does this work this way" questions are
-answered there — then the Jira ticket, then `git log` for the change in question.
+Read the docstring of the module in question first — most "why does this work this way" questions are
+answered there — then `docs/spec.md` §2–§4, the Jira ticket, and `git log` for the change in question.

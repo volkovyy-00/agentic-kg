@@ -215,7 +215,8 @@ class Neo4jForADK:
         cypher_tools._physical_schema, already wraps it in try/except ->
         tool_error. Any new caller must do the same: an unhandled exception
         mid-turn ends the turn with no reply the model can act on, and `adk
-        web` shows the user only a one-line error (see CLAUDE.md).
+        web` shows the user only a one-line error (see
+        .claude/skills/debug-adk-web/SKILL.md).
         """
         return self._connection()[0]
 
@@ -291,6 +292,13 @@ class Neo4jForADK:
 
     def _connection(self) -> tuple[Driver, Neo4jConfig]:
         """Reconnect if close() has run, then return the driver and config.
+
+        Every path that hands out or uses the driver goes through here, never
+        through _ensure_connected() alone or self._driver directly. A path that
+        skips it fails loudly only when its call is the first after a close:
+        once any other path has healed, it runs on the new driver and passes.
+        That is why each entry point needs its own close-then-call step in
+        tests/integration/test_connection_recovery.py.
 
         Both are set on every real path (__init__, or a rebuild after close()),
         and the fixtures in the class comment set both themselves. The check

@@ -1,405 +1,107 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project purpose
-
-A multi-agent system, built on Google ADK (Agent Development Kit) with LiteLLM, that interviews a user, picks source
-files, proposes a graph schema, and builds a knowledge graph in Neo4j.
-
-Forked from the companion project to the deeplearning.ai short course "Agentic Knowledge Graph Construction", but
-**this is being developed into a real program, not a teaching artifact.** Course-shaped structure that survives in
-the code (the `variants` dicts of successive chapter iterations, the "Differences from the course" section below)
-is inherited history, not a constraint to preserve — prefer the choice that makes a working program over the one
-that mirrors the course. Reproducibility for students is not a design goal.
-
-See `CONTRIBUTING.md` for the PR workflow, testing expectations, and CHANGELOG conventions to follow when
-making changes here.
+A multi-agent system, built on Google ADK with LiteLLM, that interviews a user, picks source files,
+proposes a graph schema and builds a knowledge graph in Neo4j. Forked from the deeplearning.ai course
+"Agentic Knowledge Graph Construction", but **developed into a real program**: course-shaped structure
+(the `variants` dicts) is history, not a constraint — prefer the choice that makes a working program.
+The bundled example (`data/bom/`) must keep working, but it is one dataset, not the scope: designs and
+fixes must hold for source files the program has never seen.
 
 ## Where knowledge lives
 
-This file holds what stays true until the code changes — architecture, invariants, commands — and **no status**.
-Status, handoffs, release history, rationale and design notes each have one home, listed in `CONTRIBUTING.md`'s
-*Where project knowledge lives*; start a ticket from its Jira comments. `docs/spec.md` is the "what is this and
-why" document, including the longer-range roadmap (§6) — read it alongside this file, not instead of it.
+This file holds what every session needs, one bullet or short paragraph per rule — no status or ticket keys. Rules
+for one area live in `.claude/rules/` and load when you read a matching file; why code is the way it
+is lives in the docstring at that code. `CONTRIBUTING.md` holds the PR, release and CHANGELOG workflow,
+and (*Where project knowledge lives*) every home; humans start at `docs/spec.md`.
 
-The design decisions for that roadmap's unstructured-ingestion and linking sub-projects are settled in
-`docs/superpowers/specs/2026-07-27-unstructured-ingestion-decisions.md` (local private notes, absent from a fresh
-clone) — read it before writing either spec; do not re-derive them.
+## Before you change
 
-**Invariant:** the bundled furniture example (`data/bom`) must keep working — but it is one dataset, not the
-scope. Designs and fixes must hold for source files the program has never seen.
+- `google-adk` is pinned to one minor window (`pyproject.toml`). ADK docs, samples and posts describe
+  1.x, or a 2.x newer than ours, as often as ours: check which line a source describes before trusting
+  it, and check `uv.lock` for the resolved version when behaviour looks version-dependent.
+- After any `google-adk` bump, read the `adk web` server log for transfer-block warnings.
+- An integration run that reports "skipped" did not run: read "N passed", not "N skipped".
+- Before adding a gated agent or a gate (the flag/reset/confirm shape), read
+  `.claude/rules/handoff-gates.md`.
+- Before adding a tool that writes construction-plan rules, read `.claude/rules/construction-plan.md`.
+- Before adding a Neo4j driver entry point, read `.claude/rules/neo4j-access.md`.
+- To debug a silent or failing `adk web` turn, read `.claude/skills/debug-adk-web/SKILL.md`.
 
 ## Commands
 
 ```bash
-# Setup
-uv venv
-uv sync
+uv venv && uv sync
 cp .env.example .env      # then set OPENROUTER_API_KEY and NEO4J_DSN
 
-# Run the agent system (ADK dev web UI)
-uv run adk web src/agentic_kg/coordinators/     # http://localhost:8000, add --port 8001 if busy
+uv run adk web src/agentic_kg/coordinators/     # dev UI on http://localhost:8000; --port 8001 if busy
 
-# Unit tests (fast, no external deps)
-uv run pytest -q
-uv run pytest tests/unit/test_pydantic_neo4j.py -v   # single file
-uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # single test
-uv run pytest --cov --cov-report=term-missing   # with coverage (CI sends coverage.xml to SonarCloud)
+uv run pytest -q                                 # unit tests; never touches Docker
+uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # one test
+uv run pytest --cov --cov-report=term-missing    # coverage (CI sends coverage.xml to SonarCloud)
+uv run pytest -q -m integration                  # Neo4j via Testcontainers; needs Docker, ~12 min
 
-# Integration tests (require Docker; spins up Neo4j via Testcontainers; ~12 min, function-scoped containers)
-uv run pytest -q -m integration
-
-# Lint / type check (both gate CI)
-uv run ruff check . && uv run ruff format --check .
-uv run pyright        # must report 0 errors
+uv run ruff check . && uv run ruff format --check .   # both gate CI; drop --check to fix
+uv run pyright                                   # src only; must report 0 errors
 ```
 
-- Python 3.12, dependency/venv management via `uv` (see `pyproject.toml`, `uv.lock`).
-- Pinned to `google-adk>=2.9.2,<2.10` (`pyproject.toml`) — one minor window on purpose: each minor moves
-  separately. ADK docs, samples and blog posts describe 1.x, or a 2.x newer than ours, as often as 2.9, and the
-  lines differ in behaviour this code depends on; check which version a source describes before trusting it.
-- The floor is not what you run: the committed `uv.lock` resolves `google-adk 2.9.2` (and `neo4j 6.3.1`),
-  so `uv sync` installs those. Check the lock, not `pyproject.toml`, when a behaviour looks version-dependent.
-- `pytest` defaults to `-m 'not integration'` (see `[tool.pytest.ini_options]` in `pyproject.toml`), so plain
-  `pytest`/`uv run pytest` never touches Docker.
-- `tests/integration/conftest.py` has two fixtures: `neo4j_graph` (plain container) and `neo4j_graph_with_apoc`.
-  Use the APOC one for anything touching physical/profiled schema — `neo4j_graphrag.get_structured_schema` is
-  APOC-only (`apoc.meta.data`/`apoc.meta.graph`), and a stock `neo4j:5` image doesn't have it.
-- If using colima instead of Docker Desktop, integration tests need:
+- Python 3.12, dependencies via `uv`. Plain `pytest` runs `-m 'not integration'` (`pyproject.toml`),
+  which also holds the Ruff and pyright config.
+- With colima instead of Docker Desktop, integration tests need
   `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and `export TESTCONTAINERS_RYUK_DISABLED=true`.
-  Without a reachable Docker every integration module skips instead of failing, so check the result is
-  "N passed", not "N skipped".
-- Ruff config is `pyproject.toml`'s `[tool.ruff]`; pyright's is `[tool.pyright]` (`basic` mode, `src` only).
-  Drop `--check` from `ruff format` to fix locally.
-- This repo is a GitHub fork of `neo4j-contrib/agentic-kg`; a clone may also carry an `upstream` remote
-  pointing there. Unless `gh repo set-default volkovyy-00/agentic-kg` has been run in the clone (check:
-  `gh repo set-default --view`), `gh` resolves commands against the parent — pass `--repo volkovyy-00/agentic-kg`.
-- Source files are read by the application itself (via `fsspec`, `common/file_source.py`), not by the database, so
-  nothing needs to be copied into a Neo4j import directory — this also works unchanged against Neo4j Aura, which
-  has no such directory. Point `SOURCE_URI` in `.env` at a folder of source files; the bundled example works with
-  `SOURCE_URI=./data/bom` (ask the running agent "Where are my files?" to confirm what it resolved to).
+- This repo is a GitHub fork of `neo4j-contrib/agentic-kg`, so `gh` targets the parent unless
+  `gh repo set-default volkovyy-00/agentic-kg` has run in this clone (check: `gh repo set-default --view`);
+  otherwise pass `--repo volkovyy-00/agentic-kg`.
+- The application reads source files itself (`fsspec`, `src/agentic_kg/common/file_source.py`), so
+  there is no Neo4j import directory and Aura works unchanged. `SOURCE_URI` in `.env` names the folder;
+  the example uses `SOURCE_URI=./data/bom` (ask the running agent "Where are my files?" to confirm).
 
 ## Architecture
 
-### Layout
+- `src/agentic_kg/coordinators/` — what `adk web` loads: `single_agent` and `multi_agent`
+- `src/agentic_kg/agents/` — standalone `cypher_agent` and `user_intent_agent`
+- `src/agentic_kg/tools/` — ADK tool functions; `src/agentic_kg/common/` — Neo4j, LLM, file sources,
+  ADK callbacks; `src/agentic_kg/domain/` — typed shapes
+- `tests/unit/`, `tests/integration/` (`integration` marker, Testcontainers)
 
-- `src/agentic_kg/` — `coordinators/{single_agent,multi_agent/sub_agents}` (what `adk web` loads) · `agents/`
-  (standalone `cypher_agent`, `user_intent_agent`) · `tools/` (ADK tool functions) · `common/` (Neo4j, LLM, file
-  sources, ADK callbacks) · `domain/` (typed shapes)
-- `tests/unit`, `tests/integration` (`integration` marker, Testcontainers) · `data/bom` (bundled example)
-- `prototype/` — notebooks and notes, not part of the package
+### Two coordinators
 
-### Two coordinators, one shared tool/agent library
-
-`adk web src/agentic_kg/coordinators/` discovers two independent top-level agents ("coordinators"):
-
-- **`single_agent`** (`coordinators/single_agent/`) — one agent that talks to Neo4j directly via Cypher, delegating
-  to `agents/cypher_agent` as a sub-agent for query execution.
-- **`multi_agent`** (`coordinators/multi_agent/`) — a hierarchical `LlmAgent` (`full_workflow_agent`),
-  registered as `kg_construction_agent_v1` (`MULTI_AGENT_COORDINATOR` in `common/agent_names.py` — the author
-  on its events; the `{app}` in the ADK API paths of the debugging steps below is the directory, `multi_agent`),
-  that delegates,
-  in strict sequence, through five sub-agents defined in `coordinators/multi_agent/sub_agents/`:
+- **`single_agent`** — one agent that queries Neo4j through Cypher, delegating execution to the
+  standalone `src/agentic_kg/agents/cypher_agent/`.
+- **`multi_agent`** — `full_workflow_agent`, registered as `kg_construction_agent_v1`
+  (`MULTI_AGENT_COORDINATOR` in `src/agentic_kg/common/agent_names.py`), delegates in sequence through
+  five sub-agents in `src/agentic_kg/coordinators/multi_agent/sub_agents/`:
   1. `user_intent_agent` — establishes `kind_of_graph` / `graph_description`
-  2. `file_suggestion_agent` — requires an approved user goal; suggests input files
-  3. `schema_proposal_agent` — requires approved file suggestions; proposes a construction plan
-  4. `graph_construction_agent` — requires an approved schema; builds the graph
-  5. `graphrag_agent` — only usable once `get_physical_schema` shows the graph exists; answers questions over it
+  2. `file_suggestion_agent` — needs an approved user goal; suggests input files
+  3. `schema_proposal_agent` — needs approved files; proposes a construction plan
+  4. `graph_construction_agent` — needs an approved plan; builds the graph, then on the user's
+     confirmation hands them straight to `graphrag_agent_v2`, not back through the coordinator
+  5. `graphrag_agent` — answers questions over the built graph
 
-When a turn in the dev UI produces no visible response and no spinner, the UI alone can't tell you why (hung
-tool call, routing bug, and swallowed exception all look identical from the browser). Cheapest checks first:
-poll `GET /apps/{app}/users/{user}/sessions/{id}` directly (frozen event count = nothing happened), then the
-undocumented `GET /dev/apps/{app}/debug/trace/session/{id}` (spans have `start_time`/`end_time`; a model call that
-raises still gets a `call_llm` span, but with no attributes at all — ADK sets them only per response — and this
-endpoint's span JSON carries no status field at all), then the `adk web` server's own log output, which is the only
-place a swallowed exception actually surfaces. An exception that escapes the run is not swallowed: on google-adk 2.9
-`/run_sse` sends it to the browser, which shows the escaped exception as a red error event in the chat plus a
-one-line snackbar. Never reload the tab while a turn is genuinely streaming.
-
-Note there are **two separate implementations of similarly-named agents**: `src/agentic_kg/agents/` (standalone
-versions, e.g. `cypher_agent` — the one actually wired into `single_agent` — plus `user_intent_agent`, which is not
-used by either coordinator, but is still imported by `src/agentic_kg/agent.py` — an orphaned top-level `root_agent`
-left over from the original course backport, not reachable via the documented `adk web` command and not part of
-either coordinator) vs. `src/agentic_kg/coordinators/multi_agent/sub_agents/` (versions wired
-into the full workflow, with richer instructions/tools). They are not interchangeable — check which coordinator
-you're editing before reusing code between them.
+**Two sets of similarly named agents.** `src/agentic_kg/agents/` (standalone; its `cypher_agent` is the
+one `single_agent` uses) and the workflow's sub-agents are not interchangeable — check which coordinator
+you are editing before reusing code. `src/agentic_kg/agent.py` is a third root, outside both
+coordinators; see its docstring.
 
 ### The `variants` pattern
 
-Every agent's prompt/tool wiring lives in a sibling `variants.py`, not in `agent.py`. Each `variants.py` defines a
-`variants` dict keyed by version-suffixed agent names (e.g. `graphrag_agent_v1/_v2`), each holding an
-`instruction` string and a `tools` list — these are successive course-chapter iterations of the same agent, growing
-more capable (more tools, more validation) at each version. `agent.py` just picks one:
+Every agent's prompt and tool wiring lives in a sibling `variants.py`: a `variants` dict keyed by
+version-suffixed names (`graphrag_agent_v1`, `graphrag_agent_v2`), each holding an `instruction` and a
+`tools` list. `agent.py` selects one through `AGENT_NAME`. Add a capability to the **selected** variant;
+add a new numbered one only when an A/B comparison is wanted. Keep the dict shape.
 
-```python
-AGENT_NAME = "graphrag_agent_v2"
-Agent(name=AGENT_NAME, instruction=variants[AGENT_NAME]["instruction"], tools=variants[AGENT_NAME]["tools"], ...)
-```
+### State, tool results, Neo4j, models
 
-When adding a capability to an agent, edit the currently-selected variant; add a new numbered one only when an
-A/B comparison is wanted (as with `graphrag_agent`). Keep the dict shape.
+- Agents pass data through ADK session state (`tool_context.state`), not return values. Tools follow
+  get/set/approve naming per concept (`set_perceived_user_goal` → `approve_perceived_user_goal` →
+  `get_approved_user_goal` in `src/agentic_kg/tools/user_goal_tools.py`), and a later stage's tool fails
+  fast with `tool_error(...)` when an earlier key is missing — that is how "requires approved X" is
+  enforced. When a bug crosses agents, check which state keys each tool reads and writes first.
+- A new tool returns a `ToolResult` (`src/agentic_kg/common/tool_result.py`), never an ad hoc dict.
+- All Cypher goes through the `get_graphdb()` singleton (`src/agentic_kg/common/neo4j_for_adk.py`);
+  `NEO4J_DSN` takes a local `bolt://` or an Aura `neo4j+s://` DSN.
+- `get_llm(kind)` (`src/agentic_kg/common/llm_catalog.py`) returns one cached LiteLLM instance per
+  `LlmKind`, routed through OpenRouter. Change models in `.env` (`LLM_MODEL_CONVERSATIONAL`,
+  `LLM_MODEL_REASONING`), not in code.
 
-### State passing: ADK session state, not return values
-
-Agents/tools do not pass data through Python return values between sub-agents — they read/write keys on
-`tool_context.state` (Google ADK's session state), e.g. `user_goal`, `approved_user_goal`, `suggested_files`,
-`approved_construction_plan`. Tools follow a consistent get/set/approve naming convention per concept (e.g.
-`set_perceived_user_goal` → `approve_perceived_user_goal` → `get_approved_user_goal` in
-`tools/user_goal_tools.py`), and later agents' tools typically fail fast with a `tool_error(...)` if an earlier
-stage's state key is missing — that's how the "requires approved X" sequencing in the coordinator instructions is
-actually enforced. When tracing a bug across agents, look at which state keys a tool reads/writes before assuming
-control flow is the issue.
-
-`schema_proposal_agent`'s `schema_refinement_calls_this_turn` state key caps `schema_refinement_loop` to one
-invocation per user turn (deliberate): `reset_schema_refinement_turn_budget` (coordinator
-`before_agent_callback`) zeroes it, `prepare_refinement_loop_invocation` (`refinement_loop`
-`before_agent_callback`) increments/checks it and short-circuits a second call with a result beginning `"stopped:"`.
-
-**Plan checks: one rule set, two enforcement points.** `check_construction_plan_consistency` (joins, endpoint
-labels, typed columns), `check_joined_properties_hold_one_value` (`tools/join_property_check.py`: a relationship
-may not join on a node property that holds several values per node) and `check_reference_columns_are_reachable`
-(every approved file's reference columns can still be reached) run:
-
-- **At approval** — in `approve_proposed_construction_plan`, and in the read tool the current variant uses,
-  `get_proposed_construction_plan_with_approval_check` (`tools/construction_plan_tools.py`), through a shared
-  `_read_plan_for_approval`, so what the coordinator presents as approvable can't drift from what approval will
-  do. The plain `get_proposed_construction_plan` survives only because the older `v1`/`v2` variants still call
-  it. The read tool's error branch still returns the plan alongside the problems; its success branch says only
-  that those checks passed, not that it's the *right* plan — accepting remaining critic objections is the
-  user's call.
-- **Inside `schema_refinement_loop`** — its `StopChecker` runs all three through `find_plan_problems(state)`, and a
-  plan with any of these problems goes back for another iteration. The stop-check writes a `retry` composite to
-  `feedback` via `state_delta`, never by mutating state (`AgentTool` forwards only the delta out of the loop's child
-  session). Next to it the stop-check writes `feedback_kind` (`VerdictKind`: `mechanical` when any problem was found,
-  whatever the critic said; `critic`; `none`), chosen from the branch that ran and never read off the text;
-  `prepare_refinement_loop_invocation` resets it to `none`, and so does `clear_verdict_before_critic` (the critic's
-  `before_agent_callback`), which also empties `feedback` before every critic run. The critic's verdict is written by
-  `record_critic_verdict` (its `after_model_callback`): every complete reply overwrites `feedback`, with `""` if it
-  calls a tool, so the run's final answer has the last word and text written beside a tool call never survives. The
-  pre-clear covers a critic whose model call fails or yields no reply, either way leaving nothing to record. Never
-  use `output_key` for a value code parses: on google-adk 2.x it also stores text an agent writes alongside tool
-  calls, accumulated over its run (KG-25). The `'stopped:'` message and the proposal prompt read it; the
-  coordinator, which never sees state, tells a mechanical finding from a critic objection by whether
-  `get_proposed_construction_plan_with_approval_check` returns an error. The loop runs at most two iterations, so a
-  problem the second revision introduces still surfaces at approval.
-
-Approval is the guarantee: the loop's copy is fail-open behind one guard, approval propagates a crashed check so
-it fails closed, and the joined-property check and reachability fail open on an unreadable file (a
-`not_verified` note, never a refusal). Do not move the check into a critic-side tool: it would depend on the model choosing to call it, and
-the check is mechanical precisely because the prose rule it replaced resolved the same file two different ways
-on two runs. Approval framing also stays out of the critic's context. Reachability asks whether some node carries every value an
-identifying file holds, whichever file built that node (#52, KG-13) — never whether the node was built from that
-file.
-
-The joined-property check reads only `conflict_count` from `summarize_key_groups`; it does not reuse
-reachability's `_property_failure`, which also refuses several nodes sharing a value, and a join may
-legitimately match those. The key-group reading counts a row with no cell for the value column as no
-value, and a present blank cell as a value, because the loader skips the write for the first and
-overwrites with the second (KG-22).
-
-A relationship end reads one file column and matches its value on one node property: `<side>_node_property`,
-defaulting to the column's own name (KG-45). Every reader of a relationship's ends goes through
-`relationship_endpoints` (`tools/relationship_endpoints.py`), so the node-side checks (an endpoint's property
-exists, a typed property is not joined, a joined property holds one value) see the matched property, never the
-file column. Only the typed-relationship-property refusal stays on the file columns, since coercion would change
-the value the join reads. `check_construction_plan_consistency` also refuses a rule whose two ends read the same
-column and match it on the same node property: every row would link each node holding its value to every node
-holding it, itself included (on a key, one self-loop per row), and on a property holding one value per node no join
-warning fires at the build. Its own refusal messages offer a fix only where following it
-keeps the rule's two ends different.
-
-### Handoff confirmation gates
-
-Three phase exits are gated so a `finished` transfer needs more than the model's own reading of the
-conversation. Two use a per-turn flag; the third deliberately does not — read its entry before assuming a fourth
-gate should copy either shape.
-
-- **Construction → retrieval**: `graph_construction_agent`'s `finished` refuses until `HANDOFF_CONFIRMED_KEY`
-  (`tools/construction_handoff_tools.py`) is set by an explicit `confirm_construction_handoff` call — never
-  inferred from tone. `reset_construction_handoff_confirmation` (`before_agent_callback`) clears it every turn.
-  On confirmation, transfer goes directly to `graphrag_agent_v2`, not back through the coordinator (the numbered
-  sequence above simplifies this step).
-- **Retrieval → coordinator**: the same shape on `graphrag_agent_v2` (`GRAPHRAG_HANDOFF_CONFIRMED_KEY`,
-  `confirm_graphrag_handoff`, `reset_graphrag_handoff_confirmation` in `tools/graphrag_handoff_tools.py`), so it
-  stays in retrieval across several questions. Deliberately not factored into a helper shared with the
-  construction gate: each `finished`'s **docstring is the model-visible tool description** (ADK reads
-  `__doc__`), and the two legitimately say different things (hand the user to retrieval vs. hand them back), which
-  a shared factory would have to synthesise. `graphrag_agent_v1` has no gate and keeps its single-answer-then-eject
-  behavior, for the A/B comparison below.
-- **Intent → coordinator**: `user_intent_agent_v2`'s `finished` refuses until `approved_user_goal` is present
-  **and equal to** `perceived_user_goal` (both written by `tools/user_goal_tools.py`). No new state key, tool,
-  reset callback, or `before_agent_callback` — that is the point. The other gates guard something the user *said*
-  (turn-scoped, goes stale, needs a flag and a reset); this one guards something the user *did*, already recorded
-  durably. It is **not copy #3** of the flag/reset/confirm shape — do not factor the three together. Equality
-  rather than presence, because a goal approved and then revised leaves an approved key that no longer describes
-  what was asked. `finished` branches three ways (nothing recorded / never approved / stale since approval); the
-  messages are read by the model, not the user, and each names the next tool to call — there is no escape hatch.
-  The shared `finished` was split for this: `_transfer_to_coordinator` (ungated, `user_intent_agent_v1`'s; its
-  `__name__` must stay `"finished"` since ADK derives the tool name from it) vs. the gated `finished` (v2's). v1
-  uses `set_user_goal` and never writes `approved_user_goal`, so gating in place would leave it unable to exit.
-
-One more gate guards a tool rather than an exit, and it **is** copy #3 of the flag/reset/confirm shape:
-`graphrag_agent_v2`'s gated read tool (`make_gated_read_neo4j_cypher` in its `variants.py`) refuses an
-aggregating query over a numeric `partitioned_by` property until `declare_partition_interpretation`
-(`tools/graphrag_partition_tools.py`) has set `PARTITION_INTERPRETATION_DECLARED_KEY` this turn;
-`reset_partition_interpretation_declaration` clears it. It exists because the prose instruction to state the
-sum-vs-split reading faded within a session (KG-5). It is deliberately not shared with the handoff gates — its
-own docstring defers extracting a helper until a fourth instance is needed, not before.
-
-**The `transfer_to_agent` bypass.** ADK injects a `transfer_to_agent` tool (plus an advertising instruction
-block) into every sub-agent with a parent or peers, and it never consulted the gates. `graph_construction_agent`,
-`graphrag_agent_v2` and `user_intent_agent_v2` (never `_v1`) therefore run `strip_transfer_to_agent`
-(`common/adk_transfer.py`) as a `before_model_callback`, removing the tool from `tools_dict`, `config.tools` and
-the system instruction. `disallow_transfer_to_parent` was avoided because it also kills phase stickiness
-(`Runner._find_agent_to_run` would re-arbitrate every message through the coordinator). On google-adk 2.9 either
-disallow flag also makes a blocked `finished` call raise `ValueError`
-(`workflow/utils/_transfer_utils.resolve_and_derive_transfer_context`), so a `make_finished` target must be the
-agent's parent or a peer — one more reason to leave both flags unset. Instruction-block removal matches two marker
-phrases; if a `google-adk` upgrade changes ADK's wording, `_without_transfer_block` logs a warning rather than
-failing — check logs after any ADK bump.
-
-**Always pair the strip with `drop_foreign_context`**: take both from `**transfer_guard_callbacks(gated=...)`, never
-hand-wired. Each stripped agent is entered by someone else's `transfer_to_agent` call, which ADK
-rewrites into a foreign-context turn quoting ``[kg_construction_agent_v1] called tool `transfer_to_agent` with
-parameters:`` — a worked example of the call the model then copies, after the strip already removed the tool from
-`tools_dict`. `user_intent_agent` is the most exposed, since the interview is the stickiest phase. Only the
-coordinator lacks `drop_foreign_context`, by design: its transfer tool is never stripped, since that is how the
-workflow advances.
-
-**A call made anyway is refused, and a model stuck retrying it is stopped**: the three agents take all their
-transfer-related callbacks from one call, `**transfer_guard_callbacks(gated=...)` (`common/adk_transfer.py`): the
-turn end, the strip and `drop_foreign_context` as before-model callbacks, the reply counter as the after-model
-callback, `refuse_transfer_to_agent` as the before-tool callback and the counter's reset as the after-tool callback.
-They only work as a set; wire a fourth gated agent the same way. If a gated agent needs its own callback of one of
-those four kinds, extend the helper to take it and merge it in: passing the same keyword beside the spread is a
-`TypeError` at import, and hand-wiring the lists drops the set. ADK runs before-tool callbacks ahead of its own
-not-found reply (`build_tool_not_found_response`), which invites a retry and is bounded only by
-`RunConfig.max_llm_calls` (500). The refusal answers every call instead, with a `tool_error` that names the agent
-and `finished` as its exit, and no bare "do not call transfer_to_agent": it stays in the session, and the
-coordinator, whose own transfer tool is real, reads it later as another agent's output. The counter keeps two counts
-of model *replies* that call the hidden tool, per agent, in `temp:` state (invocation-scoped, never persisted, so no
-reset callback): one since another tool last *succeeded* (only that resets it, so a model that recovers keeps its
-turn, and a refused `finished` beside the hidden call or a streamed text-only reply does not reset it), and one for
-the whole turn, which nothing resets (a model can pair every retry with a tool that always succeeds). After three of
-the first or six of the second, the before-model callback returns a short text reply for the user in place of the
-next model call, which ends the turn. A reply that calls the hidden tool *and* speaks to the user (a question, the
-reported intent session's shape) ends the turn at once: its refusal sets `skip_summarization`, so the question is
-the turn's last word and the model cannot act on the refusal before the user answers. That is the only place for
-`skip_summarization`: a turn must never end on it without text for the user. Never end the turn by raising either:
-that leaves the call unanswered in history, and providers reject that history on every later turn.
-
-### Tool results
-
-All tools return a `ToolResult` (`common/tool_result.py`): `{"status": "success", <key>: value}` or
-`{"status": "error", "error_message": str}`. Use `tool_success(key, value)` / `tool_error(msg)` to construct these,
-and `is_success`/`is_error`/`get_or_else`/`get_or_raise`/`map_result` to consume them — don't invent ad hoc dict
-shapes for new tools.
-
-### Neo4j access
-
-All Cypher execution goes through the `Neo4jForADK` singleton (`common/neo4j_for_adk.get_graphdb()`), which wraps
-the driver and returns `ToolResult`s via `result_to_adk`. The singleton's identity is permanent — the five
-`graphdb = get_graphdb()` bindings taken at import time (one per module) stay valid forever, including across a
-`close_graphdb()` or a transient outage, because `_ensure_connected()` transparently rebuilds the driver on next
-use rather than requiring callers to re-fetch the singleton. Since `neo4j` 6.x, using a closed `Driver` raises
-`DriverError("Driver closed")` (5.x only warned), so a call site that skips the heal fails loudly — but only when
-its call is the *first* after a close; once any other path has healed, a regressed one runs on the healthy driver
-and passes silently. Every entry point that hands out or uses the driver must therefore go through the heal, and a
-new one needs its own step in `tests/integration/test_connection_recovery.py`, which documents how it covers them
-and which heals it cannot reach. Config comes from `Neo4jDsn`/`Neo4jConfig`
-(`common/pydantic_neo4j.py`), parsed from the `NEO4J_DSN` env var (local `bolt://` and Aura `neo4j+s://` DSNs both
-work — see `.env.example` for the full list of allowed schemes). `tools/cypher_tools.py` builds on this for
-higher-level operations like `get_physical_schema`, `create_uniqueness_constraint`, `neo4j_is_ready`. There is no
-Neo4j import directory to manage: `tools/kg_construction_tools.py` reads CSVs client-side (via `common/file_source.py`
-and `common/csv_reader.py`) and loads rows with parameterised `UNWIND` batches, since Aura forbids
-`LOAD CSV FROM "file:///"`.
-
-A construction rule may carry `property_types` (`{property_name: "integer"|"float"|"boolean"}`);
-`common/value_types.py` converts those values in Python before the batch is sent, and the loaders'
-Cypher gains two `FOREACH` passes for them — one writing converted values, one clearing values that
-were blank or unreadable via a sentinel, since Cypher cannot distinguish a failed parse from a
-ragged row's absent key. A typed column failing on more than half a batch's non-blank values stops
-that rule with an error rather than half-typing the property — but only once at least
-`TYPE_FAILURE_MIN_SAMPLE` (2) values are present, since one bad value out of one row cannot tell a
-wrong type declaration from a single data-entry typo. Identifiers and any column a
-relationship joins on or node property an end is matched on may not be typed; `check_construction_plan_consistency` refuses such a plan at
-approval time.
-
-Labels, relationship types and key/join column and matched node property names, which Cypher cannot parameterise, are checked with
-`common/cypher_identifiers.checked()` (a plain identifier — letter or underscore, then letters, digits or
-underscores; Cypher keywords such as `Order` are allowed) and written into the query text backtick-quoted with
-`quote()` — never passed as Cypher `$()` dynamic labels, which cannot use a uniqueness index. Names read back
-from the database are only quoted, never checked. The rule is enforced where names enter the plan and again at the
-build, not among the approval-time plan checks: the propose tools refuse a bad name through `node_rule_name_error`
-/ `relationship_rule_name_error` (`tools/kg_construction_tools.py`; the relationship tool calls its two parts in
-turn), with the build's own message followed by a
-hint that a label or type can be renamed but a file column cannot (and, for a bad matched node property, how
-to spell or omit it), before reading the file, and those tools (plus
-the remove tools) are the only writers of the plan (KG-44). The build keeps its own check as a second guard, since
-`load_nodes_from_csv` and `create_uniqueness_constraint` can be called directly. A new path that writes plan rules
-must run those helpers too, or move them into `check_construction_plan_consistency`. The loaders' `ToolResult`s
-include `nodes_in_graph` / `relationships_in_graph`, real `MATCH...count()` reads (not the row count `MERGE` was handed, which can
-collapse duplicates) — but these counts are label/type-wide, not scoped to the rows the current call just
-wrote, so a re-run against a non-empty graph will include prior data too.
-
-The relationship loader matches each end's node on its matched property with the file column's value, and skips
-a row whose value is blank on either join column (`value_types.is_blank`: no cell, empty or whitespace only)
-before coercion. `rows_skipped` counts those rows. A value that is not blank is matched as the file holds it,
-padding included, like the raw text the node loader stored, so `" 8"` matches only a node property padded alike.
-The under- and over-match warnings compare `rows_matched` with the rows left, and a file blank in every row gets
-one "nothing was linked" warning instead.
-
-### Grounding: `graphrag_agent_v2`
-
-`graphrag_agent_v2` answers only from graph queries made in the current turn, not
-from conversational recall. Three pieces make that possible:
-
-- `common/adk_context.py`: `drop_foreign_context`, a `before_model_callback` that strips other agents' turns
-  from the request. ADK rewrites another agent's output into a user-role message led by a fixed preamble
-  (`OTHER_AGENT_CONTEXT_PREAMBLE`, beginning "For context:") before this callback ever sees it, so role alone
-  can't distinguish it from a real user turn — the filter keys on that whole preamble instead, so a user
-  message that merely starts "For context:" still gets through.
-- `common/graph_profile.py`: turns `neo4j_graphrag`'s enriched schema into tri-state, always-present
-  annotations (completeness, uniqueness, per-pattern degree, per-value distribution), cached via
-  `get_cached_profile` — because the library's own report doesn't say whether a sampled property list is
-  exhaustive or not.
-- `tools/cypher_tools.py`: `get_physical_schema()` (no profile — output must stay byte-identical to before,
-  since the coordinator, `graph_construction_agent`, and `single_agent`'s `cypher_agent` all depend on that
-  exact shape) vs. `get_graph_schema_with_profile()` (adds the profile), both built on the shared
-  `_physical_schema(include_data_profile: bool)`.
-
-`graphrag_agent_v1` is kept unchanged alongside v2 for an A/B comparison; `agent.py` selects v2 via
-`AGENT_NAME`.
-
-### LLM selection
-
-`common/llm_catalog.get_llm(kind: LlmKind)` returns a lazily-constructed `LiteLlm` instance, cached per `LlmKind`
-(`LlmKind.reasoning` / `LlmKind.conversational`) in a `dict`, so each kind gets its own instance instead of one call
-site's model choice winning for the whole process. Every model runs through OpenRouter: settings hold the model name
-in OpenRouter's spelling (`llm_model_conversational` / `llm_model_reasoning`, e.g. `"openai/gpt-4o"`), and
-`_model_name()` derives the `"openrouter/"` prefix LiteLLM needs rather than having it configured separately.
-Swapping a model means editing `LLM_MODEL_CONVERSATIONAL` / `LLM_MODEL_REASONING` in `.env`, not code.
-
-The code default and `.env.example` are `openai/gpt-4o-mini` (conversational) / `openai/gpt-4o` (reasoning); the models actually used live
-only in each developer's untracked `.env`. LiteLLM's `model_cost` lacks some OpenRouter-only models and then
-estimates their cost as 0 — OpenRouter returns the real `cost` / `cost_details` on the response, which is what to
-read if you add cost tracking.
-
-`get_llm()` also caps `max_tokens` at 8192: with no cap, OpenRouter pre-authorizes the full token ceiling
-(e.g. ~$0.66 for a 65536-token `gpt-5` call) against account balance before the call runs. If that pre-auth
-exceeds the balance, the call fails with a 402. The dev UI shows that as a red error event in the chat plus a
-one-line snackbar, and its `call_llm` span has no request/response attributes at all (ADK sets them only per
-response). If reasoning-model calls stop working, check account balance and the `adk web` server's own log output
-(it logs the real exception) before assuming a code regression.
-
-### Domain models
-
-Typed domain shapes (e.g. `UserIntent` in `domain/user_intent.py`) are `TypedDict` + a `pydantic.TypeAdapter` for
-runtime validation (`validate_user_intent`, `is_valid_user_intent`), rather than full Pydantic `BaseModel`s — follow
-that pattern for new domain types.
-
-## Differences from the deeplearning.ai course
-
-- Many agents use a `finished` tool (built by `make_finished` in `tools/adk_tools.py`) to explicitly signal completion and transfer control back
-  to the parent agent, rather than relying on implicit turn-ending.
+<!-- Line budget: set and enforced in tests/unit/test_agent_context.py. The trap-bearing architecture map
+     stays on purpose, whatever /doctor's trim check proposes. -->

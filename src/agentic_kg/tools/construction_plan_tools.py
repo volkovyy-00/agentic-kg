@@ -859,6 +859,10 @@ def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
     them, so a caller that lost its own emptiness guard would otherwise loop on
     a plan that does not exist yet.
 
+    The checks run here -- at approval and in the loop's stop-check -- and
+    never as a tool the critic calls: a critic-side tool would run only when
+    the model chose to call it.
+
     IT DELIBERATELY DOES NOT CATCH. A guard here would be inherited by
     approve_proposed_construction_plan, which today fails closed because an
     exception propagates before the approved plan is written -- a swallowed
@@ -1039,6 +1043,11 @@ def get_proposed_construction_plan_with_approval_check(
 # Tool: Get Proposed construction Plan
 
 
+# Not a leftover: the refinement loop's proposer (schema_proposal_agent_v1) and
+# critic (schema_critic_agent_v1) read the draft plan through this tool, while
+# the approval-facing schema_proposal_agent_coordinator reads it through
+# get_proposed_construction_plan_with_approval_check. The docstring below is
+# the tool's model-visible description, so this note stays a comment.
 def get_proposed_construction_plan(tool_context: ToolContext) -> dict:
     """Get the proposed construction plan."""
     return tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, [])

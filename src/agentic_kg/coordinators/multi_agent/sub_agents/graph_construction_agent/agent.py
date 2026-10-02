@@ -42,7 +42,7 @@ graph_construction_agent = Agent(
     # worked example of it that the coordinator's own delegating call leaves
     # in this agent's history, and answers a call made anyway. The mechanism,
     # and why disallow_transfer_to_parent is NOT used, are in
-    # common/adk_transfer.py and CLAUDE.md, once. Here it would cost the
+    # common/adk_transfer.py, once. Here it would cost the
     # post-construction window: every follow-up question would go back to the
     # coordinator.
     #

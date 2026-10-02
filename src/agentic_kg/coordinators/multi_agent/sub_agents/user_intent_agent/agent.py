@@ -28,7 +28,7 @@ user_intent_agent = Agent(
     # tool. transfer_guard_callbacks removes the tool and the worked example of
     # it in this agent's history, which matters most here: the interview is
     # the stickiest phase. The mechanism, and why disallow_transfer_to_parent
-    # is NOT used, are in common/adk_transfer.py and CLAUDE.md, once. Here it
+    # is NOT used, are in common/adk_transfer.py, once. Here it
     # would send every mid-interview reply back to the coordinator.
     #
     # Deliberately NO before_agent_callback: graphrag_agent/agent.py carries

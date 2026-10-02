@@ -9,11 +9,13 @@ this module removes: the flag below is set only by an explicit tool call, and
 the retrieval agent's own `finished` wrapper refuses to transfer without it.
 
 This deliberately duplicates `construction_handoff_tools.py` rather than
-sharing with it. The two gates' `finished` wrappers differ in transfer
-topology -- construction transfers sideways to a live-imported sibling name,
-retrieval transfers up to a plain constant -- so a shared factory would have to
-parametrise over more than a state key. Extract at a third occurrence, not
-this one.
+sharing with it. A shared factory would have to take the state key, the
+confirm tool, the transfer target -- construction hands the user sideways to
+a live-imported sibling, retrieval hands them up to the coordinator -- and the
+`finished` docstring, which ADK shows the model as the tool's description and
+which says something different for each gate. Counting
+`graphrag_partition_tools.py`, this flag/reset/confirm shape has three copies;
+extract a helper when a fourth is needed, not before.
 
 The key is spelled here, once. The agent's agent.py (which clears it every
 turn) and its variants.py (which reads it) both import this constant rather

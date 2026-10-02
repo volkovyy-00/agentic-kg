@@ -21,4 +21,4 @@
 - [ ] `pyproject.toml` bumped, `uv lock` run, and `CHANGELOG.md` has `## [X.Y.Z] - YYYY-MM-DD` on top with entries citing `(#PR, KG-NN)` — or `no-release`
 - [ ] `uv run pytest -q`, `ruff check .`, `ruff format --check .`, `pyright` pass
 - [ ] Integration tests run locally if Neo4j access, loading or retrieval changed
-- [ ] `CLAUDE.md` updated if an architectural invariant or command changed (status goes to Jira, not here)
+- [ ] Agent context: a new rule is one bullet in the matching `.claude/rules/**/*.md` file (or `CLAUDE.md` if repo-wide), its reason is in the docstring, no ticket keys or status; `CLAUDE.md` and `README.md` updated if a command changed (`tests/unit/test_agent_context.py` passes)

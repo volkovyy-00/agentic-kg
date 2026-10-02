@@ -15,58 +15,23 @@ The rule, keyed on the agent's parent:
 - any other parent (today the refinement loop's two children, under a
   LoopAgent, which runs them directly and never as nodes): mode is None.
 
-Roots are found by reading files, not by walking packages: coordinators/ has
-no __init__.py, so pkgutil would never reach the two coordinators.
+The tree comes from agent_tree.py, shared with test_agent_wiring_guards.py.
 """
 
-import importlib
-import re
-from pathlib import Path
-
-from google.adk.agents import BaseAgent, LlmAgent
-from google.adk.tools.agent_tool import AgentTool
-
-import agentic_kg
-
-_PACKAGE_DIR = Path(agentic_kg.__file__).parent
-_ROOT_ASSIGNMENT = re.compile(r"^root_agent\s*=", re.MULTILINE)
-
-
-def _root_agents() -> list[BaseAgent]:
-    roots = []
-    for path in sorted(_PACKAGE_DIR.rglob("*.py")):
-        if not _ROOT_ASSIGNMENT.search(path.read_text()):
-            continue
-        relative = path.relative_to(_PACKAGE_DIR.parent).with_suffix("")
-        module = importlib.import_module(".".join(relative.parts))
-        roots.append(module.root_agent)
-    return roots
-
-
-def _children(agent: BaseAgent) -> list[BaseAgent]:
-    wrapped = [
-        tool.agent
-        for tool in getattr(agent, "tools", [])
-        if isinstance(tool, AgentTool)
-    ]
-    return [*agent.sub_agents, *wrapped]
-
-
-def _all_llm_agents() -> list[LlmAgent]:
-    seen: dict[int, BaseAgent] = {}
-    pending = _root_agents()
-    while pending:
-        agent = pending.pop()
-        if id(agent) not in seen:
-            seen[id(agent)] = agent
-            pending.extend(_children(agent))
-    return [agent for agent in seen.values() if isinstance(agent, LlmAgent)]
+from agent_tree import (
+    PACKAGE_DIR,
+    ROOT_ASSIGNMENT,
+    all_llm_agents,
+    root_agents,
+    root_files,
+)
+from google.adk.agents import LlmAgent
 
 
 def test_discovery_finds_every_coordinator():
     """Guards the discovery itself: if it found nothing, the rule below would
     pass while checking nothing."""
-    names = {agent.name for agent in _root_agents()}
+    names = {agent.name for agent in root_agents()}
     assert {
         "kg_construction_agent_v1",
         "single_agent_agent_v1",
@@ -76,9 +41,39 @@ def test_discovery_finds_every_coordinator():
 
 def test_every_agent_that_adk_could_assign_a_mode_has_one():
     wrong = []
-    for agent in _all_llm_agents():
+    for agent in all_llm_agents():
         parent = agent.parent_agent
         expected = "chat" if parent is None or isinstance(parent, LlmAgent) else None
         if agent.mode != expected:
             wrong.append(f"{agent.name}: mode={agent.mode!r}, expected {expected!r}")
     assert not wrong, "\n".join(wrong)
+
+
+def test_discovery_reaches_every_coordinator_directory():
+    """Guards the discovery's pattern: a coordinator whose agent.py exposes its
+    root in a form the pattern misses would be skipped by every tree-walking
+    guard, which would then pass without checking it."""
+    expected = sorted((PACKAGE_DIR / "coordinators").glob("*/agent.py"))
+    assert expected
+    missing = [path for path in expected if path not in root_files()]
+    assert not missing, f"no root_agent found in: {missing}"
+
+
+def test_the_root_pattern_matches_root_assignments_only():
+    """root_agents() imports every module the pattern matches and reads its
+    root_agent, so a module that only uses an imported one must not match."""
+    lines = {
+        "root_agent = agent": True,
+        "root_agent: LlmAgent = agent": True,
+        'root_agent.name = "x"': False,
+        "root_agent != other": False,
+        "root_agent <= other": False,
+        "root_agent == other": False,
+        "    root_agent = agent": False,
+    }
+    wrong = [
+        line
+        for line, is_root in lines.items()
+        if bool(ROOT_ASSIGNMENT.search(line)) != is_root
+    ]
+    assert not wrong, f"misread as (not) a root assignment: {wrong}"

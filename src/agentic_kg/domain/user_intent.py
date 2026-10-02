@@ -1,3 +1,10 @@
+"""The user's intent for the graph, as a typed domain shape.
+
+Domain shapes here are a TypedDict plus a pydantic TypeAdapter for runtime
+validation (validate_user_intent, is_valid_user_intent), not a pydantic
+BaseModel. A new domain type follows the same pattern.
+"""
+
 from typing import Any, Literal, TypedDict, TypeGuard
 
 from pydantic import TypeAdapter, ValidationError

@@ -78,3 +78,14 @@ def test_returns_a_litellm_instance_not_a_string(monkeypatch):
     reset_settings()
     _clear_cache()
     assert isinstance(get_llm(LlmKind.reasoning), LiteLlm)
+
+
+def test_output_token_cap_never_exceeds_8192():
+    """OpenRouter pre-authorizes a call's whole output-token ceiling against the
+    account balance, so an uncapped call (65536 for gpt-5) is refused with a 402
+    long before the balance runs out. The reason sits at _LLM_MAX_TOKENS; this
+    pins the number for every kind."""
+    reset_settings()
+    _clear_cache()
+    for kind in LlmKind:
+        assert 0 < get_llm(kind)._additional_args["max_tokens"] <= 8192
