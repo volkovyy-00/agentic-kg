@@ -12,7 +12,7 @@ checks make the budget and the homes mechanical:
   below: an unscoped rule loads at launch and saves nothing, and a glob
   matching no listed file is a rule that never loads;
 - every repo path an agent-context file names exists, written from the
-  repo root, and every code identifier a rule names still exists;
+  repo root, and every code identifier one names is still defined or used;
 - no agent-context file carries a ticket key: the why lives in docstrings.
 
 The file list is git's -- tracked plus untracked, minus ignored -- so a file
@@ -20,6 +20,7 @@ created but not yet committed counts and an ignored one does not. Outside a
 git checkout this fails rather than skips: a skip is not a pass.
 """
 
+import ast
 import glob
 import re
 import subprocess
@@ -143,30 +144,88 @@ def test_every_rule_file_is_path_scoped_and_within_budget():
     assert not wrong, "\n".join(wrong)
 
 
+# Names defined outside this repo's Python, so a rename there is not ours to
+# catch: CLI tools, and the ADK trace span fields the debug skill reads.
+_EXTERNAL_NAMES = frozenset({"uv", "gh", "call_llm", "start_time", "end_time"})
+
+
+def _note_names(tree: ast.AST, names: set[str], members: dict[str, set[str]]) -> None:
+    """Collect names the code itself uses, never comments or docstrings."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        if isinstance(node, ast.ClassDef):
+            body = members.setdefault(node.name, set())
+            for item in node.body:
+                if isinstance(
+                    item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    body.add(item.name)
+                elif isinstance(item, ast.Assign):
+                    body.update(t.id for t in item.targets if isinstance(t, ast.Name))
+                elif isinstance(item, ast.AnnAssign) and isinstance(
+                    item.target, ast.Name
+                ):
+                    body.add(item.target.id)
+        elif isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, ast.keyword) and node.arg:
+            names.add(node.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.update(alias.name.split("."))
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.update(node.module.split("."))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # A whole-identifier string: a state key, an agent name.
+            if re.fullmatch(r"[A-Za-z_]\w*", node.value):
+                names.add(node.value)
+
+
 @cache
-def _code_words() -> frozenset[str]:
-    """Every word in the listed Python files under src/ and tests/, this one aside."""
-    words: set[str] = set()
+def _code_index() -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    """Names the code under src/ and tests/ defines or uses, plus each class's
+    own members; package path parts count too (a coordinator directory)."""
+    names: set[str] = set()
+    members: dict[str, set[str]] = {}
     for path in _listed_files():
-        if path.endswith(".py") and path.startswith(("src/", "tests/")):
-            if REPO / path != Path(__file__).resolve():
-                words.update(re.findall(r"\w+", (REPO / path).read_text()))
-    return frozenset(words)
+        if not (path.endswith(".py") and path.startswith(("src/", "tests/"))):
+            continue
+        if REPO / path == Path(__file__).resolve():
+            continue
+        names.update(Path(path).with_suffix("").parts)
+        _note_names(ast.parse((REPO / path).read_text()), names, members)
+    return frozenset(names), {k: frozenset(v) for k, v in members.items()}
 
 
-def test_every_rule_identifier_exists_in_the_code():
-    """A rule names code by identifier; a rename would leave it pointing at
-    nothing while the path checks stay green."""
+def _resolves(identifier: str) -> bool:
+    names, members = _code_index()
+    parts = identifier.split(".")
+    if len(parts) == 2 and parts[0] in members:
+        return parts[1] in members[parts[0]]
+    return all(part in names or part in _EXTERNAL_NAMES for part in parts)
+
+
+def test_every_named_identifier_exists_in_the_code():
+    """An agent-context file names code by identifier; a rename would leave it
+    pointing at nothing while the path checks stay green. A name counts only
+    where the code defines or uses it -- an English word in a comment does not
+    keep a stale rule alive -- and Class.member is looked up in that class."""
     missing = [
-        f"{_relative(rule)}: `{span}`"
-        for rule in _rule_files()
-        for span in _SPAN.findall(rule.read_text())
-        if (identifier := _IDENTIFIER.fullmatch(span))
-        and any(part not in _code_words() for part in identifier.group(1).split("."))
+        f"{_relative(path)}: `{span}`"
+        for path in _agent_context_files()
+        for span in _SPAN.findall(_prose(path.read_text()))
+        if not span.endswith(_PATH_SUFFIXES)
+        and (identifier := _IDENTIFIER.fullmatch(span))
+        and not _resolves(identifier.group(1))
     ]
     assert not missing, (
-        "named in a rule but found nowhere in src/ or tests/ -- update the rule "
-        "to the new name:\n" + "\n".join(missing)
+        "named in an agent-context file but not defined or used in src/ or "
+        "tests/ -- update the name in place:\n" + "\n".join(missing)
     )
 
 

@@ -8,6 +8,8 @@ that mirrors the deeplearning.ai course structure it was forked from.
 
 - Read `docs/spec.md` §2–§4 — the two coordinators, the construction workflow and retrieval grounding —
   then the docstring of each module you change: that is where its invariants and their reasons live.
+  The rules no test enforces are also listed, one bullet each, in `.claude/rules/` (by area) and
+  `CLAUDE.md` (repo-wide); read the matching file before changing an area.
 - Read the Jira ticket you are working on (project `KG`, <https://stormdoc.atlassian.net/browse/KG>),
   including its comments: that is where the current state of the work is.
 - Set up the project per `README.md` (`uv venv && uv sync`, `.env` from `.env.example`), then run
@@ -46,7 +48,9 @@ Rules that follow from the table:
   every part of the code. A spec under `docs/superpowers/` is the long form, but no one else's clone has it.
 - **A review comment that sharpens a rule's wording** is answered in the docstring. Agent-context files
   (`CLAUDE.md`, `.claude/rules/`, `.claude/skills/`) change only by whole bullets or paragraphs added or
-  removed; either may wrap over several lines, and the line budgets count those lines.
+  removed; either may wrap over several lines, and the line budgets count those lines. A mechanical
+  fix -- a renamed path or identifier the tests flag -- is made in place; the restriction is on adding
+  or rewording a rule.
 - **Something real but out of scope** for the PR you're in becomes a Jira ticket, not a local note.
 
 ## Tickets
@@ -139,8 +143,7 @@ uv run pyright                    # static type check — run before every PR; m
 ```
 
 Without a reachable Docker every integration module skips instead of failing, and a skip is not a pass:
-read the result as "N passed", not "N skipped". On colima, set `DOCKER_HOST` and
-`TESTCONTAINERS_RYUK_DISABLED` first (see `README.md`).
+read the result as "N passed", not "N skipped". On colima, see `README.md` first.
 
 A PR that changes retrieval, construction, or Neo4j access code should include or update unit tests; skip
 only with a stated reason (e.g. "covered by the existing fake in `tests/unit/fakes.py`").

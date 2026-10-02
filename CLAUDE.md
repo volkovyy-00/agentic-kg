@@ -11,8 +11,8 @@ fixes must hold for source files the program has never seen.
 
 This file holds what every session needs, one bullet or short paragraph per rule — no status or ticket keys. Rules
 for one area live in `.claude/rules/` and load when you read a matching file; why code is the way it
-is lives in the docstring at that code. `CONTRIBUTING.md` (*Where project knowledge lives*) lists every
-home; humans start at `docs/spec.md`.
+is lives in the docstring at that code. `CONTRIBUTING.md` holds the PR, release and CHANGELOG workflow,
+and (*Where project knowledge lives*) every home; humans start at `docs/spec.md`.
 
 ## Before you change
 
