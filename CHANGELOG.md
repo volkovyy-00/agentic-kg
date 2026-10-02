@@ -8,6 +8,18 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.9.1] - 2026-10-02
+
+### Fixed
+- **A CSV saved as Windows-1252 can now be read (#77, KG-47)**: a spreadsheet export in that encoding failed
+  every tool, so the pipeline could not use it. Such a file is now sampled, searched, column-checked and
+  loaded with its accented text intact, and a UTF-8 file with a byte-order mark no longer carries it into the
+  first column name. A file edited and re-saved in another encoding while the app runs is read correctly on
+  the next call. A file read as Windows-1252 is logged once.
+- **A UTF-16 or binary file is refused with a clear message (#77, KG-47)**: it used to be read as garbage or
+  fail with a codec error. Every tool now says the file is not UTF-8 or Windows-1252 text, why, and to
+  re-save it as UTF-8. A file that is neither encoding is refused the same way, naming the first bad byte.
+
 ## [0.9.0] - 2026-10-01
 
 ### Added
