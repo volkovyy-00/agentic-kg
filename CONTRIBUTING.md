@@ -35,7 +35,8 @@ Rules that follow from the table:
 
 - **No status in `CLAUDE.md`, `.claude/` or `docs/spec.md`.** "Current work", "latest release", "next
   up" — those belong to Jira and `CHANGELOG.md`, and go stale anywhere else. `CLAUDE.md` holds only what
-  every session needs, one bullet per rule; `tests/unit/test_agent_context.py` enforces its budget.
+  every session needs, one bullet or short paragraph per rule; `tests/unit/test_agent_context.py`
+  enforces its budget.
 - **A session that stops mid-ticket leaves a comment on the ticket**: what is done, what is next, and
   anything learned that isn't yet in a commit. The next session starts from the ticket, not from a
   local handoff file.
@@ -44,8 +45,8 @@ Rules that follow from the table:
   in `.claude/rules/` if no test would catch a change that breaks it, or to `CLAUDE.md` if it holds in
   every part of the code. A spec under `docs/superpowers/` is the long form, but no one else's clone has it.
 - **A review comment that sharpens a rule's wording** is answered in the docstring. Agent-context files
-  (`CLAUDE.md`, `.claude/rules/`, `.claude/skills/`) change only by whole bullets added or removed; a
-  bullet may wrap over several lines, and the line budgets count those lines.
+  (`CLAUDE.md`, `.claude/rules/`, `.claude/skills/`) change only by whole bullets or paragraphs added or
+  removed; either may wrap over several lines, and the line budgets count those lines.
 - **Something real but out of scope** for the PR you're in becomes a Jira ticket, not a local note.
 
 ## Tickets

@@ -476,11 +476,12 @@ def node_rule_name_error(rule: dict) -> str | None:
     with exactly the text the build would give it (KG-44). A missing key raises
     KeyError, which construct_domain_graph reports per rule.
 
-    The live writers of the plan are the propose and remove tools. Only the
-    propose tools refuse names -- through this function, and through the two
-    parts of relationship_rule_name_error -- and the remove tools only delete.
-    The build still re-checks with checked() in the loaders and in
-    create_uniqueness_constraint, because those can be called directly.
+    The live writers of the plan are the propose and remove tools; the remove
+    tools only delete. The propose tools refuse names through this function
+    (and the two parts of relationship_rule_name_error), and so does the
+    build: import_nodes and import_relationships call these first.
+    load_nodes_from_csv and create_uniqueness_constraint also re-check with
+    checked(), because they can be called directly.
     """
     return _first_name_error(rule, _NODE_RULE_NAMES)
 

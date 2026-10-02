@@ -18,7 +18,7 @@ The rule, keyed on the agent's parent:
 The tree comes from agent_tree.py, shared with test_agent_wiring_guards.py.
 """
 
-from agent_tree import all_llm_agents, root_agents
+from agent_tree import PACKAGE_DIR, all_llm_agents, root_agents, root_files
 from google.adk.agents import LlmAgent
 
 
@@ -41,3 +41,13 @@ def test_every_agent_that_adk_could_assign_a_mode_has_one():
         if agent.mode != expected:
             wrong.append(f"{agent.name}: mode={agent.mode!r}, expected {expected!r}")
     assert not wrong, "\n".join(wrong)
+
+
+def test_discovery_reaches_every_coordinator_directory():
+    """Guards the discovery's pattern: a coordinator whose agent.py exposes its
+    root in a form the pattern misses would be skipped by every tree-walking
+    guard, which would then pass without checking it."""
+    expected = sorted((PACKAGE_DIR / "coordinators").glob("*/agent.py"))
+    assert expected
+    missing = [path for path in expected if path not in root_files()]
+    assert not missing, f"no root_agent found in: {missing}"

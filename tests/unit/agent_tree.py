@@ -5,11 +5,13 @@ test_agent_wiring_guards.py (output_key and the transfer-guard callbacks). A
 helper module like fakes.py, so no test file imports another.
 
 Roots are found by reading files, not by walking packages: coordinators/ has
-no __init__.py, so pkgutil would never reach the two coordinators.
+no __init__.py, so pkgutil would never reach the two coordinators. The walk is
+cached: the agents are module-level singletons, so one walk serves every test.
 """
 
 import importlib
 import re
+from functools import cache
 from pathlib import Path
 
 from google.adk.agents import BaseAgent, LlmAgent
@@ -17,16 +19,26 @@ from google.adk.tools.agent_tool import AgentTool
 
 import agentic_kg
 
-_PACKAGE_DIR = Path(agentic_kg.__file__).parent
-_ROOT_ASSIGNMENT = re.compile(r"^root_agent\s*=", re.MULTILINE)
+PACKAGE_DIR = Path(agentic_kg.__file__).parent
+# Plain or annotated (`root_agent: LlmAgent = ...`); never a comparison.
+_ROOT_ASSIGNMENT = re.compile(r"^root_agent\b[^=\n]*=(?!=)", re.MULTILINE)
 
 
+@cache
+def root_files() -> list[Path]:
+    """Every module under the package that assigns a top-level root_agent."""
+    return [
+        path
+        for path in sorted(PACKAGE_DIR.rglob("*.py"))
+        if _ROOT_ASSIGNMENT.search(path.read_text())
+    ]
+
+
+@cache
 def root_agents() -> list[BaseAgent]:
     roots = []
-    for path in sorted(_PACKAGE_DIR.rglob("*.py")):
-        if not _ROOT_ASSIGNMENT.search(path.read_text()):
-            continue
-        relative = path.relative_to(_PACKAGE_DIR.parent).with_suffix("")
+    for path in root_files():
+        relative = path.relative_to(PACKAGE_DIR.parent).with_suffix("")
         module = importlib.import_module(".".join(relative.parts))
         roots.append(module.root_agent)
     return roots
@@ -41,9 +53,10 @@ def _children(agent: BaseAgent) -> list[BaseAgent]:
     return [*agent.sub_agents, *wrapped]
 
 
+@cache
 def all_llm_agents() -> list[LlmAgent]:
     seen: dict[int, BaseAgent] = {}
-    pending = root_agents()
+    pending = list(root_agents())  # the cached list is never consumed
     while pending:
         agent = pending.pop()
         if id(agent) not in seen:

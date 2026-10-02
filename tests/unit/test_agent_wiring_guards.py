@@ -15,11 +15,11 @@ when it never reads that paragraph or compacts it away (KG-55).
   when it answers, ADK skips the ones after it. Callbacks that are not guards
   are ignored, so a helper extended with an agent's own callback still passes.
 - Each known gated agent carries the set exactly while its gated variant is
-  selected, as its module's IS_GATED_VARIANT says.
-
-LIMIT: a fourth gated agent that nobody adds to the last test passes as
-"none". CLAUDE.md's pointer to .claude/rules/handoff-gates.md and that rule
-guard that case, not this file.
+  selected, as its module's IS_GATED_VARIANT says, and every other agent
+  carries none. Above all the coordinator: its transfer_to_agent is how the
+  workflow advances, so stripping it would stop the workflow. A fourth gated
+  agent therefore fails here until it is added to _gated_cases -- the
+  deliberate edit that wiring a new gate should be.
 """
 
 from typing import Any
@@ -118,18 +118,32 @@ def test_every_agent_carries_the_whole_guard_set_or_none_of_it():
     assert not partial, "\n".join(partial)
 
 
-def test_each_gated_agent_is_guarded_exactly_while_its_gated_variant_is_selected():
-    cases = [
+def _gated_cases() -> list[tuple[Any, bool]]:
+    """Each phase agent that can be gated, and whether its variant is gated now."""
+    return [
         (construction.graph_construction_agent, True),
         (graphrag.graphrag_agent, graphrag.IS_GATED_VARIANT),
         (user_intent.user_intent_agent, user_intent.IS_GATED_VARIANT),
     ]
+
+
+def test_each_gated_agent_is_guarded_exactly_while_its_gated_variant_is_selected():
     in_tree = {id(agent) for agent in all_llm_agents()}
     wrong = []
-    for agent, gated in cases:
+    for agent, gated in _gated_cases():
         if id(agent) not in in_tree:
             wrong.append(f"{agent.name}: not reached by the agent-tree walk")
         expected = "full" if gated else "none"
         if (state := _guarding(agent)) != expected:
             wrong.append(f"{agent.name}: {state}, expected {expected}")
+    assert not wrong, "\n".join(wrong)
+
+
+def test_every_agent_not_listed_as_gated_carries_no_guard():
+    gated = {id(agent) for agent, is_gated in _gated_cases() if is_gated}
+    wrong = [
+        f"{agent.name}: {state}"
+        for agent in all_llm_agents()
+        if id(agent) not in gated and (state := _guarding(agent)) != "none"
+    ]
     assert not wrong, "\n".join(wrong)

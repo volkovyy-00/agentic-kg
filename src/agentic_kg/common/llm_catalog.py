@@ -70,6 +70,11 @@ def _model_name(kind: LlmKind) -> str:
     return f"{_OPENROUTER_PREFIX}{configured}"
 
 
+# Cost tracking, if it is ever added: LiteLLM's model_cost map lacks some
+# OpenRouter-only models, and for those litellm.completion_cost raises "This
+# model isn't mapped yet" while the response_cost it logs is None (litellm
+# 1.84.0). OpenRouter returns the real figure on every response instead:
+# usage.cost (USD) and usage.cost_details.
 def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
     """Return the LiteLlm instance for a kind of work.
 
