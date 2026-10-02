@@ -10,9 +10,10 @@ folder still works when the same files move elsewhere. This module is the one
 place that knows the difference.
 """
 
+import codecs
 import logging
 from pathlib import Path, PureWindowsPath
-from typing import Any, Tuple
+from typing import Any, BinaryIO, NamedTuple, Optional, Tuple, cast
 
 from fsspec import AbstractFileSystem
 from fsspec.core import url_to_fs
@@ -26,7 +27,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class SourceError(Exception):
-    """The configured source location is unusable."""
+    """The source location, or a file in it, is unusable."""
+
+
+class SourceEncodingError(SourceError):
+    """A source file is not text this program can read.
+
+    Raised for UTF-16, binary files and anything that is neither UTF-8 nor
+    Windows-1252. The message names the file and says why, so a tool can hand
+    it to the agent unchanged.
+    """
 
 
 def _anchor(uri: str) -> str:
@@ -150,6 +160,108 @@ def source_exists(relative_path: str) -> bool:
     """Whether a file exists at the given relative name."""
     fs, root = get_source_fs()
     return bool(fs.exists(_full_path(root, relative_path)))
+
+
+# Bytes per read of the encoding scan. A module constant so a test can shrink it
+# and put a chunk boundary inside a multi-byte character.
+_SCAN_CHUNK = 1 << 20
+
+_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+class _Decision(NamedTuple):
+    """How to read one file: an encoding, or the reason it is refused."""
+
+    encoding: Optional[str]
+    refusal: Optional[str] = None
+
+
+def _refused(reason: str) -> _Decision:
+    return _Decision(None, reason)
+
+
+def _refusal_message(relative_path: str, reason: str) -> str:
+    """The one wording of a refusal. The path is the caller's relative name."""
+    return (
+        f"{relative_path} is not valid UTF-8 or Windows-1252 text, so it was not "
+        f"read: {reason}. Re-save it as UTF-8."
+    )
+
+
+def _outcome(
+    utf8: codecs.IncrementalDecoder,
+    utf8_ok: bool,
+    has_utf8_bom: bool,
+    cp1252_failure: Optional[Tuple[int, int]],
+) -> _Decision:
+    """The decision once every chunk has been read. See _scan."""
+    if utf8_ok:
+        try:
+            utf8.decode(b"", final=True)
+            return _Decision("utf-8-sig")
+        except UnicodeDecodeError:
+            pass  # a multi-byte character cut off at the end of the file
+    if has_utf8_bom:
+        return _refused("it starts with a UTF-8 byte-order mark but is not valid UTF-8")
+    if cp1252_failure is None:
+        return _Decision("cp1252")
+    position, byte = cp1252_failure
+    return _refused(
+        f"byte 0x{byte:02X} at offset {position} is not valid Windows-1252, "
+        "and the file is not valid UTF-8"
+    )
+
+
+def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
+    """Decide how to read a file, from one pass over its bytes.
+
+    The two decoders are tracked independently and a failure of one is never a
+    refusal on its own: valid UTF-8 routinely contains bytes Windows-1252 leaves
+    undefined ("Ё" is D0 81), and such a file must keep reading as UTF-8. Only
+    a NUL byte, a UTF-16 byte-order mark, or both decoders failing refuses a
+    file. A NUL byte is looked for in every chunk, so a file with an invalid byte
+    early and a NUL later still gets the "UTF-16 or binary" hint.
+
+    A file starting with a UTF-8 byte-order mark is UTF-8 only: read as
+    Windows-1252 the BOM would become "ï»¿" glued onto the first header name.
+
+    Chunked, so a large file is never held whole. The UTF-8 decoder is
+    incremental, which carries a multi-byte character split by a chunk
+    boundary; `final=True` after the last chunk (in _outcome) catches a
+    truncated one.
+    """
+    utf8 = codecs.getincrementaldecoder("utf-8")()
+    utf8_ok = True
+    has_utf8_bom = False
+    cp1252_failure: Optional[Tuple[int, int]] = None  # (absolute offset, byte)
+    offset = 0
+    with fs.open(full_path, "rb") as opened:
+        # fsspec types read() as str | bytes; a "rb" open yields bytes.
+        handle = cast(BinaryIO, opened)
+        head = handle.read(3)
+        if head[:2] in _UTF16_BOMS:
+            return _refused("it looks like UTF-16 or binary (a UTF-16 byte-order mark)")
+        has_utf8_bom = head == _UTF8_BOM
+        handle.seek(0)
+        while chunk := handle.read(_SCAN_CHUNK):
+            nul = chunk.find(b"\x00")
+            if nul != -1:
+                return _refused(
+                    f"it looks like UTF-16 or binary (a NUL byte at offset {offset + nul})"
+                )
+            if utf8_ok:
+                try:
+                    utf8.decode(chunk)
+                except UnicodeDecodeError:
+                    utf8_ok = False
+            if cp1252_failure is None:
+                try:
+                    chunk.decode("cp1252")
+                except UnicodeDecodeError as exc:
+                    cp1252_failure = (offset + exc.start, chunk[exc.start])
+            offset += len(chunk)
+    return _outcome(utf8, utf8_ok, has_utf8_bom, cp1252_failure)
 
 
 def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
