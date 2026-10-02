@@ -230,7 +230,13 @@ def refuse_transfer_to_agent(
     turn ends with the question as its last word, and the user answers it
     before the model runs again. Otherwise the model would be called again
     at once, and could act on the refusal (approve, say) before the user has
-    answered.
+    answered. That is the only place to set skip_summarization: a turn must
+    never end on it without text for the user.
+
+    Always answer, never raise: a raise leaves the transfer call unanswered in
+    history, and providers reject that history on every later turn. The same
+    holds for ending the turn, which end_turn_past_hidden_transfer_cap does
+    with a text reply.
 
     Returns None for every other tool, so ADK runs it as usual. The parameter
     NAMES are load-bearing: ADK passes tool=, args= and tool_context= by

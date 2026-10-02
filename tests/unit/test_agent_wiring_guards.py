@@ -10,8 +10,10 @@ when it never reads that paragraph or compacts it away (KG-55).
   display-only use would be a deliberate edit here.
 - The transfer-guard callbacks come as a set. transfer_guard_callbacks(gated=True)
   is the source of truth: an agent carries every one of them, each in its own
-  slot, or none. Callbacks that are not guards are ignored, so a helper
-  extended with an agent's own callback still passes.
+  slot and in the helper's order, once, or none. Order matters because
+  end_turn_past_hidden_transfer_cap must run first among the model callbacks:
+  when it answers, ADK skips the ones after it. Callbacks that are not guards
+  are ignored, so a helper extended with an agent's own callback still passes.
 - Each known gated agent carries the set exactly while its gated variant is
   selected, as its module's IS_GATED_VARIANT says.
 
@@ -24,7 +26,10 @@ from typing import Any
 
 from agent_tree import all_llm_agents
 
-from agentic_kg.common.adk_transfer import transfer_guard_callbacks
+from agentic_kg.common.adk_transfer import (
+    end_turn_past_hidden_transfer_cap,
+    transfer_guard_callbacks,
+)
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent import (
     agent as construction,
 )
@@ -49,12 +54,13 @@ def _as_list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else [value]
 
 
-def _ids(callbacks: list[Any]) -> set[int]:
-    return {id(callback) for callback in callbacks}
+def _ids(callbacks: list[Any]) -> list[int]:
+    """Identities in order, so a reordered or repeated guard does not match."""
+    return [id(callback) for callback in callbacks]
 
 
 def _names(callbacks: list[Any]) -> list[str]:
-    return sorted(callback.__name__ for callback in callbacks)
+    return [callback.__name__ for callback in callbacks]
 
 
 def _guarding(agent: Any) -> str:
@@ -63,7 +69,7 @@ def _guarding(agent: Any) -> str:
         slot: _as_list(callbacks)
         for slot, callbacks in transfer_guard_callbacks(gated=True).items()
     }
-    guard_ids = _ids([cb for callbacks in expected.values() for cb in callbacks])
+    guard_ids = set(_ids([cb for callbacks in expected.values() for cb in callbacks]))
     present = {
         slot: [cb for cb in _as_list(getattr(agent, slot)) if id(cb) in guard_ids]
         for slot in _SLOTS
@@ -84,6 +90,14 @@ def _guarding(agent: Any) -> str:
 def test_the_helper_fills_only_slots_this_file_inspects():
     """Guards _guarding: a fifth slot would go unchecked."""
     assert set(transfer_guard_callbacks(gated=True)) <= set(_SLOTS)
+
+
+def test_the_turn_end_runs_first_among_the_model_callbacks():
+    """The agents are compared against the helper, so the helper's own order
+    is pinned here: end_turn_past_hidden_transfer_cap answers in place of the
+    model call, and ADK then skips the callbacks after it."""
+    first = transfer_guard_callbacks(gated=True)["before_model_callback"][0]
+    assert first is end_turn_past_hidden_transfer_cap
 
 
 def test_no_agent_sets_output_key():

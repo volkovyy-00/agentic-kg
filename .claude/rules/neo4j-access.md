@@ -11,7 +11,7 @@ paths:
 ---
 # Neo4j access
 
-- Every path that hands out or uses the driver goes through `_ensure_connected()`; a new one adds its
-  own close-then-call step to `tests/integration/test_connection_recovery.py`.
+- Every path that hands out or uses the driver gets it from `Neo4jForADK._connection()`; a new one
+  adds its own close-then-call step to `tests/integration/test_connection_recovery.py`.
 - Load rows with parameterised `UNWIND` batches read client-side; never `LOAD CSV`.
 - Tests touching physical or profiled schema use the `neo4j_graph_with_apoc` fixture.

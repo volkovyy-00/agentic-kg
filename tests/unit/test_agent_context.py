@@ -26,6 +26,8 @@ import subprocess
 from functools import cache
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 ROOT_FILE = REPO / "CLAUDE.md"
 ROOT_BUDGET = 150
@@ -44,13 +46,20 @@ _PATTERN = re.compile(r'^  - "([^"\n]+)"$', re.MULTILINE)
 
 @cache
 def _listed_files() -> frozenset[str]:
-    result = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as error:
+        detail = getattr(error, "stderr", "") or error
+        pytest.fail(
+            "these checks read git's file list: run the unit suite from a git "
+            f"checkout with git on PATH ({detail})"
+        )
     return frozenset(
         path for path in result.stdout.split("\0") if path and (REPO / path).is_file()
     )

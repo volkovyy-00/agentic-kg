@@ -9,7 +9,7 @@ fixes must hold for source files the program has never seen.
 
 ## Where knowledge lives
 
-This file holds only what every session needs, one line per rule — no status, no ticket keys. Rules
+This file holds only what every session needs, one bullet per rule — no status, no ticket keys. Rules
 for one area live in `.claude/rules/` and load when you read a matching file; why code is the way it
 is lives in the docstring at that code. `CONTRIBUTING.md` (*Where project knowledge lives*) lists every
 home; humans start at `docs/spec.md`.
