@@ -20,6 +20,7 @@ from google.adk.tools import ToolContext
 from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, quote
 from agentic_kg.common.cypher_identifiers import checked as _checked
+from agentic_kg.common.file_source import SourceEncodingError
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import (
@@ -393,9 +394,12 @@ def load_nodes_from_csv(
             rows_committed += len(batch)
     except FileNotFoundError:
         return tool_error(f"{source_file}: no such source file")
+    except SourceEncodingError as exc:
+        return tool_error(str(exc))
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        # Not only SourceError: a non-UTF-8 CSV raises UnicodeDecodeError out of
-        # read_csv_batches, and clevercsv raises parse errors of its own.
+        # Not only SourceError: a file replaced between open_source's scan and
+        # the read can still raise UnicodeDecodeError out of read_csv_batches,
+        # and clevercsv raises parse errors of its own.
         # Log it: returning the text alone leaves a genuine bug in this module
         # showing up as an LLM politely reporting "TypeError", traceback gone.
         logger.exception("%s: read failed", source_file)
@@ -660,9 +664,12 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             rows_sent += len(kept)
     except FileNotFoundError:
         return tool_error(f"{source_file}: no such source file")
+    except SourceEncodingError as exc:
+        return tool_error(str(exc))
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        # Not only SourceError: a non-UTF-8 CSV raises UnicodeDecodeError out of
-        # read_csv_batches, and clevercsv raises parse errors of its own.
+        # Not only SourceError: a file replaced between open_source's scan and
+        # the read can still raise UnicodeDecodeError out of read_csv_batches,
+        # and clevercsv raises parse errors of its own.
         # Log it: returning the text alone leaves a genuine bug in this module
         # showing up as an LLM politely reporting "TypeError", traceback gone.
         logger.exception("%s: read failed", source_file)
