@@ -770,3 +770,51 @@ def test_a_column_holding_another_labels_key_links_across_labels(
         )
         == 1
     )
+
+
+def test_a_windows_1252_csv_reaches_the_graph_with_its_accents(
+    neo4j_graph, monkeypatch, tmp_path
+):
+    """KG-47. The files are generated: data/traders*/ is not in git."""
+    import agentic_kg.tools.cypher_tools as cypher_tools
+    import agentic_kg.tools.kg_construction_tools as kg
+    from agentic_kg.common.config import reset_settings
+
+    (tmp_path / "customers.csv").write_bytes(
+        "customer_id,company,city\nA1,Alfreds,Luleå\nB2,Blauer,Köln\n".encode("cp1252")
+    )
+    (tmp_path / "products.csv").write_bytes(
+        "product_id,product_name\n1,Rössle Sauerkraut\n".encode("cp1252")
+    )
+    monkeypatch.setenv("SOURCE_URI", str(tmp_path))
+    reset_settings()
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+
+    plan = {
+        "Customer": {
+            "construction_type": "node",
+            "source_file": "customers.csv",
+            "label": "Customer",
+            "unique_column_name": "customer_id",
+            "properties": ["company", "city"],
+        },
+        "Product": {
+            "construction_type": "node",
+            "source_file": "products.csv",
+            "label": "Product",
+            "unique_column_name": "product_id",
+            "properties": ["product_name"],
+        },
+    }
+    result = kg.construct_domain_graph(plan)
+    assert result["status"] == "success", result.get("error_message")
+
+    city = neo4j_graph.send_query(
+        "MATCH (c:Customer {customer_id: 'A1'}) RETURN c.city AS city"
+    )
+    assert city["records"][0]["city"] == "Luleå"
+    product = neo4j_graph.send_query(
+        "MATCH (p:Product {product_id: '1'}) RETURN p.product_name AS name"
+    )
+    assert product["records"][0]["name"] == "Rössle Sauerkraut"
