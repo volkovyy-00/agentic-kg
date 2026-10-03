@@ -2047,8 +2047,8 @@ def test_a_bad_matched_property_is_refused_before_the_file_is_read(
     assert result["error_message"] == _rel_proposal(expected)
     # The build refuses the stored shape with the same text.
     assert (
-        expected
-        == kg.import_relationships(_item_rule(to_node_property=value))["error_message"]
+        kg.import_relationships(_item_rule(to_node_property=value))["error_message"]
+        == expected
     )
     assert checked == [], "a bad name must be reported without reading the file"
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
