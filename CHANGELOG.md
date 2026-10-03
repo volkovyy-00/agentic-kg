@@ -8,6 +8,23 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.9.3] - 2026-10-03
+
+### Changed
+- **A key, join column or matched property can be any header the file has (#79, KG-51)**: a spreadsheet
+  export with headers such as `Order ID`, `customer-id` or `Straße` was refused when proposed and the
+  model could not rename the column, so the pipeline could not use it. Any non-empty text now works, from
+  proposal through approval to build. Labels and relationship types keep their strict rule. A name that
+  cannot be stored (empty, containing a NUL, or over 16,383 characters, Aura's limit) is refused when
+  proposed, with the same text the build gives it, and the rename advice now appears only where renaming
+  helps.
+
+### Fixed
+- **A header containing a backslash could change the graph or fail the build (#79, KG-51)**: Neo4j reads
+  a backslash-u sequence inside a quoted name as a character, so a header such as `C:\users` failed to
+  build and a crafted header could run its own Cypher. Names are now written so that they are stored as
+  exactly the text the file holds.
+
 ## [0.9.2] - 2026-10-03
 
 ### Fixed
