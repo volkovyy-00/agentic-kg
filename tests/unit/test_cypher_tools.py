@@ -112,7 +112,7 @@ def test_create_uniqueness_constraint_still_refuses_a_label_with_a_space(fake_db
     [("", ""), ("a\x00b", "a\x00b"), (5, "5")],
     ids=["empty", "nul", "non-text"],
 )
-def test_create_uniqueness_constraint_refuses_a_key_neo4j_cannot_take(
+def test_create_uniqueness_constraint_refuses_an_empty_nul_or_non_text_key(
     fake_db, key, shown
 ):
     result = cypher_tools.create_uniqueness_constraint("Person", key)

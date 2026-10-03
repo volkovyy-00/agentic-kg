@@ -15,10 +15,11 @@ name came from, not on what it looks like:
 - A node key, join column, matched property or constraint key is a column or
   property of the user's own file, so the file decides how it is spelled: an
   exact header is already required, and nothing can rename a column. It is
-  checked with `checked_field()`, which refuses only what Neo4j itself cannot
-  take as a name -- empty text, a NUL character, more than 16,383 characters --
-  and then written with `quote()`. `Order ID`, `customer-id` and `Straße` are
-  ordinary names.
+  checked with `checked_field()`, which refuses only empty text, a NUL character
+  (neither Neo4j target takes one) and more than 16,383 characters (Aura's limit;
+  the Community container accepts longer, but a name accepted at proposal must
+  build on every supported target). It is then written with `quote()`.
+  `Order ID`, `customer-id` and `Straße` are ordinary names.
 - A name read back out of the database is only quoted. Neo4j accepts labels
   `checked()` would refuse (`Legal Entity`, `10-K`), so checking them would
   fail on data the graph legitimately holds.
@@ -37,7 +38,9 @@ import re
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-# Neo4j's own limit on a name's length, in characters (TokenLengthError above it).
+# Aura's limit on a name's length, in characters (TokenLengthError above it); the
+# Community container accepts longer. Kept so that a name accepted at proposal
+# builds on every supported target.
 MAX_NAME_LENGTH = 16383
 _SHOWN_CHARACTERS = 80
 
@@ -74,10 +77,13 @@ def checked(kind: str, value: str) -> str:
 
 
 def checked_field(kind: str, value: str) -> str:
-    """Refuse a column or property name that Neo4j itself cannot take.
+    """Refuse a column or property name that some supported target cannot take.
 
     Any text of 1 to MAX_NAME_LENGTH characters without a NUL passes, whitespace
-    only included: the file's header is the authority on its own spelling.
+    only included: the file's header is the authority on its own spelling. NUL is
+    refused by every Neo4j target; the length cap is Aura's (the Community
+    container accepts longer names), kept so that a name accepted at proposal
+    builds on every supported target.
 
     Raises:
         InvalidIdentifier: (renamable=False) if the value is not such text.

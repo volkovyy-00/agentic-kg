@@ -1,6 +1,6 @@
 """checked() enforces the character rule for labels and types, checked_field()
-only what Neo4j itself refuses for columns and properties, and quote() keeps any
-name inside its backticks (KG-44, KG-51).
+only empty text, NUL and Aura's length limit for columns and properties, and
+quote() keeps any name inside its backticks (KG-44, KG-51).
 
 Neo4j accepts keywords such as Order, END or null as names, and the build
 backtick-quotes every name it writes into Cypher, so a keyword is an ordinary
@@ -132,7 +132,7 @@ def test_checked_field_accepts_any_non_empty_text(name):
     ],
     ids=["empty", "nul", "too-long", "none", "int", "empty-list", "list", "dict"],
 )
-def test_checked_field_refuses_what_neo4j_cannot_take(value, shown):
+def test_checked_field_refuses_empty_nul_overlong_and_non_text(value, shown):
     with pytest.raises(InvalidIdentifier) as exc:
         checked_field("column name", value)  # type: ignore[arg-type]
     assert str(exc.value) == f"Invalid column name: '{shown}'. {FIELD_RULE}"

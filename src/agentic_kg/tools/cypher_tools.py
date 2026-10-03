@@ -236,7 +236,8 @@ def create_uniqueness_constraint(
     # Validate input, then quote. checked() refuses anything but a plain
     # identifier for the label, so a label never carries newlines, parens or
     # braces. A key is a column or property of the user's file, so
-    # checked_field() refuses only what Neo4j itself cannot take. quote() then
+    # checked_field() refuses only empty text, NUL and over-long names (Aura's
+    # limit, kept for every target). quote() then
     # writes each name so that nothing inside it can end its backticks or start
     # a backslash-u escape, and lets a plain identifier that is also a Cypher
     # keyword (Order, END) through as a name.

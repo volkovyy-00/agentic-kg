@@ -148,10 +148,7 @@ def test_every_name_checked_field_accepts_builds_and_every_refused_build_is_refu
     try:
         result = db.send_query(f"MERGE (n:`Kg51Limit` {{ {quote(name)} : 1 }})")
         built = result["status"] == "success"
-        if accepted:
-            assert built, result
-        if not built:
-            assert not accepted, result
+        assert built or not accepted, result
         # A name over 16,383 characters: no assertion on the container outcome,
         # it builds on Community and is refused on Aura.
     finally:

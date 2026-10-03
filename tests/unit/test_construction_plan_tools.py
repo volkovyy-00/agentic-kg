@@ -1688,7 +1688,8 @@ def test_approval_fails_closed_when_the_reachability_check_raises(
 CHARACTER_RULE = (
     "It must be a letter or underscore followed by letters, digits or underscores."
 )
-# A key, join column or matched property is refused only when Neo4j itself would.
+# A key, join column or matched property is refused only when empty, NUL or over
+# Aura's 16,383-character limit (kept so a proposed name builds on every target).
 FIELD_RULE = "It must be 1 to 16,383 characters of text, with no NUL."
 # The propose tools add a way forward after the build's own text, and only where
 # one exists: a label or type can be renamed. A column or property is the file's.
@@ -1768,8 +1769,9 @@ def _rel_rule(args):
     [
         ("1Order", "END", f"Invalid label: '1Order'. {CHARACTER_RULE}", True),
         ("Order", 5, f"Invalid column name: '5'. {FIELD_RULE}", False),
+        ("Order", "a\x00b", f"Invalid column name: 'a\x00b'. {FIELD_RULE}", False),
     ],
-    ids=["label", "column"],
+    ids=["label", "column", "nul-column"],
 )
 def test_propose_node_refuses_a_bad_name_with_the_builds_message(
     ctx, any_column_exists, label, key, build_text, renamable
@@ -1804,6 +1806,19 @@ def test_propose_node_refuses_a_bad_name_with_the_builds_message(
         ),
         ({"from_node_column": 5}, f"Invalid column name: '5'. {FIELD_RULE}", False),
         ({"to_node_column": 6}, f"Invalid column name: '6'. {FIELD_RULE}", False),
+        (
+            {"from_node_column": "a\x00b"},
+            f"Invalid column name: 'a\x00b'. {FIELD_RULE}",
+            False,
+        ),
+    ],
+    ids=[
+        "relationship-type",
+        "from-label",
+        "to-label",
+        "from-column",
+        "to-column",
+        "nul-from-column",
     ],
 )
 def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(

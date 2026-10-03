@@ -133,7 +133,7 @@ FIELD_RULE = "It must be 1 to 16,383 characters of text, with no NUL."
     [("", ""), ("a\x00b", "a\x00b"), (5, "5")],
     ids=["empty", "nul", "non-text"],
 )
-def test_a_key_column_neo4j_cannot_take_is_rejected_before_any_query(
+def test_an_empty_nul_or_non_text_key_column_is_rejected_before_any_query(
     fake_db, one_batch, column, shown
 ):
     result = kg.load_nodes_from_csv("people.csv", "Person", column, ["name"])
