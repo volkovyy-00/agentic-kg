@@ -903,7 +903,8 @@ def test_an_unexpected_read_failure_is_named_and_logged_with_its_traceback(
     assert result["status"] == "error"
     assert result["error_message"] == "p.csv: RuntimeError: boom"
     records = [r for r in caplog.records if r.name == kg.logger.name]
-    assert records and records[-1].exc_info is not None
+    assert records
+    assert records[-1].exc_info is not None
     assert fake_db.queries == []
 
 
