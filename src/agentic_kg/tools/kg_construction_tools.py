@@ -340,7 +340,7 @@ def load_nodes_from_csv(
     """Load nodes from a source CSV in batches."""
     try:
         label = _checked("label", label)
-        unique_column_name = checked_field("column name", unique_column_name)
+        unique_column_name = checked_field(_COLUMN_NAME, unique_column_name)
     except InvalidIdentifier as exc:
         return tool_error(str(exc))
 
@@ -466,16 +466,20 @@ def _count_in_graph(query: str) -> int | None:
 _NameCheck = Callable[[str, Any], str]
 _NameRows = tuple[tuple[str, str, _NameCheck], ...]
 
+# One spelling for every column refusal, so the propose tools and the build
+# cannot drift apart on it (load_nodes_from_csv uses it too).
+_COLUMN_NAME = "column name"
+
 _NODE_RULE_NAMES: _NameRows = (
     ("label", "label", _checked),
-    ("column name", "unique_column_name", checked_field),
+    (_COLUMN_NAME, "unique_column_name", checked_field),
 )
 _RELATIONSHIP_RULE_NAMES: _NameRows = (
     ("relationship type", "relationship_type", _checked),
     ("label", "from_node_label", _checked),
     ("label", "to_node_label", _checked),
-    ("column name", "from_node_column", checked_field),
-    ("column name", "to_node_column", checked_field),
+    (_COLUMN_NAME, "from_node_column", checked_field),
+    (_COLUMN_NAME, "to_node_column", checked_field),
 )
 
 

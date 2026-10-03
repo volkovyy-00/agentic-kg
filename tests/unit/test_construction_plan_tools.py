@@ -1788,7 +1788,7 @@ def test_propose_node_refuses_a_bad_name_with_the_builds_message(
     assert result["error_message"] == (
         _proposal(build_text) if renamable else build_text
     )
-    assert build_text == kg.import_nodes(_node_rule(label, key))["error_message"]
+    assert kg.import_nodes(_node_rule(label, key))["error_message"] == build_text
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
 
@@ -1836,7 +1836,7 @@ def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(
     assert result["error_message"] == (
         _proposal(build_text) if renamable else build_text
     )
-    assert build_text == kg.import_relationships(_rel_rule(args))["error_message"]
+    assert kg.import_relationships(_rel_rule(args))["error_message"] == build_text
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
 
@@ -1888,7 +1888,7 @@ def test_the_first_bad_name_reported_is_the_one_the_build_checks_first(
     assert result["error_message"] == (
         _proposal(build_text) if renamable else build_text
     )
-    assert build_text == kg.import_relationships(_rel_rule(args))["error_message"]
+    assert kg.import_relationships(_rel_rule(args))["error_message"] == build_text
 
 
 def test_a_node_reports_its_label_before_its_key_column(ctx, any_column_exists):
