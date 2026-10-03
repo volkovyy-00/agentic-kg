@@ -300,6 +300,28 @@ def _type_warning(totals, property_types, source_file):
     return "; ".join(parts)
 
 
+def _read_failure(source_file: str, exc: Exception) -> Dict[str, Any]:
+    """The error result for a source file that could not be read or loaded.
+
+    Both loaders end in the same handler, which is why this is one function: a
+    third clause in each would count against its cognitive complexity twice over.
+    Call it from inside the `except` block, so the traceback is still attached.
+
+    A missing file and a refused file (SourceEncodingError, whose message already
+    names the file) get their own wording. Anything else is not only a SourceError:
+    a file replaced between open_source's scan and the read can still raise
+    UnicodeDecodeError out of read_csv_batches, and clevercsv raises parse errors
+    of its own. Log it: returning the text alone leaves a genuine bug in this
+    module showing up as an LLM politely reporting "TypeError", traceback gone.
+    """
+    if isinstance(exc, FileNotFoundError):
+        return tool_error(f"{source_file}: no such source file")
+    if isinstance(exc, SourceEncodingError):
+        return tool_error(str(exc))
+    logger.exception("%s: read failed", source_file)
+    return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
+
+
 def load_nodes_from_csv(
     source_file: str,
     label: str,
@@ -392,18 +414,8 @@ def load_nodes_from_csv(
                     f"(the failing batch was rolled back): {result['error_message']}"
                 )
             rows_committed += len(batch)
-    except FileNotFoundError:
-        return tool_error(f"{source_file}: no such source file")
-    except SourceEncodingError as exc:
-        return tool_error(str(exc))
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        # Not only SourceError: a file replaced between open_source's scan and
-        # the read can still raise UnicodeDecodeError out of read_csv_batches,
-        # and clevercsv raises parse errors of its own.
-        # Log it: returning the text alone leaves a genuine bug in this module
-        # showing up as an LLM politely reporting "TypeError", traceback gone.
-        logger.exception("%s: read failed", source_file)
-        return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
+        return _read_failure(source_file, exc)
 
     loaded = {"source_file": source_file, "rows": rows_committed}
     if totals:
@@ -662,18 +674,8 @@ def import_relationships(relationship_construction: dict) -> Dict[str, Any]:
             for record in result.get("records") or []:
                 rows_matched += record.get("rows_matched", 0) or 0
             rows_sent += len(kept)
-    except FileNotFoundError:
-        return tool_error(f"{source_file}: no such source file")
-    except SourceEncodingError as exc:
-        return tool_error(str(exc))
     except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        # Not only SourceError: a file replaced between open_source's scan and
-        # the read can still raise UnicodeDecodeError out of read_csv_batches,
-        # and clevercsv raises parse errors of its own.
-        # Log it: returning the text alone leaves a genuine bug in this module
-        # showing up as an LLM politely reporting "TypeError", traceback gone.
-        logger.exception("%s: read failed", source_file)
-        return tool_error(f"{source_file}: {type(exc).__name__}: {exc}")
+        return _read_failure(source_file, exc)
 
     rows_skipped = rows_read - rows_sent
     loaded = {

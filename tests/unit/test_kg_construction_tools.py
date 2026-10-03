@@ -4,6 +4,8 @@ The database is faked: these tests assert what Cypher gets built and how
 failures propagate, without a Neo4j instance.
 """
 
+import logging
+
 import pytest
 
 from agentic_kg.common.value_types import CONVERTED, UNCONVERTIBLE
@@ -862,6 +864,47 @@ def test_a_read_failure_does_not_escape_the_agent_facing_tool(
     result = kg.build_graph_from_construction_rules(context)
     assert result["status"] == "error"
     assert _NOT_TEXT in result["error_message"]
+
+
+_RELATIONSHIP_RULE = {
+    "source_file": "p.csv",
+    "relationship_type": "KNOWS",
+    "from_node_label": "Person",
+    "from_node_column": "id",
+    "to_node_label": "Person",
+    "to_node_column": "name",
+    "properties": [],
+}
+
+
+@pytest.mark.parametrize(
+    "load",
+    [
+        lambda: kg.load_nodes_from_csv("p.csv", "Person", "id", ["name"]),
+        lambda: kg.import_relationships(_RELATIONSHIP_RULE),
+    ],
+    ids=["node-loader", "relationship-loader"],
+)
+def test_an_unexpected_read_failure_is_named_and_logged_with_its_traceback(
+    fake_db, monkeypatch, caplog, load
+):
+    """Only a missing file and a refused file get their own message. Anything else
+    from the read, a bug in this module included, must reach the agent with its
+    exception type AND leave a traceback in the log: returning the text alone would
+    show up as an LLM politely reporting "RuntimeError", traceback gone."""
+
+    def exploding(relative_path, batch_size=1000):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover - makes this a generator, like the real reader
+
+    monkeypatch.setattr(kg, "read_csv_batches", exploding)
+    with caplog.at_level(logging.ERROR, logger=kg.logger.name):
+        result = load()
+    assert result["status"] == "error"
+    assert result["error_message"] == "p.csv: RuntimeError: boom"
+    records = [r for r in caplog.records if r.name == kg.logger.name]
+    assert records and records[-1].exc_info is not None
+    assert fake_db.queries == []
 
 
 def test_a_missing_source_file_names_itself_once(fake_db, monkeypatch, tmp_path):
