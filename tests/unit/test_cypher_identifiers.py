@@ -5,6 +5,8 @@ and the build backtick-quotes every name it writes into Cypher, so a keyword
 is an ordinary name. checked() still refuses anything but a plain identifier.
 """
 
+import re
+
 import pytest
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked, quote
@@ -43,3 +45,43 @@ def test_checked_refuses_a_non_string():
 def test_quote_backticks_a_name_and_doubles_embedded_backticks():
     assert quote("Order") == "`Order`"
     assert quote("we`ird") == "`we``ird`"
+
+
+INJECTION_KEY = "x\\u0060: 1}) SET n.pwned = true //"
+
+
+@pytest.mark.parametrize(
+    "name, quoted",
+    [
+        ("Order", "`Order`"),
+        ("we`ird", "`we``ird`"),
+        ("C:\\users", "`C:\\u005Cusers`"),
+        ("a\\", "`a\\u005C`"),
+        ("a\\u0041b", "`a\\u005Cu0041b`"),
+        (INJECTION_KEY, "`x\\u005Cu0060: 1}) SET n.pwned = true //`"),
+    ],
+    ids=[
+        "plain",
+        "backtick",
+        "windows-path",
+        "trailing-backslash",
+        "escape",
+        "injection",
+    ],
+)
+def test_quote_pins_its_exact_output(name, quoted):
+    """Neo4j decodes a backslash-u escape inside backticks, so a bare backslash can
+    rename a key (a\\u0041b is stored as aAb) or close the name and run Cypher
+    after it. Each backslash is written as its own escape instead."""
+    assert quote(name) == quoted
+
+
+_ONLY_ITS_OWN_ESCAPES = re.compile(r"`(?:[^\\`]|``|\\u005C)*`")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Order ID", "Straße", "a\nb", " ", "C:\\users", "a\\", "a\\\\b", INJECTION_KEY],
+)
+def test_quote_leaves_only_backslashes_it_wrote_itself_and_doubled_backticks(name):
+    assert _ONLY_ITS_OWN_ESCAPES.fullmatch(quote(name))

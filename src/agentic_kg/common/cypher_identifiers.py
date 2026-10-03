@@ -54,8 +54,14 @@ def checked(kind: str, value: str) -> str:
 
 
 def quote(name: str) -> str:
-    """Backtick-quote a name for Cypher query text.
+    """Backtick-quote a name for Cypher query text, for any text the name holds.
 
-    Escaping doubles any embedded backtick, which is Cypher's own convention.
+    Two things still act inside backticks: a backtick, which ends the name, and a
+    backslash, because Neo4j decodes a \\uXXXX escape there. Each backtick is
+    doubled, which is Cypher's own convention. Each backslash is written as its
+    own escape, \\u005C, so the server reads back exactly the characters it was
+    given: a key `a\\u0041b` stays that text rather than becoming `aAb`, and a key
+    holding \\u0060 cannot close the name and run Cypher after it. The two
+    replacements are independent: neither adds the other's character.
     """
-    return "`" + name.replace("`", "``") + "`"
+    return "`" + name.replace("\\", "\\u005C").replace("`", "``") + "`"
