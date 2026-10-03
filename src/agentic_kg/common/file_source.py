@@ -35,8 +35,9 @@ class SourceEncodingError(SourceError):
     """A source file is not text this program can read.
 
     Raised for UTF-16, binary files and anything that is neither UTF-8 nor
-    Windows-1252. The message names the file and says why, so a tool can hand
-    it to the agent unchanged.
+    Windows-1252. The message names the file and says why and reads on its own.
+    Some tools return it as the whole error, others put their own "Error reading
+    ... file X:" prefix in front of it, so the file name can appear twice.
     """
 
 
@@ -366,7 +367,10 @@ def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
     read: a caller choosing its own would bypass the refusal.
 
     Known limits, accepted: a UTF-8 file with one stray byte reads as
-    Windows-1252 with its other accented text garbled; a file in any other
+    Windows-1252 with its other accented text garbled; a valid UTF-8 file with a
+    NUL byte anywhere (padding, a stray byte in one cell) is refused, because
+    UTF-16 text without a byte-order mark is also valid UTF-8, NULs included,
+    and the NUL byte is the only signal; a file in any other
     single-byte encoding (Latin-2, Windows-1251) reads with wrong letters and no
     error, because its bytes decode under Windows-1252; a Windows-1252 file whose
     bytes happen to be valid UTF-8 reads as UTF-8; a Windows-1252 file starting
