@@ -1,15 +1,22 @@
-"""checked() enforces the character rule, not a keyword list (KG-44).
+"""checked() enforces the character rule for labels and types, checked_field()
+only what Neo4j itself refuses for columns and properties, and quote() keeps any
+name inside its backticks (KG-44, KG-51).
 
-Neo4j accepts keywords such as Order, END or null as labels, types and keys,
-and the build backtick-quotes every name it writes into Cypher, so a keyword
-is an ordinary name. checked() still refuses anything but a plain identifier.
+Neo4j accepts keywords such as Order, END or null as names, and the build
+backtick-quotes every name it writes into Cypher, so a keyword is an ordinary
+name. checked() still refuses anything but a plain identifier.
 """
 
 import re
 
 import pytest
 
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked, quote
+from agentic_kg.common.cypher_identifiers import (
+    InvalidIdentifier,
+    checked,
+    checked_field,
+    quote,
+)
 
 CHARACTER_RULE = (
     "It must be a letter or underscore followed by letters, digits or underscores."
@@ -85,3 +92,56 @@ _ONLY_ITS_OWN_ESCAPES = re.compile(r"`(?:[^\\`]|``|\\u005C)*`")
 )
 def test_quote_leaves_only_backslashes_it_wrote_itself_and_doubled_backticks(name):
     assert _ONLY_ITS_OWN_ESCAPES.fullmatch(quote(name))
+
+
+FIELD_RULE = "It must be 1 to 16,383 characters of text, with no NUL."
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Order ID",
+        "customer-id",
+        "Straße",
+        "we`ird",
+        "C:\\users",
+        "a\nb",
+        " ",
+        "\t",
+        "1id",
+        "k" * 16383,
+        "é" * 16383,
+    ],
+    ids=lambda name: repr(name)[:24],
+)
+def test_checked_field_accepts_any_non_empty_text(name):
+    assert checked_field("column name", name) == name
+
+
+@pytest.mark.parametrize(
+    "value, shown",
+    [
+        ("", ""),
+        ("a\x00b", "a\x00b"),
+        ("k" * 16384, "k" * 80 + "..."),
+        (None, "None"),
+        (5, "5"),
+        ([], "[]"),
+        (["a"], "['a']"),
+        ({}, "{}"),
+    ],
+    ids=["empty", "nul", "too-long", "none", "int", "empty-list", "list", "dict"],
+)
+def test_checked_field_refuses_what_neo4j_cannot_take(value, shown):
+    with pytest.raises(InvalidIdentifier) as exc:
+        checked_field("column name", value)  # type: ignore[arg-type]
+    assert str(exc.value) == f"Invalid column name: '{shown}'. {FIELD_RULE}"
+
+
+def test_only_a_refusal_by_checked_can_be_fixed_by_renaming():
+    with pytest.raises(InvalidIdentifier) as field:
+        checked_field("column name", "")
+    with pytest.raises(InvalidIdentifier) as strict:
+        checked("label", "Not A Label")
+    assert field.value.renamable is False
+    assert strict.value.renamable is True
