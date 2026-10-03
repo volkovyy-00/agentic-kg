@@ -4,6 +4,8 @@ The database is faked: these tests assert what Cypher gets built and how
 failures propagate, without a Neo4j instance.
 """
 
+import logging
+
 import pytest
 
 from agentic_kg.common.value_types import CONVERTED, UNCONVERTIBLE
@@ -758,32 +760,64 @@ def test_header_is_only_checked_once(fake_db, monkeypatch):
 # Read failures are reported, not raised
 
 
-def _undecodable_csv(monkeypatch, tmp_path):
-    """Point the source at a CSV that is not UTF-8, as an Excel export often is."""
-    (tmp_path / "latin1.csv").write_bytes(b"id,name\n1,Bj\xf6rk\n")
+_NOT_TEXT = "is not valid UTF-8 or Windows-1252 text, so it was not read"
+
+
+def _source_holding(monkeypatch, tmp_path, name, data):
+    """Point the source at a folder holding one file with exactly these bytes."""
+    (tmp_path / name).write_bytes(data)
     monkeypatch.setenv("SOURCE_URI", str(tmp_path))
     from agentic_kg.common.config import reset_settings
 
     reset_settings()
 
 
-def test_a_non_utf8_source_is_reported_not_raised(fake_db, monkeypatch, tmp_path):
-    """UnicodeDecodeError escaped read_csv_batches and crashed the run instead
-    of reaching the agent, which broke the contract that every tool returns a
-    ToolResult."""
-    _undecodable_csv(monkeypatch, tmp_path)
+def _unreadable_csv(monkeypatch, tmp_path):
+    """A CSV valid in neither UTF-8 nor Windows-1252 (0x81 is undefined in both)."""
+    _source_holding(monkeypatch, tmp_path, "broken.csv", b"id,name\n1,Bj\x81rk\n")
+
+
+def test_a_windows_1252_source_now_loads(fake_db, monkeypatch, tmp_path):
+    """The ticket itself: this file used to fail every tool with a
+    UnicodeDecodeError, and the accented text must reach the database intact."""
+    _source_holding(
+        monkeypatch, tmp_path, "latin1.csv", "id,name\n1,Björk\n".encode("cp1252")
+    )
     result = kg.load_nodes_from_csv("latin1.csv", "Person", "id", ["name"])
+    assert result["status"] == "success", result.get("error_message")
+    _query, params = fake_db.queries[0]
+    assert params["rows"] == [{"id": "1", "name": "Björk"}]
+
+
+def test_an_unreadable_source_is_reported_not_raised(fake_db, monkeypatch, tmp_path):
+    """A refusal must reach the agent as a ToolResult, and carry the file name
+    once and no class name."""
+    _unreadable_csv(monkeypatch, tmp_path)
+    result = kg.load_nodes_from_csv("broken.csv", "Person", "id", ["name"])
     assert result["status"] == "error"
-    assert "latin1.csv" in result["error_message"]
-    assert "UnicodeDecodeError" in result["error_message"]
+    message = result["error_message"]
+    assert message.startswith(f"broken.csv {_NOT_TEXT}")
+    assert message.count("broken.csv") == 1
+    assert "SourceEncodingError" not in message
+    assert fake_db.queries == [], "the loader read no row, so it sent none"
 
 
-def test_a_non_utf8_source_is_reported_by_the_relationship_loader(
+def test_a_nul_byte_source_is_reported_with_the_binary_hint(
     fake_db, monkeypatch, tmp_path
 ):
-    _undecodable_csv(monkeypatch, tmp_path)
+    _source_holding(monkeypatch, tmp_path, "blob.csv", b"id,name\n1,\x00\x00\n")
+    result = kg.load_nodes_from_csv("blob.csv", "Person", "id", ["name"])
+    assert result["status"] == "error"
+    assert "UTF-16 or binary" in result["error_message"]
+    assert fake_db.queries == []
+
+
+def test_an_unreadable_source_is_reported_by_the_relationship_loader(
+    fake_db, monkeypatch, tmp_path
+):
+    _unreadable_csv(monkeypatch, tmp_path)
     rule = {
-        "source_file": "latin1.csv",
+        "source_file": "broken.csv",
         "relationship_type": "KNOWS",
         "from_node_label": "Person",
         "from_node_column": "id",
@@ -793,7 +827,10 @@ def test_a_non_utf8_source_is_reported_by_the_relationship_loader(
     }
     result = kg.import_relationships(rule)
     assert result["status"] == "error"
-    assert "UnicodeDecodeError" in result["error_message"]
+    message = result["error_message"]
+    assert message.startswith(f"broken.csv {_NOT_TEXT}")
+    assert "SourceEncodingError" not in message
+    assert fake_db.queries == []
 
 
 def test_a_read_failure_does_not_escape_the_agent_facing_tool(
@@ -801,7 +838,7 @@ def test_a_read_failure_does_not_escape_the_agent_facing_tool(
 ):
     """build_graph_from_construction_rules is the tool the agent actually calls,
     so it is the one that must not raise into ADK."""
-    _undecodable_csv(monkeypatch, tmp_path)
+    _unreadable_csv(monkeypatch, tmp_path)
     import agentic_kg.tools.cypher_tools as cypher_tools
 
     monkeypatch.setattr(cypher_tools, "graphdb", fake_db)
@@ -815,7 +852,7 @@ def test_a_read_failure_does_not_escape_the_agent_facing_tool(
             kg.APPROVED_CONSTRUCTION_PLAN: {
                 "Person": {
                     "construction_type": "node",
-                    "source_file": "latin1.csv",
+                    "source_file": "broken.csv",
                     "label": "Person",
                     "unique_column_name": "id",
                     "properties": ["name"],
@@ -826,7 +863,49 @@ def test_a_read_failure_does_not_escape_the_agent_facing_tool(
 
     result = kg.build_graph_from_construction_rules(context)
     assert result["status"] == "error"
-    assert "UnicodeDecodeError" in result["error_message"]
+    assert _NOT_TEXT in result["error_message"]
+
+
+_RELATIONSHIP_RULE = {
+    "source_file": "p.csv",
+    "relationship_type": "KNOWS",
+    "from_node_label": "Person",
+    "from_node_column": "id",
+    "to_node_label": "Person",
+    "to_node_column": "name",
+    "properties": [],
+}
+
+
+@pytest.mark.parametrize(
+    "load",
+    [
+        lambda: kg.load_nodes_from_csv("p.csv", "Person", "id", ["name"]),
+        lambda: kg.import_relationships(_RELATIONSHIP_RULE),
+    ],
+    ids=["node-loader", "relationship-loader"],
+)
+def test_an_unexpected_read_failure_is_named_and_logged_with_its_traceback(
+    fake_db, monkeypatch, caplog, load
+):
+    """Only a missing file and a refused file get their own message. Anything else
+    from the read, a bug in this module included, must reach the agent with its
+    exception type AND leave a traceback in the log: returning the text alone would
+    show up as an LLM politely reporting "RuntimeError", traceback gone."""
+
+    def exploding(relative_path, batch_size=1000):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover - makes this a generator, like the real reader
+
+    monkeypatch.setattr(kg, "read_csv_batches", exploding)
+    with caplog.at_level(logging.ERROR, logger=kg.logger.name):
+        result = load()
+    assert result["status"] == "error"
+    assert result["error_message"] == "p.csv: RuntimeError: boom"
+    records = [r for r in caplog.records if r.name == kg.logger.name]
+    assert records
+    assert records[-1].exc_info is not None
+    assert fake_db.queries == []
 
 
 def test_a_missing_source_file_names_itself_once(fake_db, monkeypatch, tmp_path):
