@@ -376,7 +376,10 @@ def open_source(relative_path: str, mode: str = "r", **kwargs: Any) -> Any:
     whole file: UTF-8 (a BOM is dropped) if it decodes as UTF-8, else
     Windows-1252, else the file is refused. A NUL byte anywhere, or a UTF-16
     byte-order mark, is refused too, since Windows-1252 accepts every byte of a
-    UTF-16 file and would read it as silent garbage. The decision is remembered
+    UTF-16 file and would read it as silent garbage. UTF-16 with a byte-order
+    mark is identifiable, but it is refused rather than decoded: this program
+    reads UTF-8 and Windows-1252 only (a deliberate scope, KG-47), so Excel's
+    "Unicode Text" export has to be re-saved as UTF-8. The decision is remembered
     while the file is unchanged (see _decide). Text is the default because
     clevercsv requires an iterable of str. `encoding=` is not accepted in a text
     read: a caller choosing its own would bypass the refusal.
