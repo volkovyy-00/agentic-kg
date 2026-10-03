@@ -20,6 +20,7 @@ import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
+from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools import construction_plan_tools as cpt
 from agentic_kg.tools import kg_construction_tools as kg
 from agentic_kg.tools.construction_plan_tools import (
@@ -55,12 +56,12 @@ def ctx():
 
 @pytest.fixture
 def any_column_exists(monkeypatch):
-    """Make the propose tools' search_file sanity check always pass."""
+    """Make the propose tools' header check always pass."""
 
-    def fake_search_file(file_path, pattern):
-        return {"status": "success", "search_results": {"metadata": {"lines_found": 1}}}
+    def fake_check(file_path, columns):
+        return None
 
-    monkeypatch.setattr(cpt, "search_file", fake_search_file)
+    monkeypatch.setattr(cpt, "check_columns_in_header", fake_check)
 
 
 # --- state layer: overwrite semantics ---------------------------------------
@@ -130,22 +131,22 @@ def test_get_proposed_plan_reflects_state_not_a_snapshot(ctx, any_column_exists)
 # --- batch proposal ---------------------------------------------------------
 
 
-def _only_these_columns_exist(monkeypatch, known_columns, searched):
-    """Stub the propose tools' sanity check so a chosen column is missing.
+def _only_these_columns_are_headers(monkeypatch, known_columns, checked):
+    """Stub the propose tools' header check so a chosen column is missing.
 
-    Every lookup is appended to `searched`, which is how a test can tell an
-    entry was never attempted from an entry that was attempted and rejected.
+    Every column asked about is appended to `checked`, in the order asked,
+    which is how a test can tell an entry was never attempted from an entry that
+    was attempted and rejected.
     """
 
-    def fake_search_file(file_path, pattern):
-        searched.append(pattern)
-        found = 1 if pattern in known_columns else 0
-        return {
-            "status": "success",
-            "search_results": {"metadata": {"lines_found": found}},
-        }
+    def fake_check(file_path, columns):
+        checked.extend(columns)
+        missing = [column for column in columns if column not in known_columns]
+        if missing:
+            return tool_error(f"Column(s) {missing} are not in {file_path}.")
+        return None
 
-    monkeypatch.setattr(cpt, "search_file", fake_search_file)
+    monkeypatch.setattr(cpt, "check_columns_in_header", fake_check)
 
 
 def test_propose_node_constructions_adds_every_entry_to_the_plan(
@@ -182,9 +183,9 @@ def test_propose_node_constructions_adds_every_entry_to_the_plan(
 def test_propose_node_constructions_stops_at_the_first_failing_entry(ctx, monkeypatch):
     """Earlier entries must survive the failure so the agent only has to correct
     the one entry the error names, instead of re-proposing the whole batch."""
-    searched = []
-    _only_these_columns_exist(
-        monkeypatch, {"product_id", "supplier_id", "part_id"}, searched
+    checked = []
+    _only_these_columns_are_headers(
+        monkeypatch, {"product_id", "supplier_id", "part_id"}, checked
     )
 
     result = propose_node_constructions(
@@ -226,7 +227,7 @@ def test_propose_node_constructions_stops_at_the_first_failing_entry(ctx, monkey
     assert set(plan) == {"Product", "Supplier"}, (
         "entries before the failure stay in the plan"
     )
-    assert "part_id" not in searched, "entries after the failure are never attempted"
+    assert "part_id" not in checked, "entries after the failure are never attempted"
 
 
 def test_propose_relationship_constructions_adds_every_entry_to_the_plan(
@@ -269,9 +270,9 @@ def test_propose_relationship_constructions_adds_every_entry_to_the_plan(
 def test_propose_relationship_constructions_stops_at_the_first_failing_entry(
     ctx, monkeypatch
 ):
-    searched = []
-    _only_these_columns_exist(
-        monkeypatch, {"assembly_name", "product_id", "part_id", "supplier_id"}, searched
+    checked = []
+    _only_these_columns_are_headers(
+        monkeypatch, {"assembly_name", "product_id", "part_id", "supplier_id"}, checked
     )
 
     result = propose_relationship_constructions(
@@ -314,9 +315,7 @@ def test_propose_relationship_constructions_stops_at_the_first_failing_entry(
 
     plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
     assert set(plan) == {"ASSEMBLY_OF"}, "entries before the failure stay in the plan"
-    assert "supplier_id" not in searched, (
-        "entries after the failure are never attempted"
-    )
+    assert "supplier_id" not in checked, "entries after the failure are never attempted"
 
 
 # --- consistency check ------------------------------------------------------
@@ -1874,23 +1873,23 @@ def test_a_node_reports_its_label_before_its_key_column(ctx, any_column_exists):
 
 
 @pytest.mark.parametrize(
-    "search_result",
+    "check_result",
     [
-        {"status": "success", "search_results": {"metadata": {"lines_found": 0}}},
+        {"status": "error", "error_message": "Column 'order id' is not in orders.csv."},
         {"status": "error", "error_message": "orders.csv: no such source file"},
     ],
     ids=["column-missing", "file-unreadable"],
 )
-def test_a_bad_name_is_reported_before_the_file_is_searched(
-    ctx, monkeypatch, search_result
+def test_a_bad_name_is_reported_before_the_columns_are_checked(
+    ctx, monkeypatch, check_result
 ):
-    searched = []
+    checked = []
 
-    def fake_search_file(file_path, pattern):
-        searched.append(pattern)
-        return search_result
+    def fake_check(file_path, columns):
+        checked.extend(columns)
+        return check_result
 
-    monkeypatch.setattr(cpt, "search_file", fake_search_file)
+    monkeypatch.setattr(cpt, "check_columns_in_header", fake_check)
     node = propose_node_construction("orders.csv", "Order", "order id", [], ctx)
     rel = _propose_rel(_rel_args(proposed_relationship_type="HAS ITEM"), ctx)
     assert node["error_message"] == _proposal(
@@ -1899,7 +1898,7 @@ def test_a_bad_name_is_reported_before_the_file_is_searched(
     assert rel["error_message"] == _proposal(
         f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
     )
-    assert searched == [], "a bad name must be reported without reading the file"
+    assert checked == [], "a bad name must be reported without reading the file"
 
 
 def test_a_node_batch_keeps_the_entries_before_a_bad_name(ctx, any_column_exists):
@@ -2020,8 +2019,8 @@ def test_an_omitted_matched_property_leaves_no_key(ctx, any_column_exists, omitt
 def test_a_bad_matched_property_is_refused_before_the_file_is_read(
     ctx, monkeypatch, value
 ):
-    searched = []
-    _only_these_columns_exist(monkeypatch, {"itemID", "supersededBy"}, searched)
+    checked = []
+    _only_these_columns_are_headers(monkeypatch, {"itemID", "supersededBy"}, checked)
     result = _propose_item(ctx, to_node_property=value)
     expected = (
         f"Invalid property name in 'to_node_property': '{value}'. {CHARACTER_RULE}"
@@ -2032,7 +2031,7 @@ def test_a_bad_matched_property_is_refused_before_the_file_is_read(
     assert result["error_message"] == _rel_proposal(
         kg.import_relationships(_item_rule(to_node_property=value))["error_message"]
     )
-    assert searched == [], "a bad name must be reported without reading the file"
+    assert checked == [], "a bad name must be reported without reading the file"
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
 
@@ -2062,9 +2061,9 @@ def test_a_bad_column_is_reported_before_a_bad_matched_property(ctx, any_column_
 
 def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkeypatch):
     """The matched property is a node property: parts.csv has no supplierID
-    column and must not need one (KG-50 edits the file-column check next)."""
-    searched = []
-    _only_these_columns_exist(monkeypatch, {"partID", "madeBy"}, searched)
+    column and must not need one (KG-50: only the join columns are checked against the header)."""
+    checked = []
+    _only_these_columns_are_headers(monkeypatch, {"partID", "madeBy"}, checked)
     result = propose_relationship_construction(
         "parts.csv",
         "MADE_BY",
@@ -2077,7 +2076,7 @@ def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkey
         to_node_property="supplierID",
     )
     assert result["status"] == "success", result.get("error_message")
-    assert searched == ["partID", "madeBy"]
+    assert checked == ["partID", "madeBy"]
 
 
 def test_a_relationship_batch_keeps_each_entrys_matched_property(

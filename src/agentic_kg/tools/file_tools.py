@@ -257,6 +257,46 @@ def _missing_column_error(file_path: str, column: str, header: List[str]) -> dic
     )
 
 
+def _missing_columns_error(
+    file_path: str, columns: List[str], header: List[str]
+) -> Optional[dict]:
+    """A tool_error naming every asked-for column the header lacks, else None.
+
+    Exact match, as the build compares. The wording follows how many columns
+    were asked for, not how many are missing: one asked gets the one-column
+    message, several asked get the 'Column(s)' message.
+    """
+    missing = [column for column in columns if column not in header]
+    if not missing:
+        return None
+    if len(columns) == 1:
+        return _missing_column_error(file_path, columns[0], header)
+    return tool_error(
+        f"Column(s) {missing} are not in {file_path}. Available columns: {header}"
+    )
+
+
+def check_columns_in_header(file_path: str, columns: List[str]) -> Optional[dict]:
+    """A tool_error unless every column is exactly a header of the CSV, else None.
+
+    The propose tools' check that a key or join column is one the build will
+    find (KG-50). It reads the header once, never a data row, and never raises:
+    a missing source, a failed existence check, a refused encoding or an empty
+    file each come back as an error result. A column asked for twice is checked
+    and named once.
+    """
+    source_error = _csv_source_error(file_path)
+    if source_error is not None:
+        return source_error
+    try:
+        header = read_csv_header(file_path)
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return tool_error(f"Error reading CSV file {file_path}: {exc}")
+    if not header:
+        return tool_error(f"CSV file has no header row: {file_path}")
+    return _missing_columns_error(file_path, list(dict.fromkeys(columns)), header)
+
+
 def _csv_source_error(file_path: str) -> Optional[dict]:
     """A tool_error when the source cannot be confirmed to exist, else None.
 
@@ -317,13 +357,9 @@ def _column_rows(file_path: str, columns: List[str]):
 
     if not header:
         return iter(()), tool_error(f"CSV file has no header row: {file_path}")
-    missing = [column for column in columns if column not in header]
-    if missing:
-        if len(columns) == 1:
-            return iter(()), _missing_column_error(file_path, columns[0], header)
-        return iter(()), tool_error(
-            f"Column(s) {missing} are not in {file_path}. Available columns: {header}"
-        )
+    missing_error = _missing_columns_error(file_path, columns, header)
+    if missing_error is not None:
+        return iter(()), missing_error
 
     def rows():
         for _batch_header, batch in batches:
