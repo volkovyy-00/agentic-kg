@@ -8,6 +8,7 @@ import logging
 
 import pytest
 
+from agentic_kg.common.cypher_identifiers import quote
 from agentic_kg.common.value_types import CONVERTED, UNCONVERTIBLE
 from agentic_kg.tools import kg_construction_tools as kg
 
@@ -124,9 +125,20 @@ def test_invalid_label_is_rejected_before_any_query(fake_db, one_batch):
     assert fake_db.queries == []
 
 
-def test_invalid_column_is_rejected_before_any_query(fake_db, one_batch):
-    result = kg.load_nodes_from_csv("people.csv", "Person", "not a column", ["name"])
+FIELD_RULE = "It must be 1 to 16,383 characters of text, with no NUL."
+
+
+@pytest.mark.parametrize(
+    "column, shown",
+    [("", ""), ("a\x00b", "a\x00b"), (5, "5")],
+    ids=["empty", "nul", "non-text"],
+)
+def test_a_key_column_neo4j_cannot_take_is_rejected_before_any_query(
+    fake_db, one_batch, column, shown
+):
+    result = kg.load_nodes_from_csv("people.csv", "Person", column, ["name"])
     assert result["status"] == "error"
+    assert result["error_message"] == f"Invalid column name: '{shown}'. {FIELD_RULE}"
     assert fake_db.queries == []
 
 
@@ -135,13 +147,14 @@ def test_relationship_columns_are_validated(fake_db, one_batch):
         "source_file": "knows.csv",
         "relationship_type": "KNOWS",
         "from_node_label": "Person",
-        "from_node_column": "bad column",
+        "from_node_column": 5,
         "to_node_label": "Person",
         "to_node_column": "to_id",
         "properties": [],
     }
     result = kg.import_relationships(rule)
     assert result["status"] == "error"
+    assert result["error_message"] == f"Invalid column name: '5'. {FIELD_RULE}"
     assert fake_db.queries == []
 
 
@@ -156,10 +169,67 @@ def test_node_label_injection_payload_is_rejected_before_any_query(fake_db, one_
     assert fake_db.queries == []
 
 
-def test_node_column_injection_payload_is_rejected_before_any_query(fake_db, one_batch):
-    result = kg.load_nodes_from_csv("people.csv", "Person", INJECTION_PAYLOAD, ["name"])
-    assert result["status"] == "error"
-    assert fake_db.queries == []
+UNICODE_ESCAPE_PAYLOAD = "x\\u0060: 1}) SET n.pwned = true //"
+
+
+@pytest.fixture
+def payload_batch(monkeypatch):
+    """A header that is itself the payload: the column checks pass it, so the
+    query is built and the only thing left to check is what it contains."""
+
+    def fake_batches(relative_path, batch_size=1000):
+        yield (
+            [UNICODE_ESCAPE_PAYLOAD, "other"],
+            [{UNICODE_ESCAPE_PAYLOAD: "k1", "other": "k2"}],
+        )
+
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+def test_a_payload_as_the_key_column_is_written_only_inside_backticks(
+    fake_db, payload_batch
+):
+    result = kg.load_nodes_from_csv("n.csv", "Node", UNICODE_ESCAPE_PAYLOAD, ["other"])
+    assert result["status"] == "success", result.get("error_message")
+    merge_query, params = fake_db.queries[0]
+    assert (
+        f"MERGE (n:`Node` {{ {quote(UNICODE_ESCAPE_PAYLOAD)} : row[$unique_column_name] }})"
+        in merge_query
+    )
+    assert "pwned" not in merge_query.replace(quote(UNICODE_ESCAPE_PAYLOAD), "")
+    assert params["unique_column_name"] == UNICODE_ESCAPE_PAYLOAD
+
+
+def test_a_payload_as_a_join_column_is_written_only_inside_backticks(
+    fake_db, payload_batch
+):
+    rule = {
+        "source_file": "l.csv",
+        "relationship_type": "LINKS",
+        "from_node_label": "Node",
+        "from_node_column": UNICODE_ESCAPE_PAYLOAD,
+        "to_node_label": "Node",
+        "to_node_column": "other",
+        "properties": [],
+    }
+    kg.import_relationships(rule)
+    load_query, params = fake_db.queries[0]
+    assert (
+        f"(from_node:`Node` {{ {quote(UNICODE_ESCAPE_PAYLOAD)} : row[$from_node_column] }})"
+        in load_query
+    )
+    assert "pwned" not in load_query.replace(quote(UNICODE_ESCAPE_PAYLOAD), "")
+    assert params["from_node_column"] == UNICODE_ESCAPE_PAYLOAD
+
+
+def test_an_explicit_matched_property_with_a_space_is_quoted_in_the_match(
+    fake_db, keyword_batch
+):
+    rule = dict(KEYWORD_REL_RULE, from_node_property="Order ID", to_node_property="a-b")
+    kg.import_relationships(rule)
+    load_query, _params = fake_db.queries[0]
+    assert "(from_node:`Order` { `Order ID` : row[$from_node_column] })" in load_query
+    assert "(to_node:`Match` { `a-b` : row[$to_node_column] })" in load_query
 
 
 def test_relationship_type_injection_payload_is_rejected_before_any_query(

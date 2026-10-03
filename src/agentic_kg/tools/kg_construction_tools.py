@@ -4,21 +4,22 @@ Rows are read in Python and sent as parameterised UNWIND batches rather than
 asking Neo4j to read files itself. Aura forbids LOAD CSV FROM "file:///", and
 client-side reading works identically against a local instance.
 
-Labels, relationship types and key/join column names are written into the
-query text -- checked with checked() and backtick-quoted with quote()
-(common/cypher_identifiers.py) -- rather than passed as Cypher dynamic
-labels: dynamic labels plan as Merge instead of MergeUniqueNode, so they
-cannot use the uniqueness index and every row triggers an all-nodes scan.
+Labels, relationship types and key/join/matched column and property names are
+written into the query text -- labels and types checked with checked(), columns
+and properties with checked_field(), every one backtick-quoted with quote()
+(common/cypher_identifiers.py) -- rather than passed as Cypher dynamic labels:
+dynamic labels plan as Merge instead of MergeUniqueNode, so they cannot use the
+uniqueness index and every row triggers an all-nodes scan.
 """
 
 import logging
 from itertools import chain
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier, quote
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked_field, quote
 from agentic_kg.common.cypher_identifiers import checked as _checked
 from agentic_kg.common.file_source import SourceEncodingError
 from agentic_kg.common.neo4j_for_adk import get_graphdb
@@ -96,8 +97,9 @@ __all__ = [
     "build_graph_from_construction_rules",
     "node_rule_name_error",
     "relationship_rule_name_error",
-    "required_relationship_name_error",
-    "matched_property_name_error",
+    "node_rule_name_problem",
+    "required_relationship_name_problem",
+    "matched_property_name_problem",
 ]
 
 
@@ -338,7 +340,7 @@ def load_nodes_from_csv(
     """Load nodes from a source CSV in batches."""
     try:
         label = _checked("label", label)
-        unique_column_name = _checked("column name", unique_column_name)
+        unique_column_name = checked_field("column name", unique_column_name)
     except InvalidIdentifier as exc:
         return tool_error(str(exc))
 
@@ -456,84 +458,113 @@ def _count_in_graph(query: str) -> int | None:
     return None
 
 
-# (kind, rule key) in the order the build has always checked them. Keys, not
-# values: each value is read only when its turn comes, so a rule with a bad
-# relationship type and a missing to_node_column still reports the bad type.
-_NODE_RULE_NAMES = (("label", "label"), ("column name", "unique_column_name"))
-_RELATIONSHIP_RULE_NAMES = (
-    ("relationship type", "relationship_type"),
-    ("label", "from_node_label"),
-    ("label", "to_node_label"),
-    ("column name", "from_node_column"),
-    ("column name", "to_node_column"),
+# (kind, rule key, check) in the order the build has always checked them. Keys,
+# not values: each value is read only when its turn comes, so a rule with a bad
+# relationship type and a missing to_node_column still reports the bad type. A
+# label and a relationship type are checked with checked(); a column with
+# checked_field() (KG-51).
+_NameCheck = Callable[[str, Any], str]
+_NameRows = tuple[tuple[str, str, _NameCheck], ...]
+
+_NODE_RULE_NAMES: _NameRows = (
+    ("label", "label", _checked),
+    ("column name", "unique_column_name", checked_field),
+)
+_RELATIONSHIP_RULE_NAMES: _NameRows = (
+    ("relationship type", "relationship_type", _checked),
+    ("label", "from_node_label", _checked),
+    ("label", "to_node_label", _checked),
+    ("column name", "from_node_column", checked_field),
+    ("column name", "to_node_column", checked_field),
 )
 
 
-def _name_error(kind: str, value: Any) -> str | None:
+def _name_problem(check: _NameCheck, kind: str, value: Any) -> InvalidIdentifier | None:
     try:
-        _checked(kind, value)
+        check(kind, value)
     except InvalidIdentifier as exc:
-        return str(exc)
+        return exc
     return None
 
 
-def _first_name_error(rule: dict, names: tuple[tuple[str, str], ...]) -> str | None:
-    for kind, key in names:
-        error = _name_error(kind, rule[key])
-        if error is not None:
-            return error
+def _first_name_problem(rule: dict, names: _NameRows) -> InvalidIdentifier | None:
+    for kind, key, check in names:
+        problem = _name_problem(check, kind, rule[key])
+        if problem is not None:
+            return problem
     return None
+
+
+def _text(problem: InvalidIdentifier | None) -> str | None:
+    return None if problem is None else str(problem)
+
+
+def node_rule_name_problem(rule: dict) -> InvalidIdentifier | None:
+    """The build's refusal for the first unusable name in a node rule, or None.
+
+    The propose tools call this, so a name is refused when it is proposed with
+    exactly the text the build would give it (KG-44), and use `renamable` to
+    decide whether a rename hint fits. A missing key raises KeyError, which
+    construct_domain_graph reports per rule.
+    """
+    return _first_name_problem(rule, _NODE_RULE_NAMES)
 
 
 def node_rule_name_error(rule: dict) -> str | None:
     """The build's refusal for the first unusable name in a node rule, or None.
 
-    The propose tools call this too, so a name is refused when it is proposed
-    with exactly the text the build would give it (KG-44). A missing key raises
-    KeyError, which construct_domain_graph reports per rule.
-
     The live writers of the plan are the propose and remove tools; the remove
-    tools only delete. The propose tools refuse names through this function
-    (and the two parts of relationship_rule_name_error), and so does the
-    build: import_nodes and import_relationships call these first.
-    load_nodes_from_csv and create_uniqueness_constraint also re-check with
-    checked(), because they can be called directly.
+    tools only delete. The propose tools refuse names through
+    node_rule_name_problem (and the two parts of relationship_rule_name_problem),
+    and so does the build: import_nodes and import_relationships call these
+    first. load_nodes_from_csv and create_uniqueness_constraint also re-check
+    with checked() and checked_field(), because they can be called directly.
     """
-    return _first_name_error(rule, _NODE_RULE_NAMES)
+    return _text(node_rule_name_problem(rule))
 
 
-def relationship_rule_name_error(rule: dict) -> str | None:
-    """The build's refusal for the first unusable name in a relationship rule, or None.
-
-    See node_rule_name_error. The required names come first, then each end's
-    matched node property. The propose tool calls the two parts itself, so its
-    hint follows the one that failed.
-    """
-    return required_relationship_name_error(rule) or matched_property_name_error(rule)
-
-
-def required_relationship_name_error(rule: dict) -> str | None:
+def required_relationship_name_problem(rule: dict) -> InvalidIdentifier | None:
     """The refusal for the first unusable name in _RELATIONSHIP_RULE_NAMES, or None.
 
     Read by direct indexing, so a missing required key still raises the
     KeyError construct_domain_graph reports.
     """
-    return _first_name_error(rule, _RELATIONSHIP_RULE_NAMES)
+    return _first_name_problem(rule, _RELATIONSHIP_RULE_NAMES)
 
 
-def matched_property_name_error(rule: dict) -> str | None:
+def matched_property_name_problem(rule: dict) -> InvalidIdentifier | None:
     """The refusal for the first unusable matched node property, or None (KG-45).
 
     Resolved, so an omitted one is its end's column. Checked after the columns,
     that case never fails here, so the refusal names the field that was given.
     """
     for end in relationship_endpoints(rule):
-        error = _name_error(
-            f"property name in '{end.side}_node_property'", end.matched_property
+        problem = _name_problem(
+            checked_field,
+            f"property name in '{end.side}_node_property'",
+            end.matched_property,
         )
-        if error is not None:
-            return error
+        if problem is not None:
+            return problem
     return None
+
+
+def relationship_rule_name_problem(rule: dict) -> InvalidIdentifier | None:
+    """The build's refusal for the first unusable name in a relationship rule, or None.
+
+    See node_rule_name_problem. The required names come first, then each end's
+    matched node property. The propose tool calls the two parts itself, so its
+    hint follows the one that failed.
+    """
+    problem = required_relationship_name_problem(rule)
+    if problem is not None:
+        return problem
+    return matched_property_name_problem(rule)
+
+
+def relationship_rule_name_error(rule: dict) -> str | None:
+    """The text of relationship_rule_name_problem, or None."""
+    return _text(relationship_rule_name_problem(rule))
 
 
 def import_nodes(node_construction: dict) -> Dict[str, Any]:

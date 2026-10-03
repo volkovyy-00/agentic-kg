@@ -16,7 +16,7 @@ paths:
   refinement loop. Approval must never catch a check's exception. A new check joins
   `find_plan_problems`, never a critic-side tool.
 - Read a relationship's ends only through `relationship_endpoints()`.
-- Labels, types and key/join/matched names go through `checked()` where they enter the plan and
-  `quote()` in Cypher; never `$()` dynamic labels.
+- Labels and types go through `checked()`, and key/join/matched names through `checked_field()`, where
+  they enter the plan; every name goes through `quote()` in Cypher; never `$()` dynamic labels.
 - A new tool that writes plan rules calls `node_rule_name_error` / `relationship_rule_name_error`
   (or its two parts) first, or moves them into `check_construction_plan_consistency`.

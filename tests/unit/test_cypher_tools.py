@@ -8,6 +8,7 @@ rejected input, that nothing is sent) without a Neo4j instance.
 import pytest
 from fakes import RecordingGraphDb
 
+from agentic_kg.common.cypher_identifiers import quote
 from agentic_kg.tools import cypher_tools
 
 # Shared with the rest of the unit suite; see tests/unit/fakes.py.
@@ -60,11 +61,63 @@ def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any
     assert fake_db.queries == []
 
 
-def test_create_uniqueness_constraint_rejects_property_injection_payload_before_any_query(
-    fake_db,
-):
-    result = cypher_tools.create_uniqueness_constraint("Person", INJECTION_PAYLOAD)
+FIELD_RULE = "It must be 1 to 16,383 characters of text, with no NUL."
+UNICODE_ESCAPE_PAYLOAD = "x\\u0060: 1}) SET n.pwned = true //"
+
+
+def _only_quoted_names_remain(query, label, key):
+    """The query with every quoted name removed: nothing of a payload is left."""
+    constraint_name = quote(f"{label}_{key}_constraint")
+    return (
+        query.replace(constraint_name, "")
+        .replace(quote(key), "")
+        .replace(quote(label), "")
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        INJECTION_PAYLOAD,
+        UNICODE_ESCAPE_PAYLOAD,
+        "Order ID",
+        "customer-id",
+        "Straße",
+        "C:\\users",
+    ],
+    ids=["newline-payload", "escape-payload", "space", "hyphen", "accent", "backslash"],
+)
+def test_create_uniqueness_constraint_quotes_any_key_text(fake_db, key):
+    result = cypher_tools.create_uniqueness_constraint("Person", key)
+    assert result["status"] == "success"
+    query, _params = fake_db.queries[0]
+    assert f"REQUIRE n.{quote(key)} IS UNIQUE" in query
+    assert query.startswith(
+        f"CREATE CONSTRAINT {quote('Person_' + key + '_constraint')} IF NOT EXISTS"
+    )
+    remaining = _only_quoted_names_remain(query, "Person", key)
+    assert " ".join(remaining.split()) == (
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (n:) REQUIRE n. IS UNIQUE"
+    )
+
+
+def test_create_uniqueness_constraint_still_refuses_a_label_with_a_space(fake_db):
+    result = cypher_tools.create_uniqueness_constraint("Not A Label", "Order ID")
     assert result["status"] == "error"
+    assert fake_db.queries == []
+
+
+@pytest.mark.parametrize(
+    "key, shown",
+    [("", ""), ("a\x00b", "a\x00b"), (5, "5")],
+    ids=["empty", "nul", "non-text"],
+)
+def test_create_uniqueness_constraint_refuses_a_key_neo4j_cannot_take(
+    fake_db, key, shown
+):
+    result = cypher_tools.create_uniqueness_constraint("Person", key)
+    assert result["status"] == "error"
+    assert result["error_message"] == f"Invalid property key: '{shown}'. {FIELD_RULE}"
     assert fake_db.queries == []
 
 
