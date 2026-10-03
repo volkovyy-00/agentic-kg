@@ -613,3 +613,30 @@ def test_the_scan_needs_no_seek(data, expected):
 def test_a_refusal_is_reached_without_a_seek_too():
     refusal = file_source._scan(_StreamingFs(b"a\x00b"), "/x").refusal
     assert "NUL byte at offset 1" in refusal
+
+
+class _TrickleFile(_UnseekableFile):
+    """A streaming file whose read(n) returns at most one byte, as a socket
+    buffer may: read(n) is allowed to return fewer than n bytes before EOF."""
+
+    def read(self, size=-1):
+        return super().read(1 if size != 0 else 0)
+
+
+class _TrickleFs(_StreamingFs):
+    def open(self, path, mode="rb", **kwargs):
+        return _TrickleFile(self.data)
+
+
+@pytest.mark.parametrize(
+    ("data", "refusal"),
+    [
+        ("中文数据".encode("utf-16"), "UTF-16 byte-order mark"),
+        (b"\xef\xbb\xbf\xff", "starts with a UTF-8 byte-order mark"),
+    ],
+    ids=["utf16-bom-no-nul", "utf8-bom-then-bad-byte"],
+)
+def test_the_byte_order_mark_is_found_when_the_first_read_is_short(data, refusal):
+    """read(3) may return one byte on a streaming backend. A UTF-16 file of
+    Chinese text has a BOM and no NUL byte, so a missed BOM reads it as garbage."""
+    assert refusal in file_source._scan(_TrickleFs(data), "/x").refusal

@@ -215,6 +215,21 @@ def _outcome(
     )
 
 
+def _read_head(handle: BinaryIO) -> bytes:
+    """The first three bytes, or fewer only at the end of the file.
+
+    read(n) may return fewer than n bytes before EOF (fsspec's streaming HTTP
+    file passes it to a socket buffer), and a short first read would miss a
+    byte-order mark."""
+    head = b""
+    while len(head) < 3:
+        more = handle.read(3 - len(head))
+        if not more:
+            break
+        head += more
+    return head
+
+
 def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
     """Decide how to read a file, from one pass over its bytes.
 
@@ -244,7 +259,7 @@ def _scan(fs: AbstractFileSystem, full_path: str) -> _Decision:
         # Never seek: fsspec's streaming HTTP file cannot rewind, and sample_file
         # and search_file read one without trouble. The first three bytes are
         # checked for a byte-order mark and then scanned as a chunk of their own.
-        head = handle.read(3)
+        head = _read_head(handle)
         if head[:2] in _UTF16_BOMS:
             return _refused("it looks like UTF-16 or binary (a UTF-16 byte-order mark)")
         has_utf8_bom = head == _UTF8_BOM
