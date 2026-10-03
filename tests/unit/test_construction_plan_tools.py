@@ -1688,30 +1688,28 @@ def test_approval_fails_closed_when_the_reachability_check_raises(
 CHARACTER_RULE = (
     "It must be a letter or underscore followed by letters, digits or underscores."
 )
-# The propose tools add a way forward after the build's own text: a label or type
-# can be renamed, a file column cannot.
-NAME_HINT = (
-    "A label or relationship type can be renamed to follow this rule, but a file "
-    "column cannot, and neither can a node property, which is a column of the "
-    "node's own file: if it is a key, a join column or a matched node property, "
-    "choose another column or tell the user it cannot be used."
-)
-RELATIONSHIP_NAME_HINT = (
-    f"{NAME_HINT} A matched node property must be spelled exactly as the node "
-    "stores it, with no surrounding spaces; omit it when the node stores the "
-    "value under the column's own name."
+# A key, join column or matched property is refused only when empty, NUL or over
+# Aura's 16,383-character limit (kept so a proposed name builds on every target).
+FIELD_RULE = "It must be 1 to 16,383 characters of text, with no NUL."
+# The propose tools add a way forward after the build's own text, and only where
+# one exists: a label or type can be renamed. A column or property is the file's.
+NAME_HINT = "A label or relationship type can be renamed to follow this rule."
+MATCHED_PROPERTY_HINT = (
+    "A matched node property must be spelled exactly as the node stores it; omit it "
+    "when the node stores the value under the column's own name."
 )
 
 
 def _proposal(build_text):
-    """What the propose tools report: the build's own text, then NAME_HINT."""
+    """What the propose tools report for a label or type: the build's own text,
+    then NAME_HINT. A refused column is reported as the build's text alone."""
     return f"{build_text} {NAME_HINT}"
 
 
 def _rel_proposal(build_text):
     """What a relationship propose tool reports for a bad matched node property:
-    the hint also says how to spell or omit it."""
-    return f"{build_text} {RELATIONSHIP_NAME_HINT}"
+    the build's text, then how to spell or omit it."""
+    return f"{build_text} {MATCHED_PROPERTY_HINT}"
 
 
 def _node_rule(label, key):
@@ -1767,80 +1765,108 @@ def _rel_rule(args):
 
 
 @pytest.mark.parametrize(
-    "label, key, expected",
+    "label, key, build_text, renamable",
     [
-        ("1Order", "END", f"Invalid label: '1Order'. {CHARACTER_RULE}"),
-        ("Order", "order id", f"Invalid column name: 'order id'. {CHARACTER_RULE}"),
+        ("1Order", "END", f"Invalid label: '1Order'. {CHARACTER_RULE}", True),
+        ("Order", 5, f"Invalid column name: '5'. {FIELD_RULE}", False),
+        ("Order", "a\x00b", f"Invalid column name: 'a\x00b'. {FIELD_RULE}", False),
+        (
+            "Order",
+            "k" * 16384,
+            f"Invalid column name: '{'k' * 80}...'. {FIELD_RULE}",
+            False,
+        ),
     ],
+    ids=["label", "column", "nul-column", "too-long-column"],
 )
 def test_propose_node_refuses_a_bad_name_with_the_builds_message(
-    ctx, any_column_exists, label, key, expected
+    ctx, any_column_exists, label, key, build_text, renamable
 ):
     result = propose_node_construction("orders.csv", label, key, [], ctx)
     assert result["status"] == "error"
-    # The literal pins the kind string; the equality pins "the build's own text,
-    # then the hint".
-    assert result["error_message"] == _proposal(expected)
-    assert result["error_message"] == _proposal(
-        kg.import_nodes(_node_rule(label, key))["error_message"]
+    # The literal pins the kind string; the equality pins "the build's own text".
+    assert result["error_message"] == (
+        _proposal(build_text) if renamable else build_text
     )
+    assert kg.import_nodes(_node_rule(label, key))["error_message"] == build_text
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
 
 @pytest.mark.parametrize(
-    "override, expected",
+    "override, build_text, renamable",
     [
         (
             {"proposed_relationship_type": "HAS ITEM"},
             f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}",
-        ),
-        ({"from_node_label": "Order)"}, f"Invalid label: 'Order)'. {CHARACTER_RULE}"),
-        ({"to_node_label": "Ma`tch"}, f"Invalid label: 'Ma`tch'. {CHARACTER_RULE}"),
-        (
-            {"from_node_column": "1END"},
-            f"Invalid column name: '1END'. {CHARACTER_RULE}",
+            True,
         ),
         (
-            {"to_node_column": "to-id"},
-            f"Invalid column name: 'to-id'. {CHARACTER_RULE}",
+            {"from_node_label": "Order)"},
+            f"Invalid label: 'Order)'. {CHARACTER_RULE}",
+            True,
         ),
+        (
+            {"to_node_label": "Ma`tch"},
+            f"Invalid label: 'Ma`tch'. {CHARACTER_RULE}",
+            True,
+        ),
+        ({"from_node_column": 5}, f"Invalid column name: '5'. {FIELD_RULE}", False),
+        ({"to_node_column": 6}, f"Invalid column name: '6'. {FIELD_RULE}", False),
+        (
+            {"from_node_column": "a\x00b"},
+            f"Invalid column name: 'a\x00b'. {FIELD_RULE}",
+            False,
+        ),
+    ],
+    ids=[
+        "relationship-type",
+        "from-label",
+        "to-label",
+        "from-column",
+        "to-column",
+        "nul-from-column",
     ],
 )
 def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(
-    ctx, any_column_exists, override, expected
+    ctx, any_column_exists, override, build_text, renamable
 ):
     args = _rel_args(**override)
     result = _propose_rel(args, ctx)
     assert result["status"] == "error"
-    assert result["error_message"] == _proposal(expected)
-    assert result["error_message"] == _proposal(
-        kg.import_relationships(_rel_rule(args))["error_message"]
+    assert result["error_message"] == (
+        _proposal(build_text) if renamable else build_text
     )
+    assert kg.import_relationships(_rel_rule(args))["error_message"] == build_text
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
 
 @pytest.mark.parametrize(
-    "override, expected",
+    "override, build_text, renamable",
     [
         (
             {"proposed_relationship_type": "HAS ITEM", "from_node_label": "Order)"},
             f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}",
+            True,
         ),
         (
-            {"proposed_relationship_type": "HAS ITEM", "to_node_column": "to-id"},
+            {"proposed_relationship_type": "HAS ITEM", "to_node_column": 6},
             f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}",
+            True,
         ),
         (
             {"from_node_label": "Order)", "to_node_label": "Ma`tch"},
             f"Invalid label: 'Order)'. {CHARACTER_RULE}",
+            True,
         ),
         (
-            {"to_node_label": "Ma`tch", "from_node_column": "1END"},
+            {"to_node_label": "Ma`tch", "from_node_column": 5},
             f"Invalid label: 'Ma`tch'. {CHARACTER_RULE}",
+            True,
         ),
         (
-            {"from_node_column": "1END", "to_node_column": "to-id"},
-            f"Invalid column name: '1END'. {CHARACTER_RULE}",
+            {"from_node_column": 5, "to_node_column": 6},
+            f"Invalid column name: '5'. {FIELD_RULE}",
+            False,
         ),
     ],
     ids=[
@@ -1852,21 +1878,21 @@ def test_propose_relationship_refuses_a_bad_name_with_the_builds_message(
     ],
 )
 def test_the_first_bad_name_reported_is_the_one_the_build_checks_first(
-    ctx, any_column_exists, override, expected
+    ctx, any_column_exists, override, build_text, renamable
 ):
     """The build checks type, from label, to label, from column, to column, in
     that order; the proposal must report the same first name. Each neighbouring
     pair is pinned, so swapping any two checks fails a case."""
     args = _rel_args(**override)
     result = _propose_rel(args, ctx)
-    assert result["error_message"] == _proposal(expected)
-    assert result["error_message"] == _proposal(
-        kg.import_relationships(_rel_rule(args))["error_message"]
+    assert result["error_message"] == (
+        _proposal(build_text) if renamable else build_text
     )
+    assert kg.import_relationships(_rel_rule(args))["error_message"] == build_text
 
 
 def test_a_node_reports_its_label_before_its_key_column(ctx, any_column_exists):
-    result = propose_node_construction("orders.csv", "1Order", "order id", [], ctx)
+    result = propose_node_construction("orders.csv", "1Order", 5, [], ctx)
     assert result["error_message"] == _proposal(
         f"Invalid label: '1Order'. {CHARACTER_RULE}"
     )
@@ -1890,11 +1916,9 @@ def test_a_bad_name_is_reported_before_the_columns_are_checked(
         return check_result
 
     monkeypatch.setattr(cpt, "check_columns_in_header", fake_check)
-    node = propose_node_construction("orders.csv", "Order", "order id", [], ctx)
+    node = propose_node_construction("orders.csv", "Order", 5, [], ctx)
     rel = _propose_rel(_rel_args(proposed_relationship_type="HAS ITEM"), ctx)
-    assert node["error_message"] == _proposal(
-        f"Invalid column name: 'order id'. {CHARACTER_RULE}"
-    )
+    assert node["error_message"] == f"Invalid column name: '5'. {FIELD_RULE}"
     assert rel["error_message"] == _proposal(
         f"Invalid relationship type: 'HAS ITEM'. {CHARACTER_RULE}"
     )
@@ -1913,16 +1937,14 @@ def test_a_node_batch_keeps_the_entries_before_a_bad_name(ctx, any_column_exists
             {
                 "approved_file": "matches.csv",
                 "proposed_label": "Match",
-                "unique_column_name": "1id",
+                "unique_column_name": 5,
                 "proposed_properties": [],
             },
         ],
         ctx,
     )
     assert result["status"] == "error"
-    assert result["error_message"].endswith(
-        _proposal(f"Invalid column name: '1id'. {CHARACTER_RULE}")
-    )
+    assert result["error_message"].endswith(f"Invalid column name: '5'. {FIELD_RULE}")
     assert list(ctx.state[PROPOSED_CONSTRUCTION_PLAN]) == ["Order"]
 
 
@@ -2013,32 +2035,29 @@ def test_an_omitted_matched_property_leaves_no_key(ctx, any_column_exists, omitt
     assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"] == _item_rule()
 
 
-@pytest.mark.parametrize(
-    "value", ["has space", "1id", " itemID", "item-id", [], 0, {}], ids=repr
-)
+@pytest.mark.parametrize("value", [[], ["a"], 0, {}], ids=repr)
 def test_a_bad_matched_property_is_refused_before_the_file_is_read(
     ctx, monkeypatch, value
 ):
     checked = []
     _only_these_columns_are_headers(monkeypatch, {"itemID", "supersededBy"}, checked)
     result = _propose_item(ctx, to_node_property=value)
-    expected = (
-        f"Invalid property name in 'to_node_property': '{value}'. {CHARACTER_RULE}"
-    )
+    expected = f"Invalid property name in 'to_node_property': '{value}'. {FIELD_RULE}"
     assert result["status"] == "error"
     assert result["error_message"] == _rel_proposal(expected)
     # The build refuses the stored shape with the same text.
-    assert result["error_message"] == _rel_proposal(
+    assert (
         kg.import_relationships(_item_rule(to_node_property=value))["error_message"]
+        == expected
     )
     assert checked == [], "a bad name must be reported without reading the file"
     assert PROPOSED_CONSTRUCTION_PLAN not in ctx.state
 
 
 def test_a_bad_matched_property_names_its_end(ctx, any_column_exists):
-    result = _propose_item(ctx, from_node_property="item id")
+    result = _propose_item(ctx, from_node_property=0)
     assert result["error_message"] == _rel_proposal(
-        f"Invalid property name in 'from_node_property': 'item id'. {CHARACTER_RULE}"
+        f"Invalid property name in 'from_node_property': '0'. {FIELD_RULE}"
     )
 
 
@@ -2049,14 +2068,12 @@ def test_a_bad_column_is_reported_before_a_bad_matched_property(ctx, any_column_
         "Item",
         "itemID",
         "Item",
-        "superseded by",
+        5,
         [],
         ctx,
-        to_node_property="has space",
+        to_node_property=0,
     )
-    assert result["error_message"] == _proposal(
-        f"Invalid column name: 'superseded by'. {CHARACTER_RULE}"
-    )
+    assert result["error_message"] == f"Invalid column name: '5'. {FIELD_RULE}"
 
 
 def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkeypatch):
@@ -2077,6 +2094,69 @@ def test_a_matched_property_absent_from_the_files_header_is_accepted(ctx, monkey
     )
     assert result["status"] == "success", result.get("error_message")
     assert checked == ["partID", "madeBy"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Order ID", "customer-id", "Straße", "line\nbreak", "   "],
+    ids=["space", "hyphen", "accent", "line-break", "whitespace-only"],
+)
+def test_a_header_with_any_text_is_proposed_as_given(ctx, any_column_exists, name):
+    """Success criterion 2 of KG-51: the matched properties are left empty, so each
+    defaults to its column's own name, and that name must be accepted too."""
+    node = propose_node_construction("orders.csv", "Order", name, [], ctx)
+    link = propose_relationship_construction(
+        "links.csv", "LINKS", "Order", name, "Order", "other", [], ctx
+    )
+    assert node["status"] == "success", node.get("error_message")
+    assert link["status"] == "success", link.get("error_message")
+    plan = ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+    assert plan["Order"]["unique_column_name"] == name
+    assert plan["LINKS"]["from_node_column"] == name
+    assert "from_node_property" not in plan["LINKS"]
+    assert kg.node_rule_name_error(plan["Order"]) is None
+    assert kg.relationship_rule_name_error(plan["LINKS"]) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["has space", "item-id", " itemID", "Straße", "line\nbreak"],
+    ids=["space", "hyphen", "leading-space", "accent", "line-break"],
+)
+def test_a_matched_property_with_any_text_is_stored_as_given(
+    ctx, any_column_exists, value
+):
+    result = _propose_item(ctx, to_node_property=value)
+    assert result["status"] == "success", result.get("error_message")
+    assert ctx.state[PROPOSED_CONSTRUCTION_PLAN]["SUPERSEDED_BY"] == _item_rule(
+        to_node_property=value
+    )
+
+
+def test_a_plan_with_spaced_and_hyphenated_headers_is_approved(ctx, any_column_exists):
+    steps = [
+        propose_node_construction(
+            "orders.csv", "Order", "Order ID", ["customer-id"], ctx
+        ),
+        propose_node_construction("customers.csv", "Customer", "customer-id", [], ctx),
+        propose_relationship_construction(
+            "orders.csv",
+            "PLACED_BY",
+            "Order",
+            "Order ID",
+            "Customer",
+            "customer-id",
+            [],
+            ctx,
+        ),
+    ]
+    assert [s["status"] for s in steps] == ["success"] * 3, steps
+    result = approve_proposed_construction_plan(ctx)
+    assert result["status"] == "success", result.get("error_message")
+    assert (
+        ctx.state[APPROVED_CONSTRUCTION_PLAN]["PLACED_BY"]["from_node_column"]
+        == "Order ID"
+    )
 
 
 def test_a_relationship_batch_keeps_each_entrys_matched_property(

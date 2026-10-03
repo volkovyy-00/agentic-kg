@@ -7,36 +7,59 @@ map keys in a MERGE/MATCH pattern, property keys in
 them into the query text itself. Which helper applies depends on where the
 name came from, not on what it looks like:
 
-- A name the model supplies (a plan's label, relationship type, key or join
-  column) is checked with `checked()`, then written into the query with
-  `quote()`. `checked()` refuses anything but a plain identifier -- a letter
-  or underscore, then letters, digits or underscores. It does not refuse
-  Cypher keywords: `Order`, `END` or `null` are ordinary names once quoted,
-  and Neo4j accepts them as labels, types and keys.
+- A label or relationship type the model supplies is checked with `checked()`,
+  then written into the query with `quote()`. `checked()` refuses anything but
+  a plain identifier -- a letter or underscore, then letters, digits or
+  underscores. It does not refuse Cypher keywords: `Order`, `END` or `null` are
+  ordinary names once quoted, and Neo4j accepts them as labels and types.
+- A node key, join column, matched property or constraint key is a column or
+  property of the user's own file, so the file decides how it is spelled: an
+  exact header is already required, and nothing can rename a column. It is
+  checked with `checked_field()`, which refuses only empty text, a NUL character
+  (neither Neo4j target takes one) and more than 16,383 characters (Aura's limit;
+  the Community container accepts longer, but a name accepted at proposal must
+  build on every supported target). It is then written with `quote()`.
+  `Order ID`, `customer-id` and `Straße` are ordinary names.
 - A name read back out of the database is only quoted. Neo4j accepts labels
   `checked()` would refuse (`Legal Entity`, `10-K`), so checking them would
   fail on data the graph legitimately holds.
 
-`quote()` is what keeps a name inside its identifier position: inside
-backticks, any character is part of the name. The character rule in
-`checked()` is therefore a policy on which model-supplied names the build
-accepts, not what makes the query safe. It still refuses `Order ID`,
-`order-id` or `Straße`, and nothing renames them. It also serves as a second
-guard: a name that passes it cannot leave its position even if a `quote()`
-were lost.
+`quote()` is what keeps a name inside its identifier position, for any text.
+Inside backticks two things still act: a backtick, which ends the name, and a
+backslash, because Neo4j decodes a \\uXXXX escape there. `quote()` doubles every
+backtick and writes every backslash as its own escape, so the server reads back
+exactly the characters it was given. For labels and relationship types the
+character rule in `checked()` is a policy on which names the build accepts and
+a second guard; for columns and properties `quote()` is the only guard, which is
+why its output is pinned in tests/unit/test_cypher_identifiers.py.
 """
 
 import re
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+# Aura's limit on a name's length, in characters (TokenLengthError above it); the
+# Community container accepts longer. Kept so that a name accepted at proposal
+# builds on every supported target.
+MAX_NAME_LENGTH = 16383
+_SHOWN_CHARACTERS = 80
+
 
 class InvalidIdentifier(ValueError):
-    """A label, relationship type or column/property name failed validation."""
+    """A label, relationship type or column/property name failed validation.
+
+    `renamable` says whether renaming the name can fix it: true for a label or
+    relationship type, which the model chooses, false for a column or property,
+    which the file decides.
+    """
+
+    def __init__(self, message: str, *, renamable: bool = True):
+        super().__init__(message)
+        self.renamable = renamable
 
 
 def checked(kind: str, value: str) -> str:
-    """Refuse a model-supplied name that is not a plain identifier.
+    """Refuse a model-supplied label or relationship type that is not a plain identifier.
 
     Raises:
         InvalidIdentifier: if the value is not a letter or underscore followed
@@ -53,9 +76,47 @@ def checked(kind: str, value: str) -> str:
     return value
 
 
-def quote(name: str) -> str:
-    """Backtick-quote a name for Cypher query text.
+def checked_field(kind: str, value: str) -> str:
+    """Refuse a column or property name that some supported target cannot take.
 
-    Escaping doubles any embedded backtick, which is Cypher's own convention.
+    Any text of 1 to MAX_NAME_LENGTH characters without a NUL passes, whitespace
+    only included: the file's header is the authority on its own spelling. NUL is
+    refused by every Neo4j target; the length cap is Aura's (the Community
+    container accepts longer names), kept so that a name accepted at proposal
+    builds on every supported target.
+
+    Raises:
+        InvalidIdentifier: (renamable=False) if the value is not such text.
+
+    Returns:
+        The value, unchanged. Write it into query text with quote().
     """
-    return "`" + name.replace("`", "``") + "`"
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > MAX_NAME_LENGTH
+        or "\x00" in value
+    ):
+        shown = str(value)
+        if len(shown) > _SHOWN_CHARACTERS:
+            shown = shown[:_SHOWN_CHARACTERS] + "..."
+        raise InvalidIdentifier(
+            f"Invalid {kind}: '{shown}'. It must be 1 to {MAX_NAME_LENGTH:,} "
+            f"characters of text, with no NUL.",
+            renamable=False,
+        )
+    return value
+
+
+def quote(name: str) -> str:
+    """Backtick-quote a name for Cypher query text, for any text the name holds.
+
+    Two things still act inside backticks: a backtick, which ends the name, and a
+    backslash, because Neo4j decodes a \\uXXXX escape there. Each backtick is
+    doubled, which is Cypher's own convention. Each backslash is written as its
+    own escape, \\u005C, so the server reads back exactly the characters it was
+    given: a key `a\\u0041b` stays that text rather than becoming `aAb`, and a key
+    holding \\u0060 cannot close the name and run Cypher after it. The two
+    replacements are independent: neither adds the other's character.
+    """
+    return "`" + name.replace("\\", "\\u005C").replace("`", "``") + "`"

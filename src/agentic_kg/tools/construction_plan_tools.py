@@ -3,6 +3,7 @@ from typing import Any, Optional, Protocol
 
 from google.adk.tools import ToolContext
 
+from agentic_kg.common.cypher_identifiers import InvalidIdentifier
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import ALLOWED_TYPES
@@ -12,9 +13,9 @@ graphdb = get_graphdb()
 from .file_tools import APPROVED_FILES, check_columns_in_header
 from .join_property_check import check_joined_properties_hold_one_value
 from .kg_construction_tools import (
-    matched_property_name_error,
-    node_rule_name_error,
-    required_relationship_name_error,
+    matched_property_name_problem,
+    node_rule_name_problem,
+    required_relationship_name_problem,
 )
 from .reference_reachability import (
     check_reference_columns_are_reachable,
@@ -25,22 +26,27 @@ from .relationship_endpoints import is_omitted, relationship_endpoints
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 
-# Added after the build's own refusal text (KG-44), so the model knows which names
-# it can fix: without it, a header like 'Order ID' gets renamed in the proposal and
-# then fails the file check instead.
-_NAME_HINT = (
-    "A label or relationship type can be renamed to follow this rule, but a file "
-    "column cannot, and neither can a node property, which is a column of the "
-    "node's own file: if it is a key, a join column or a matched node property, "
-    "choose another column or tell the user it cannot be used."
-)
+# Added after the build's own refusal text (KG-44), but only where a way forward
+# exists: a label or relationship type can be renamed to follow its rule. A
+# key, join column or matched property is the file's own header (KG-51), so a
+# refusal of one (empty, NUL, too long) says what it needs and no more.
+_NAME_HINT = "A label or relationship type can be renamed to follow this rule."
 # A relationship end can also name the node property it is matched on (KG-45);
 # only a refusal of that property says this.
-_RELATIONSHIP_NAME_HINT = (
-    f"{_NAME_HINT} A matched node property must be spelled exactly as the node "
-    "stores it, with no surrounding spaces; omit it when the node stores the "
-    "value under the column's own name."
+_MATCHED_PROPERTY_HINT = (
+    "A matched node property must be spelled exactly as the node stores it; omit it "
+    "when the node stores the value under the column's own name."
 )
+
+
+def _refusal(problem: InvalidIdentifier, *, matched: bool = False) -> str:
+    """The build's own text, then the way forward that fits the name that failed."""
+    if problem.renamable:
+        return f"{problem} {_NAME_HINT}"
+    if matched:
+        return f"{problem} {_MATCHED_PROPERTY_HINT}"
+    return str(problem)
+
 
 #  Tool: Propose Node Construction
 
@@ -82,10 +88,10 @@ def propose_node_construction(
       a relationship joins on -- both are compared as raw text and typing them
       makes the join match nothing.
 
-    The label and the unique column name must each be a letter or underscore
-    followed by letters, digits or underscores. Cypher keywords such as Order
-    or END are fine. A column whose header breaks this rule (such as 'Order ID')
-    cannot be the unique column; renaming it in the proposal will not help.
+    The label must be a letter or underscore followed by letters, digits or
+    underscores. Cypher keywords such as Order or END are fine. The unique column
+    may be any header of the approved file, spelled as the file spells it (such as
+    'Order ID' or 'customer-id'): do not rename or reformat it.
 
     The unique column must be exactly one of the approved file's header names,
     letter for letter and in the same case. If it is not, the proposal is refused
@@ -135,9 +141,9 @@ def propose_node_construction(
 
     # Names first, before the file is read (KG-44): a name the build would refuse
     # is refused now, with the build's own text, whatever the file holds.
-    name_error = node_rule_name_error(node_construction_rule)
-    if name_error is not None:
-        return tool_error(f"{name_error} {_NAME_HINT}")
+    problem = node_rule_name_problem(node_construction_rule)
+    if problem is not None:
+        return tool_error(_refusal(problem))
 
     # Exact header match, as the build does (KG-50).
     column_error = check_columns_in_header(approved_file, [unique_column_name])
@@ -256,11 +262,11 @@ def propose_relationship_construction(
       makes the relationship match nothing. The same holds for the node property
       an end is matched on: declare no type for it on its node either.
 
-    The relationship type, both node labels, both join column names and both node
-    property names must each be a letter or underscore followed by letters, digits
-    or underscores. Cypher keywords such as Order or END are fine. A column whose
-    header breaks this rule (such as 'Order ID') cannot be a join column; renaming
-    it in the proposal will not help.
+    The relationship type and both node labels must each be a letter or underscore
+    followed by letters, digits or underscores. Cypher keywords such as Order or
+    END are fine. A join column, and a matched node property, may be any text the
+    file or node holds, spelled exactly (such as 'Order ID' or 'customer-id'): do
+    not rename or reformat it.
 
     Both join columns must be exactly header names of the approved file, letter
     for letter and in the same case. If either is not, the proposal is refused and
@@ -330,16 +336,16 @@ def propose_relationship_construction(
             relationship_construction_rule[f"{side}_node_property"] = value
 
     # Names first, before the file is read (KG-44): see propose_node_construction.
-    # The same two checks, in the build's order, as relationship_rule_name_error.
+    # The same two checks, in the build's order, as relationship_rule_name_problem.
     # The sentence on spelling a matched property comes only with that check's
     # refusal: for a type, label or column it would point at a field that is fine.
-    name_error = required_relationship_name_error(relationship_construction_rule)
-    hint = _NAME_HINT
-    if name_error is None:
-        name_error = matched_property_name_error(relationship_construction_rule)
-        hint = _RELATIONSHIP_NAME_HINT
-    if name_error is not None:
-        return tool_error(f"{name_error} {hint}")
+    problem = required_relationship_name_problem(relationship_construction_rule)
+    matched = False
+    if problem is None:
+        problem = matched_property_name_problem(relationship_construction_rule)
+        matched = True
+    if problem is not None:
+        return tool_error(_refusal(problem, matched=matched))
 
     # Exact header match, as the build does (KG-50), for both join columns at once.
     column_error = check_columns_in_header(

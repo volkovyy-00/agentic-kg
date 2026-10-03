@@ -159,14 +159,16 @@ def test_every_allowed_type_is_named_in_the_tool_description(fn):
     "fn", [propose_node_construction, propose_relationship_construction]
 )
 def test_the_name_character_rule_is_stated_in_the_tool_description(fn):
-    """The propose tools refuse a label, relationship type, key or join column
-    that is not a plain identifier (KG-44). Unless the description states the
-    rule, the model learns it only from a refusal and spends turns retrying
-    variants such as 'Order-ID' or 'order id'. It must also know that keywords
-    are fine, so it does not rename a correct 'Order'."""
+    """The propose tools refuse a label or relationship type that is not a plain
+    identifier (KG-44), and accept any header of the file as a key, join column
+    or matched property (KG-51). Unless the description states both rules, the
+    model learns them only from a refusal and spends turns retrying variants such
+    as 'Order-ID', or renames a column the file spells 'Order ID'. It must also
+    know that keywords are fine, so it does not rename a correct 'Order'."""
     text = " ".join(fn.__doc__.split())
     assert "a letter or underscore followed by letters, digits or underscores" in text
     assert "Cypher keywords" in text
+    assert "do not rename or reformat it" in text
 
 
 def test_every_allowed_type_is_named_in_the_validation_rules():

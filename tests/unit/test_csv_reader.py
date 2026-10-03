@@ -1,8 +1,11 @@
+import csv
+import io
+
 import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
-from agentic_kg.common.csv_reader import read_csv_batches
+from agentic_kg.common.csv_reader import read_csv_batches, read_csv_header
 
 
 @pytest.fixture
@@ -82,3 +85,33 @@ def test_a_utf8_bom_leaves_a_clean_first_column_name(csv_source):
     header, rows = next(iter(read_csv_batches("bom.csv")))
     assert header == ["id", "name"]
     assert rows == [{"id": "1", "name": "Ada"}]
+
+
+ODD_HEADERS = [
+    "Order ID",
+    "customer-id",
+    "Straße",
+    "we`ird",
+    "line\nbreak",
+    "   ",
+    "C:\\users",
+    "a\\u0041b",
+    "x\\u0060: 1}) SET n.pwned = true //",
+]
+
+
+@pytest.mark.parametrize("name", ODD_HEADERS, ids=lambda name: repr(name)[:24])
+def test_any_header_text_is_read_back_exactly(csv_source, name):
+    """KG-51: a header the key and join checks now accept must reach them
+    unchanged, a quoted line break and whitespace-only text included."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([name, "note"])
+    writer.writerows([["k1", "a"], ["k2", "b"]])
+    with csv_source.open("/csv/odd.csv", "w") as handle:
+        handle.write(buffer.getvalue())
+
+    assert read_csv_header("odd.csv") == [name, "note"]
+    header, rows = next(iter(read_csv_batches("odd.csv")))
+    assert header == [name, "note"]
+    assert rows == [{name: "k1", "note": "a"}, {name: "k2", "note": "b"}]

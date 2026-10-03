@@ -73,7 +73,7 @@ def graphdb_against_container():
         # patterns under each label -- and it is why assertions below match on
         # named patterns rather than on list length or position.
         db.send_query("""
-            CREATE (a1:Alpha {code: 'a1'})
+            CREATE (a1:Alpha {code: 'a1', `order id`: 'x'})
             CREATE (a2:Alpha {code: 'a2'})
             CREATE (m:Alpha:Archived {code: 'm1'})
             CREATE (b1:Beta {code: 'b1'})
@@ -204,6 +204,35 @@ def test_non_identifier_label_survives_quoting(graphdb_against_container):
     profile = graph_profile.build_profile(_schema_for(db))
     assert "Legal Entity" in profile["entity_counts"]
     assert profile["properties"].get("Legal Entity") != "profile_error"
+
+
+def test_a_property_name_with_a_space_survives_profiling(graphdb_against_container):
+    db, graph_profile = graphdb_against_container
+    profile = graph_profile.build_profile(_schema_for(db))
+    props = profile["properties"]["Alpha"]
+    assert props != "profile_error"
+    by_name = {prop["property"]: prop for prop in props}
+    assert "order id" in by_name
+    # Exact counts: only a1 carries the property, with the value 'x'.
+    assert by_name["order id"]["value_counts"] == [{"value": "x", "count": 1}]
+    assert by_name["order id"]["value_counts_complete"] == "yes"
+
+
+def test_a_property_name_with_a_backtick_is_counted_by_graph_profile(
+    graphdb_against_container,
+):
+    """Tested below get_structured_schema on purpose: the library does not escape
+    a backtick in a property name, so a graph that holds one cannot be profiled
+    through it at all (see the plan's Task 4 Step 3). graph_profile's own queries
+    quote the name with quote(), and this pins that."""
+    db, graph_profile = graphdb_against_container
+    db.send_query("MATCH (n:Alpha {code: 'a1'}) SET n.`we``ird` = 'y'")
+    try:
+        counts, complete = graph_profile._value_counts("Alpha", "we`ird", False)
+    finally:
+        db.send_query("MATCH (n:Alpha {code: 'a1'}) REMOVE n.`we``ird`")
+    assert counts == [{"value": "y", "count": 1}]
+    assert complete == "yes"
 
 
 def test_annotations_are_always_present(graphdb_against_container):

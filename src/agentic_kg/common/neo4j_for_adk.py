@@ -82,8 +82,9 @@ def make_driver(neo4j_config: Neo4jConfig) -> Driver:
 # NOTE: a `sanitize()` helper used to live here -- a character-class strip for
 # "when a query param is not possible". It had no callers, and stripping unsafe
 # characters is the wrong shape for this codebase anyway: identifiers are now
-# either checked and then backtick-quoted (cypher_identifiers.checked() and
-# quote(), for model-supplied names) or backtick-quoted alone
+# either checked and then backtick-quoted (cypher_identifiers.checked() for a
+# label or type, checked_field() for a column or property, then quote(), for
+# model-supplied names) or backtick-quoted alone
 # (cypher_identifiers.quote(), for names read out of the database). Silently
 # rewriting a name is neither. Removed rather than kept as a template.
 

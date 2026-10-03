@@ -3,7 +3,12 @@ from typing import Any, Dict, Optional
 from google.adk.tools import ToolContext
 from neo4j_graphrag.schema import get_structured_schema
 
-from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked, quote
+from agentic_kg.common.cypher_identifiers import (
+    InvalidIdentifier,
+    checked,
+    checked_field,
+    quote,
+)
 from agentic_kg.common.graph_profile import get_cached_profile
 from agentic_kg.common.neo4j_for_adk import (
     QUERY_TIMEOUT_SECONDS,
@@ -228,13 +233,17 @@ def create_uniqueness_constraint(
         A dictionary with a status key ('success' or 'error').
         On error, includes an 'error_message' key.
     """
-    # Validate input to prevent injection, then quote. checked() refuses anything
-    # but a plain identifier, so newlines/parens/braces never reach the f-string;
-    # quote() lets a plain identifier that is also a Cypher keyword (Order, END)
-    # through as a name.
+    # Validate input, then quote. checked() refuses anything but a plain
+    # identifier for the label, so a label never carries newlines, parens or
+    # braces. A key is a column or property of the user's file, so
+    # checked_field() refuses only empty text, NUL and over-long names (Aura's
+    # limit, kept for every target). quote() then
+    # writes each name so that nothing inside it can end its backticks or start
+    # a backslash-u escape, and lets a plain identifier that is also a Cypher
+    # keyword (Order, END) through as a name.
     try:
         label = checked("label", label)
-        unique_property_key = checked("property key", unique_property_key)
+        unique_property_key = checked_field("property key", unique_property_key)
     except InvalidIdentifier as exc:
         return tool_error(str(exc))
 
