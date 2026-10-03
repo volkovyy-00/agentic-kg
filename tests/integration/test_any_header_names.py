@@ -118,82 +118,48 @@ def test_every_name_goes_through_proposal_and_build(db, tmp_path):
     assert injected["records"][0]["c"] == 0, "a header ran Cypher"
 
 
-@pytest.mark.parametrize(
-    "name, expected",
-    [("k" * 16383, True), ("k" * 16384, False), ("a\x00b", False)],
-    ids=["16383-characters", "16384-characters", "nul"],
-)
-def test_every_name_checked_field_accepts_builds_and_every_refused_build_is_refused_by_it(
-    db, name, expected
-):
-    """checked_field refuses NUL because both Neo4j targets do, and more than
-    16,383 characters because Aura does (TokenLengthError, verified 2026-10-03),
-    although the Community neo4j:5 container accepts longer names (verified up to
-    70,000 on 5.26.31). A name checked_field accepts must therefore build
-    everywhere, and a name the container refuses must be refused by checked_field.
-    If either fails after a Neo4j upgrade, the rule must follow it."""
+def test_name_limits_agree_between_checked_field_and_the_container(db):
+    """checked_field accepts what Neo4j builds and refuses what Neo4j itself refuses.
+
+    A 16,383-character key is the longest Aura accepts (TokenLengthError above
+    it, verified 2026-10-03), as a property key and as a uniqueness-constraint
+    key, although the constraint's name `<label>_<key>_constraint` is longer
+    than the key. A NUL is refused by both Neo4j targets, so the container MERGE
+    must fail too: that pins the refusal as Neo4j's own. The Community neo4j:5
+    container accepts names longer than 16,383 characters (verified up to 70,000
+    on 5.26.31), so the 16,384 refusal is pinned in the unit tests, not here.
+    If either assertion fails after a Neo4j upgrade, the rule must follow it.
+    """
+    import agentic_kg.tools.cypher_tools as cypher_tools
     from agentic_kg.common.cypher_identifiers import (
         InvalidIdentifier,
         checked_field,
         quote,
     )
 
+    longest = "k" * 16383
+    nul = "a\x00b"
     try:
-        checked_field("column name", name)
-        accepted = True
-    except InvalidIdentifier:
-        accepted = False
-    assert accepted is expected
-
-    try:
-        result = db.send_query(f"MERGE (n:`Kg51Limit` {{ {quote(name)} : 1 }})")
-        built = result["status"] == "success"
-        assert built or not accepted, result
-        # A name over 16,383 characters: no assertion on the container outcome,
-        # it builds on Community and is refused on Aura.
-    finally:
-        db.send_query("MATCH (n:`Kg51Limit`) DETACH DELETE n")
-
-
-def test_a_16383_character_key_also_works_as_a_constraint_key(db):
-    """The constraint's name is `<label>_<key>_constraint`, so it is longer than
-    the key and longer than 16,383 characters. Neo4j accepted this on Aura on
-    2026-10-03; this pins it on the container, because a build that failed here
-    would fail after the proposal accepted the name."""
-    import agentic_kg.tools.cypher_tools as cypher_tools
-
-    key = "k" * 16383
-    result = cypher_tools.create_uniqueness_constraint("Kg51Limit", key)
-    try:
-        assert result["status"] == "success", result.get("error_message")
+        assert checked_field("column name", longest) == longest
+        merged = db.send_query(f"MERGE (n:`Kg51Limit` {{ {quote(longest)} : 1 }})")
+        assert merged["status"] == "success", merged
+        created = cypher_tools.create_uniqueness_constraint("Kg51Limit", longest)
+        assert created["status"] == "success", created.get("error_message")
         shown = db.send_query(
             "SHOW CONSTRAINTS YIELD labelsOrTypes, properties "
             "WHERE labelsOrTypes = ['Kg51Limit'] RETURN properties"
         )
-        assert [r["properties"] for r in shown["records"]] == [[key]]
+        assert [r["properties"] for r in shown["records"]] == [[longest]]
+
+        with pytest.raises(InvalidIdentifier):
+            checked_field("column name", nul)
+        refused = db.send_query(f"MERGE (n:`Kg51Limit` {{ {quote(nul)} : 1 }})")
+        assert refused["status"] == "error", refused
     finally:
+        db.send_query("MATCH (n:`Kg51Limit`) DETACH DELETE n")
         names = db.send_query(
             "SHOW CONSTRAINTS YIELD name, labelsOrTypes "
             "WHERE labelsOrTypes = ['Kg51Limit'] RETURN name"
         )
         for row in names["records"]:
-            db.send_query(f"DROP CONSTRAINT `{row['name']}` IF EXISTS")
-
-
-def test_a_refused_name_gives_the_same_text_at_proposal_and_at_build(db):
-    import agentic_kg.tools.kg_construction_tools as kg
-    from agentic_kg.tools.construction_plan_tools import propose_node_construction
-
-    ctx = SimpleNamespace(state={})
-    for name in ("a\x00b", "k" * 16384):
-        proposed = propose_node_construction("nodes.csv", "Node", name, [], ctx)
-        rule = {
-            "construction_type": "node",
-            "source_file": "nodes.csv",
-            "label": "Node",
-            "unique_column_name": name,
-            "properties": [],
-            "property_types": {},
-        }
-        assert proposed["status"] == "error"
-        assert proposed["error_message"] == kg.import_nodes(rule)["error_message"]
+            db.send_query(f"DROP CONSTRAINT {quote(row['name'])} IF EXISTS")

@@ -1770,8 +1770,14 @@ def _rel_rule(args):
         ("1Order", "END", f"Invalid label: '1Order'. {CHARACTER_RULE}", True),
         ("Order", 5, f"Invalid column name: '5'. {FIELD_RULE}", False),
         ("Order", "a\x00b", f"Invalid column name: 'a\x00b'. {FIELD_RULE}", False),
+        (
+            "Order",
+            "k" * 16384,
+            f"Invalid column name: '{'k' * 80}...'. {FIELD_RULE}",
+            False,
+        ),
     ],
-    ids=["label", "column", "nul-column"],
+    ids=["label", "column", "nul-column", "too-long-column"],
 )
 def test_propose_node_refuses_a_bad_name_with_the_builds_message(
     ctx, any_column_exists, label, key, build_text, renamable

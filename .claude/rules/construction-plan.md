@@ -18,5 +18,7 @@ paths:
 - Read a relationship's ends only through `relationship_endpoints()`.
 - Labels and types go through `checked()`, and key/join/matched names through `checked_field()`, where
   they enter the plan; every name goes through `quote()` in Cypher; never `$()` dynamic labels.
-- A new tool that writes plan rules calls `node_rule_name_error` / `relationship_rule_name_error`
-  (or its two parts) first, or moves them into `check_construction_plan_consistency`.
+- A new tool that writes plan rules calls `node_rule_name_problem` / `relationship_rule_name_problem` (or
+  `required_relationship_name_problem` then `matched_property_name_problem`) first and refuses with the
+  build's text, adding the rename hint only when `renamable`, or moves them into
+  `check_construction_plan_consistency`.
