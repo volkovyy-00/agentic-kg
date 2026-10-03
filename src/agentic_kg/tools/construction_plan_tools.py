@@ -9,7 +9,7 @@ from agentic_kg.common.value_types import ALLOWED_TYPES
 
 graphdb = get_graphdb()
 
-from .file_tools import APPROVED_FILES, search_file
+from .file_tools import APPROVED_FILES, check_columns_in_header
 from .join_property_check import check_joined_properties_hold_one_value
 from .kg_construction_tools import (
     matched_property_name_error,
@@ -87,6 +87,11 @@ def propose_node_construction(
     or END are fine. A column whose header breaks this rule (such as 'Order ID')
     cannot be the unique column; renaming it in the proposal will not help.
 
+    The unique column must be exactly one of the approved file's header names,
+    letter for letter and in the same case. If it is not, the proposal is refused
+    and the error lists the file's headers: choose one of them rather than trying
+    another spelling.
+
     Args:
         approved_file: The approved file to propose a node construction for
         proposed_label: The proposed label for constructed nodes (used as key in the construction plan)
@@ -134,14 +139,10 @@ def propose_node_construction(
     if name_error is not None:
         return tool_error(f"{name_error} {_NAME_HINT}")
 
-    # quick sanity check -- does the approved file have the unique column?
-    search_results = search_file(approved_file, unique_column_name)
-    if search_results["status"] == "error":
-        return search_results  # return the error
-    if search_results["search_results"]["metadata"]["lines_found"] == 0:
-        return tool_error(
-            f"{approved_file} does not have the column {unique_column_name}. Check the file content and try again."
-        )
+    # Exact header match, as the build does (KG-50).
+    column_error = check_columns_in_header(approved_file, [unique_column_name])
+    if column_error is not None:
+        return column_error
 
     # get the current construction plan, or an empty one if none exists
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
@@ -261,6 +262,11 @@ def propose_relationship_construction(
     header breaks this rule (such as 'Order ID') cannot be a join column; renaming
     it in the proposal will not help.
 
+    Both join columns must be exactly header names of the approved file, letter
+    for letter and in the same case. If either is not, the proposal is refused and
+    the error names each missing column and lists the file's headers: choose from
+    that list rather than trying another spelling.
+
     Args:
         approved_file: The approved file to propose a relationship construction for
         proposed_relationship_type: The proposed label for constructed relationships
@@ -335,24 +341,12 @@ def propose_relationship_construction(
     if name_error is not None:
         return tool_error(f"{name_error} {hint}")
 
-    # quick sanity check -- does the approved file have the from_node_column?
-    search_results = search_file(approved_file, from_node_column)
-    if search_results["status"] == "error":
-        return search_results  # return the error if there is one
-    if search_results["search_results"]["metadata"]["lines_found"] == 0:
-        return tool_error(
-            f"{approved_file} does not have the from node column {from_node_column}. Check the content of the file and reconsider the relationship."
-        )
-
-    # quick sanity check -- does the approved file have the to_node_column?
-    search_results = search_file(approved_file, to_node_column)
-    if (
-        search_results["status"] == "error"
-        or search_results["search_results"]["metadata"]["lines_found"] == 0
-    ):
-        return tool_error(
-            f"{approved_file} does not have the to node column {to_node_column}. Check the content of the file and reconsider the relationship."
-        )
+    # Exact header match, as the build does (KG-50), for both join columns at once.
+    column_error = check_columns_in_header(
+        approved_file, [from_node_column, to_node_column]
+    )
+    if column_error is not None:
+        return column_error
 
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     construction_plan[proposed_relationship_type] = relationship_construction_rule

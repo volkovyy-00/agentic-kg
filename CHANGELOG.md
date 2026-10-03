@@ -8,6 +8,17 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.9.2] - 2026-10-03
+
+### Fixed
+- **A key or join column the file does not have is refused when proposed (#78, KG-50)**: proposing a node or a
+  relationship used to accept a column that only appeared as text somewhere in the file, in any letter case, such
+  as `orderid` for `orderID`, a value from a data row, or a fragment of a longer header. The plan was approved
+  and the build then refused it. A key or join column is now accepted only when it is exactly one of the
+  file's headers, and the refusal lists the headers. A relationship with both join columns wrong now names both,
+  as the build does, where it used to name the first. A file with no header row is refused too, and a file that
+  cannot be read comes back as an error to correct instead of a crash.
+
 ## [0.9.1] - 2026-10-02
 
 ### Fixed
