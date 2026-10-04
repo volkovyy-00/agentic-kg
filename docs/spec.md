@@ -275,11 +275,14 @@ bundled furniture example must keep working throughout.
 
 **Known rough edges**, verified in code rather than assumed:
 
-- **Types are declared, not inferred.** The CSV path (`common/value_types.py`, #13) stores a property as
-  `INTEGER`, `FLOAT` or `BOOLEAN` only when the construction plan's `property_types` map declares that
-  type for it; anything undeclared stays a STRING, as do identifiers and join columns, which
-  `check_construction_plan_consistency` refuses to let be typed since they're matched as raw CSV text.
-  Dates are not supported. §4's `numeric_like` annotation therefore still matters for undeclared columns
+- **Types are declared, not inferred.** The CSV path (`common/value_types.py`, #13, KG-31) stores a property as
+  `INTEGER`, `FLOAT`, `BOOLEAN`, `DATE`, `DATE_TIME` (zoned) or `LOCAL_DATE_TIME` only when the construction
+  plan's `property_types` map declares that type for it (`integer`, `float`, `boolean`, `date`, `datetime`,
+  `localdatetime`); anything undeclared stays a STRING, as do identifiers and join columns, which
+  `check_construction_plan_consistency` refuses to let be typed since they're matched as raw CSV text. A
+  temporal type takes only its own ISO shape (`YYYY-MM-DD`, then optionally `T` or one space and a time with up
+  to nine fractional digits, and `Z` or `±HH:MM` up to 18:00 for `datetime` only); any other value is counted
+  and cleared. §4's `numeric_like` annotation therefore still matters for undeclared columns
   — and now duplicates logic: `graph_profile.py`'s own numeric-pattern regexes have diverged from
   `value_types.py`'s (the construction path handles negative currency written either way round and
   accounting-parenthesis negatives; the profile's copy does not), a gap #13 knowingly left unclosed.
