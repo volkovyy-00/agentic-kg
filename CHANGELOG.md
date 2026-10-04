@@ -8,6 +8,19 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.10.1] - 2026-10-04
+
+### Fixed
+- **A node could be proposed on a key whose rows would collapse (#81, KG-48)**: a node keyed on a column that
+  repeats or has blank values was accepted, and the build then silently merged the rows sharing a key into
+  fewer nodes, keeping one row's values (an order-line node keyed by order held 830 nodes for 2155 rows).
+  Proposing a node now refuses a key with a blank value, and a repeating key whose rows disagree on a
+  proposed property. The refusal gives the row, distinct and blank counts, names every disagreeing
+  property with one example, and offers another key, a relationship or dropping the property. A repeating
+  key whose rows agree on every property, or that has none, is still accepted. A file that ends in a blank
+  line, which already failed the build, is now refused at proposal instead. Proposing a node now reads the
+  key column in full, where it read only the header.
+
 ## [0.10.0] - 2026-10-04
 
 ### Added

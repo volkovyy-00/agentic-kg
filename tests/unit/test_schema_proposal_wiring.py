@@ -185,6 +185,19 @@ def test_the_name_character_rule_is_stated_in_the_tool_description(fn):
     assert "do not rename or reformat it" in text
 
 
+def test_the_key_rule_is_stated_in_the_node_tool_description():
+    """The propose tool refuses a key with a blank value, and a repeating key whose
+    rows disagree on a listed property (KG-48). The description is where the model
+    learns that before it proposes, rather than from the refusal alone. The rule
+    sits above Args:, whose lines test_the_args_section_names_exactly_the_real_
+    parameters reads as parameter names."""
+    text = " ".join(propose_node_construction.__doc__.split())
+    assert "must have a value in every row" in text
+    assert "agree on every property you list for the node" in text
+    assert "leave those properties off the node" in text
+    assert text.index("must have a value in every row") < text.index("Args:")
+
+
 def test_every_allowed_type_is_named_in_the_validation_rules():
     """Same staleness, one layer up: the shared rules block tells both agents
     which types exist, so a new entry in ALLOWED_TYPES that never reaches this

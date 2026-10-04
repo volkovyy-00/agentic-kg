@@ -339,11 +339,12 @@ def quoted_list(names: List[str]) -> str:
     return ", ".join(f"'{name}'" for name in names)
 
 
-def _quoted_value(value: str) -> str:
+def quoted_value(value: str) -> str:
     """One cell value for a message, which the model reads one problem per line.
 
     repr() so that a quote or a newline in the cell cannot break that layout, and
-    cut short so that one enormous cell cannot swamp the message.
+    cut short so that one enormous cell cannot swamp the message. Public because
+    node_key_check words the example values in its refusal the same way.
     """
     if len(value) > _VALUE_LIMIT:
         value = value[:_VALUE_LIMIT] + "..."
@@ -431,7 +432,7 @@ def _shortfall_clause(
     else:
         share = f"retains '{column}' but could carry {count}"
     examples = sorted(wanted - closest.domain)[:_EXAMPLE_LIMIT]
-    missing = ", ".join(_quoted_value(value) for value in examples)
+    missing = ", ".join(quoted_value(value) for value in examples)
     return (
         f"{node_description(closest.rule)} {share} {len(wanted)} "
         f"'{column}' values '{home}' holds (missing e.g. {missing})"

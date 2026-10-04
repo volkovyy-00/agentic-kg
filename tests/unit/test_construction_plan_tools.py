@@ -38,6 +38,7 @@ from agentic_kg.tools.construction_plan_tools import (
     remove_node_construction,
 )
 from agentic_kg.tools.file_tools import APPROVED_FILES
+from agentic_kg.tools.node_key_check import NodeKeySummary
 from agentic_kg.tools.reference_reachability import (
     check_reference_columns_are_reachable,
 )
@@ -54,14 +55,28 @@ def ctx():
     return FakeToolContext()
 
 
+def _every_key_is_fine(monkeypatch):
+    """Make the propose tools' key check (KG-48) find nothing wrong.
+
+    The tests that stub the header check name files that do not exist, so the key
+    check, which reads the key column, would only report them unreadable. Its own
+    cases are in test_node_key_check.py and test_propose_node_key.py."""
+    monkeypatch.setattr(
+        cpt,
+        "summarize_node_key",
+        lambda file_path, key, properties: (NodeKeySummary(1, 1, 0, []), None),
+    )
+
+
 @pytest.fixture
 def any_column_exists(monkeypatch):
-    """Make the propose tools' header check always pass."""
+    """Make the propose tools' header and key checks always pass."""
 
     def fake_check(file_path, columns):
         return None
 
     monkeypatch.setattr(cpt, "check_columns_in_header", fake_check)
+    _every_key_is_fine(monkeypatch)
 
 
 # --- state layer: overwrite semantics ---------------------------------------
@@ -147,6 +162,7 @@ def _only_these_columns_are_headers(monkeypatch, known_columns, checked):
         return None
 
     monkeypatch.setattr(cpt, "check_columns_in_header", fake_check)
+    _every_key_is_fine(monkeypatch)
 
 
 def test_propose_node_constructions_adds_every_entry_to_the_plan(
