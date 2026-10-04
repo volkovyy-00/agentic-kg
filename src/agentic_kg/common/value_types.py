@@ -297,6 +297,11 @@ def parse_temporal(text: str) -> Optional[Tuple[str, Any]]:
         return None
     parts = match.groupdict()
     year, month, day = int(parts["year"]), int(parts["month"]), int(parts["day"])
+    # Year 0 is outside the driver's range, but neo4j.time does not always raise
+    # for it: 0000-00-00 (MySQL's "no value") builds a ZeroDate, which would be
+    # stored as a wrong date, or as a DateTime the driver refuses mid-batch.
+    if year == 0:
+        return None
     try:
         if parts["hour"] is None:
             return DATE, neo4j_time.Date(year, month, day)

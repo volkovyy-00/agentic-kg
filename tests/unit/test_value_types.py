@@ -320,6 +320,11 @@ REFUSED = [
     # not real dates
     "2025-02-30",
     "0000-01-01",
+    # MySQL's "no value" placeholder: neo4j.time builds a ZeroDate for it rather
+    # than raising, which would store a wrong date or fail a batch at packing
+    "0000-00-00",
+    "0000-00-00 00:00:00",
+    "0000-00-00T00:00:00Z",
     # Unicode digits: \d would match these, int() would convert them
     "٢٠٢٥-٠٣-٠٤",
     # a time with no date
@@ -473,6 +478,7 @@ def test_classify_does_not_call_impossible_dates_a_date():
     """A suggestion for a column the loader would then clear in full is the exact
     drift sharing one parser exists to prevent."""
     assert classify(["2025-02-30"] * 5) == TEXT
+    assert classify(["0000-00-00"] * 3 + ["2025-03-04"]) == TEXT
 
 
 def test_classify_strips_padded_values_like_coerce_does():
