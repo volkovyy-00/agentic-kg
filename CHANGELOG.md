@@ -8,6 +8,19 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.10.2] - 2026-10-04
+
+### Fixed
+- **A relationship named like a node label replaced that node's rule (KG-39)**: the proposed plan files every
+  rule under its name, so proposing a relationship whose type equals an existing node label (or a node
+  whose label equals a relationship type) replaced the other rule, reported success, and the graph was
+  built without it. Proposing now refuses a name the other kind already holds, leaves that rule in the
+  plan, and says what to do: a new relationship takes another type, and a new node either takes another
+  label or has the relationship rule removed and re-proposed under another type. Removing a node by a name
+  only a relationship holds, or the reverse, now removes nothing and names the tool to use instead of
+  deleting the other rule. Proposing again under a name the same kind holds still replaces it. A node
+  label and a relationship type spelled the same can therefore no longer both be built.
+
 ## [0.10.1] - 2026-10-04
 
 ### Fixed

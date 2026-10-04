@@ -188,7 +188,9 @@ variants = {
               schema from the approved files and re-propose entries that already exist: calling
               'propose_node_construction' or 'propose_relationship_construction' for an existing label or
               type silently overwrites that entry, so re-proposing an unrelated construction from scratch
-              destroys earlier corrections without any error being reported.
+              destroys earlier corrections without any error being reported. A node label and a
+              relationship type share one name in the plan: proposing a name the other kind already
+              holds is refused, and that rule stays as it is.
             - Before calling a propose tool, check whether that label or type is already in the plan. If it
               is, and the current request does not concern it, leave it alone. If it is and the request
               does concern it, restate every field you intend to keep — a propose call replaces the whole

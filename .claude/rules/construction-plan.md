@@ -27,3 +27,4 @@ paths:
   proposed and is never re-run at approval, because a plan reaches the state only through the propose
   tools and the refusal has no build-time twin. Do not move it into `find_plan_problems` or give it a
   copy of the build's text.
+- A tool that writes or removes plan rules must go through `_collision_refusal` / `_wrong_kind_removal_refusal`.
