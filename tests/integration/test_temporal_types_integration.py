@@ -147,9 +147,15 @@ def test_a_typed_date_filters_and_orders_with_no_cast(neo4j_graph, temporal_sour
 
 def test_a_re_run_retypes_a_text_date_property(neo4j_graph, temporal_sources):
     """A graph built before the types existed holds the date as a STRING; a re-run
-    with the type declared must leave a real DATE, not the old text."""
+    with the type declared must leave a real DATE, or nothing, never the old text."""
     kg.load_nodes_from_csv("events.csv", "Event", "id", ["day"])
     assert _event(neo4j_graph, "e1")["day_type"].startswith("STRING")
+    # e5's 03/04/2025 cannot convert; it was stored as text by the untyped run.
+    assert _event(neo4j_graph, "e5")["day_type"].startswith("STRING")
+    # e4's cell is blank, so the untyped run stored nothing; give it old text, as an
+    # earlier build could have left, to see that a blank on the re-run clears it.
+    _raw(neo4j_graph, "MATCH (n:Event {id: 'e4'}) SET n.day = 'old text'")
+    assert _event(neo4j_graph, "e4")["day_type"].startswith("STRING")
 
     result = kg.load_nodes_from_csv(
         "events.csv", "Event", "id", ["day"], {"day": "date"}
@@ -158,6 +164,12 @@ def test_a_re_run_retypes_a_text_date_property(neo4j_graph, temporal_sources):
     e1 = _event(neo4j_graph, "e1")
     assert e1["day"] == neo4j_time.Date(2025, 3, 4)
     assert e1["day_type"].startswith("DATE")
+    # The unconvertible and the blank cell are cleared, not left as the old text.
+    for event_id in ("e4", "e5"):
+        cleared = _event(neo4j_graph, event_id)
+        assert cleared["day"] is None, event_id
+        # valueType() of a property that is not there answers "NULL", not None.
+        assert cleared["day_type"] == "NULL", event_id
 
 
 ORDER_COUNT = 830
