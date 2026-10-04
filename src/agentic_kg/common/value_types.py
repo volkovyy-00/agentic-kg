@@ -23,6 +23,7 @@ value library (no connection), so the "no I/O" rule above still holds.
 """
 
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Iterable, Optional, Tuple
@@ -49,6 +50,9 @@ BARE_NUMERIC = "bare_numeric"
 NUMERIC_AFTER_CLEANING = "numeric_after_cleaning"
 BOOLEAN_LIKE = "boolean_like"
 TEXT = "text"
+DATE_LIKE = "date_like"
+DATETIME_LIKE = "datetime_like"
+LOCALDATETIME_LIKE = "localdatetime_like"
 
 # What happened to one value. Three outcomes rather than success/failure:
 # blank clears a stale value exactly as unconvertible does, but it is not
@@ -93,6 +97,12 @@ _BOOLEAN_VALUES = _TRUE_VALUES | _FALSE_VALUES
 # and the only thing that would notice is a build refusing a column the model
 # was told was fine.
 MAJORITY_SHARE = 0.5
+
+_TEMPORAL_SHAPES = {
+    DATE: DATE_LIKE,
+    DATETIME: DATETIME_LIKE,
+    LOCALDATETIME: LOCALDATETIME_LIKE,
+}
 
 # Neo4j's INTEGER is a signed 64-bit value, and the driver packs it as one.
 # Python's int is unbounded, so a wider value converts happily here and then
@@ -194,6 +204,16 @@ def classify(values: Iterable[Any]) -> str:
 
     if majority(numeric_after_cleaning):
         return NUMERIC_AFTER_CLEANING
+
+    # Temporal text cannot match any test above (it carries '-' and ':'), so the
+    # order is not load-bearing here. Each value is parsed once, stripped, as
+    # coerce() does. A kind has to be a strict majority ALONE: a 45% zoned / 45%
+    # local column gets no suggestion, because either type would clear the other
+    # half.
+    kinds = Counter(_temporal_kind(value.strip()) for value in non_blank)
+    for kind, shape in _TEMPORAL_SHAPES.items():
+        if kinds[kind] > len(non_blank) * MAJORITY_SHARE:
+            return shape
     return TEXT
 
 
@@ -293,6 +313,12 @@ def parse_temporal(text: str) -> Optional[Tuple[str, Any]]:
         )
     except (ValueError, OverflowError):
         return None
+
+
+def _temporal_kind(text: str) -> Optional[str]:
+    """The kind parse_temporal reads in `text`, or None."""
+    parsed = parse_temporal(text)
+    return parsed[0] if parsed is not None else None
 
 
 def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:

@@ -16,10 +16,13 @@ from agentic_kg.common.value_types import (
     BOOLEAN_LIKE,
     CONVERTED,
     DATE,
+    DATE_LIKE,
     DATETIME,
+    DATETIME_LIKE,
     FLOAT,
     INTEGER,
     LOCALDATETIME,
+    LOCALDATETIME_LIKE,
     NUMERIC_AFTER_CLEANING,
     TEXT,
     UNCONVERTIBLE,
@@ -402,3 +405,33 @@ def test_a_blank_temporal_cell_is_blank_not_unconvertible():
     for declared in (DATE, DATETIME, LOCALDATETIME):
         for value in ("", "   ", None):
             assert coerce(value, declared) == (None, BLANK), (declared, value)
+
+
+def test_classify_reports_each_temporal_shape():
+    assert classify(["2025-03-04", "2025-03-05"]) == DATE_LIKE
+    assert (
+        classify(["2025-03-04T10:11:12Z", "2025-03-05T10:11:12+01:00"]) == DATETIME_LIKE
+    )
+    assert classify(["2025-03-04T10:11:12", "2025-03-05 10:11"]) == LOCALDATETIME_LIKE
+
+
+def test_classify_needs_one_temporal_kind_to_be_a_strict_majority():
+    mixed = ["2025-03-04T10:00:00Z"] * 45 + ["2025-03-04T10:00:00"] * 45 + ["n/a"] * 10
+    assert classify(mixed) == TEXT
+    # day/month ambiguous and a bare time carry no ISO shape at all
+    assert classify(["03/04/2025", "04/05/2025", "13/05/2025"]) == TEXT
+    assert classify(["15:15:00", "09:30:00"]) == TEXT
+    # exactly half is not a majority, the same strictness as the numeric shapes
+    assert classify(["2025-03-04", "2025-03-05", "x", "y"]) == TEXT
+
+
+def test_classify_does_not_call_impossible_dates_a_date():
+    """A suggestion for a column the loader would then clear in full is the exact
+    drift sharing one parser exists to prevent."""
+    assert classify(["2025-02-30"] * 5) == TEXT
+
+
+def test_classify_strips_padded_values_like_coerce_does():
+    """coerce strips before parsing; if classify did not, a padded date column
+    would classify as text while every value converted."""
+    assert classify([" 2025-03-04", "2025-03-05 ", "\t2025-03-06"]) == DATE_LIKE
