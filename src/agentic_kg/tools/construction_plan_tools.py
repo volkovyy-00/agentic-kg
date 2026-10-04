@@ -49,6 +49,67 @@ def _refusal(problem: InvalidIdentifier, *, matched: bool = False) -> str:
     return str(problem)
 
 
+# One name, one rule (KG-39). The plan is a single map filed by a node's label or a
+# relationship's type, so a node and a relationship spelled alike would share a
+# key and the later proposal would replace the earlier rule without a word. The
+# propose tools therefore refuse a name the other kind holds, and the remove tools
+# leave it alone. Neo4j itself allows a label and a relationship type with the
+# same name; a plan that wants both cannot be built, and the refusal asks for a
+# different name instead. Refusing, rather than filing by (kind, name), keeps
+# every reader of the plan sound: they resolve a node by its label as the key.
+
+
+_OTHER_KIND = {"node": "relationship", "relationship": "node"}
+
+
+def _rule_kind(plan: dict, name: str) -> Optional[str]:
+    """The `construction_type` of the rule filed under `name`; None for an entry
+    that is not a rule, which only a hand-edited state can hold."""
+    rule = plan.get(name)
+    return rule.get("construction_type") if isinstance(rule, dict) else None
+
+
+def _other_kind_holding(plan: dict, name: str, kind: str) -> Optional[str]:
+    """The kind opposite `kind` ("node" or "relationship") when it holds `name`,
+    else None: the name is free, or `kind` itself holds it."""
+    other = _OTHER_KIND[kind]
+    return other if _rule_kind(plan, name) == other else None
+
+
+def _collision_refusal(plan: dict, name: str, proposing: str) -> Optional[str]:
+    """Why proposing a `proposing` rule under `name` must be refused, or None.
+    A same-kind re-proposal is not refused: it replaces the rule, as it always has."""
+    held = _other_kind_holding(plan, name, proposing)
+    if held is None:
+        return None
+    shared = (
+        f"The plan already has a {held} rule named '{name}'. A node label and a "
+        "relationship type share one name in the plan, so the existing rule is "
+        "unchanged."
+    )
+    if proposing == "relationship":
+        return f"{shared} Propose this relationship under a different type."
+    # Renaming a node can leave relationships pointing at its old label, which
+    # approval then reports as a missing node: say which way out is cheaper.
+    return (
+        f"{shared} Either rename this label (only if no relationship refers to it "
+        "yet), or remove that relationship rule with remove_relationship_construction "
+        "and re-propose it under a different type."
+    )
+
+
+def _wrong_kind_removal_refusal(plan: dict, name: str, removing: str) -> Optional[str]:
+    """Why removing a `removing` rule by `name` must be refused because the other
+    kind holds the name, or None."""
+    held = _other_kind_holding(plan, name, removing)
+    if held is None:
+        return None
+    return (
+        f"'{name}' is a {held} rule, not a {removing} rule, so nothing was removed. "
+        f"Use remove_{held}_construction to remove it."
+    )
+
+
 #  Tool: Propose Node Construction
 
 NODE_CONSTRUCTION = "node_construction"
@@ -96,6 +157,11 @@ def propose_node_construction(
     underscores. Cypher keywords such as Order or END are fine. The unique column
     may be any header of the approved file, spelled as the file spells it (such as
     'Order ID' or 'customer-id'): do not rename or reformat it.
+
+    The plan holds one rule per name. If the label is already the type of a
+    relationship rule in the plan, the proposal is refused and that rule is left
+    as it is: choose another label. Proposing a node under a label another node
+    already has still replaces that node.
 
     The unique column must be exactly one of the approved file's header names,
     letter for letter and in the same case. If it is not, the proposal is refused
@@ -156,6 +222,14 @@ def propose_node_construction(
     problem = node_rule_name_problem(node_construction_rule)
     if problem is not None:
         return tool_error(_refusal(problem))
+
+    # A name the other kind holds (KG-39): found from the plan alone, so before
+    # any file is read.
+    collision = _collision_refusal(
+        tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {}), proposed_label, "node"
+    )
+    if collision is not None:
+        return tool_error(collision)
 
     # Exact header match, as the build does (KG-50).
     column_error = check_columns_in_header(approved_file, [unique_column_name])
@@ -226,6 +300,9 @@ def propose_node_constructions(
 def remove_node_construction(node_label: str, tool_context: ToolContext) -> dict:
     """Remove a node construction from the proposed construction plan based on label.
 
+    If the label belongs to a relationship rule, nothing is removed and the error
+    names 'remove_relationship_construction'.
+
     Args:
         node_label: The label of the node construction to remove
         tool_context: The tool context
@@ -239,6 +316,9 @@ def remove_node_construction(node_label: str, tool_context: ToolContext) -> dict
                 The 'error_message' may have instructions about how to handle the error.
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
+    wrong_kind = _wrong_kind_removal_refusal(construction_plan, node_label, "node")
+    if wrong_kind is not None:
+        return tool_error(wrong_kind)
     if node_label not in construction_plan:
         return tool_success(
             "node_construction_removed",
@@ -296,6 +376,11 @@ def propose_relationship_construction(
     END are fine. A join column, and a matched node property, may be any text the
     file or node holds, spelled exactly (such as 'Order ID' or 'customer-id'): do
     not rename or reformat it.
+
+    The plan holds one rule per name. If the type is already the label of a node
+    rule in the plan, the proposal is refused and that rule is left as it is:
+    choose another type. Proposing a relationship under a type another
+    relationship already has still replaces that relationship.
 
     Both join columns must be exactly header names of the approved file, letter
     for letter and in the same case. If either is not, the proposal is refused and
@@ -377,6 +462,15 @@ def propose_relationship_construction(
     if problem is not None:
         return tool_error(_refusal(problem, matched=matched))
 
+    # A name the other kind holds (KG-39): see propose_node_construction.
+    collision = _collision_refusal(
+        tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {}),
+        proposed_relationship_type,
+        "relationship",
+    )
+    if collision is not None:
+        return tool_error(collision)
+
     # Exact header match, as the build does (KG-50), for both join columns at once.
     column_error = check_columns_in_header(
         approved_file, [from_node_column, to_node_column]
@@ -449,6 +543,9 @@ def remove_relationship_construction(
 ) -> dict:
     """Remove a relationship construction from the proposed construction plan based on type.
 
+    If the type belongs to a node rule, nothing is removed and the error names
+    'remove_node_construction'.
+
     Args:
         relationship_type: The type of the relationship construction to remove
         tool_context: The tool context
@@ -462,6 +559,11 @@ def remove_relationship_construction(
     """
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
 
+    wrong_kind = _wrong_kind_removal_refusal(
+        construction_plan, relationship_type, "relationship"
+    )
+    if wrong_kind is not None:
+        return tool_error(wrong_kind)
     if relationship_type not in construction_plan:
         return tool_success(
             "relationship_construction_removed",

@@ -13,6 +13,7 @@ Two layers are covered here:
   * approval now mechanically refuses the inconsistent plan the drift produced.
 """
 
+import copy
 import json
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from agentic_kg.tools.construction_plan_tools import (
     propose_relationship_construction,
     propose_relationship_constructions,
     remove_node_construction,
+    remove_relationship_construction,
 )
 from agentic_kg.tools.file_tools import APPROVED_FILES
 from agentic_kg.tools.node_key_check import NodeKeySummary
@@ -141,6 +143,193 @@ def test_get_proposed_plan_reflects_state_not_a_snapshot(ctx, any_column_exists)
     propose_node_construction("products.csv", "Product", "product_id", [], ctx)
     assert set(get_proposed_construction_plan(ctx)) == {"Supplier", "Product"}
     assert first is ctx.state[PROPOSED_CONSTRUCTION_PLAN]
+
+
+# --- one name, one rule (KG-39) ---------------------------------------------
+#
+# The plan is one map keyed by name, so a node label and a relationship type
+# that are spelled alike would share a key. Before KG-39 the second proposal
+# replaced the first without a word, and a remove by that name took out
+# whichever kind held it.
+
+
+def _propose_supplier_node(ctx):
+    return propose_node_construction(
+        "suppliers.csv", "Supplier", "supplier_id", ["name"], ctx
+    )
+
+
+def _propose_relationship(ctx, relationship_type, approved_file="supplies.csv"):
+    return propose_relationship_construction(
+        approved_file,
+        relationship_type,
+        "Supplier",
+        "supplier_id",
+        "Product",
+        "product_id",
+        [],
+        ctx,
+    )
+
+
+def test_relationship_named_like_a_node_is_refused_and_the_node_stays(
+    ctx, any_column_exists
+):
+    _propose_supplier_node(ctx)
+    before = copy.deepcopy(get_proposed_construction_plan(ctx))
+
+    result = _propose_relationship(ctx, "Supplier")
+
+    assert result["status"] == "error"
+    message = result["error_message"]
+    assert "node rule named 'Supplier'" in message
+    assert "different type" in message
+    assert "unchanged" in message
+    assert get_proposed_construction_plan(ctx) == before
+
+
+def test_node_named_like_a_relationship_is_refused_and_the_relationship_stays(
+    ctx, any_column_exists
+):
+    _propose_relationship(ctx, "Supplier")
+    before = copy.deepcopy(get_proposed_construction_plan(ctx))
+
+    result = _propose_supplier_node(ctx)
+
+    assert result["status"] == "error"
+    message = result["error_message"]
+    assert "relationship rule named 'Supplier'" in message
+    # Renaming the node can leave relationships pointing at its old label, so the
+    # refusal offers the other way out as well (see the node-side wording).
+    assert "rename this label" in message
+    assert "refers to it" in message
+    assert "remove_relationship_construction" in message
+    assert get_proposed_construction_plan(ctx) == before
+
+
+def test_a_refused_collision_costs_no_file_read(ctx, monkeypatch):
+    """The collision is found from the plan alone, before the header and key reads."""
+    checked = []
+    _only_these_columns_are_headers(monkeypatch, {"supplier_id", "product_id"}, checked)
+    _propose_supplier_node(ctx)
+    checked.clear()
+
+    assert _propose_relationship(ctx, "Supplier")["status"] == "error"
+    assert checked == []
+
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = {}
+    _propose_relationship(ctx, "Supplier")
+    checked.clear()
+
+    assert _propose_supplier_node(ctx)["status"] == "error"
+    assert checked == []
+
+
+def test_remove_node_by_a_name_only_a_relationship_holds_removes_nothing(
+    ctx, any_column_exists
+):
+    _propose_relationship(ctx, "Supplier")
+    before = copy.deepcopy(get_proposed_construction_plan(ctx))
+
+    result = remove_node_construction("Supplier", ctx)
+
+    assert result["status"] == "error"
+    assert "relationship rule" in result["error_message"]
+    assert "remove_relationship_construction" in result["error_message"]
+    assert get_proposed_construction_plan(ctx) == before
+
+
+def test_remove_relationship_by_a_name_only_a_node_holds_removes_nothing(
+    ctx, any_column_exists
+):
+    _propose_supplier_node(ctx)
+    before = copy.deepcopy(get_proposed_construction_plan(ctx))
+
+    result = remove_relationship_construction("Supplier", ctx)
+
+    assert result["status"] == "error"
+    assert "node rule" in result["error_message"]
+    assert "remove_node_construction" in result["error_message"]
+    assert get_proposed_construction_plan(ctx) == before
+
+
+def test_remove_of_the_right_kind_still_removes(ctx, any_column_exists):
+    _propose_supplier_node(ctx)
+    _propose_relationship(ctx, "SUPPLIES")
+
+    assert remove_node_construction("Supplier", ctx)["status"] == "success"
+    assert remove_relationship_construction("SUPPLIES", ctx)["status"] == "success"
+    assert get_proposed_construction_plan(ctx) == {}
+
+
+def test_remove_of_a_name_nobody_holds_is_still_a_harmless_success(ctx):
+    node = remove_node_construction("Nothing", ctx)
+    relationship = remove_relationship_construction("Nothing", ctx)
+
+    assert node["status"] == relationship["status"] == "success"
+    assert "removal not needed" in node["node_construction_removed"]
+    assert "removal not needed" in relationship["relationship_construction_removed"]
+
+
+def test_re_proposing_a_relationship_under_its_own_type_still_replaces(
+    ctx, any_column_exists
+):
+    _propose_relationship(ctx, "SUPPLIES", "supplies.csv")
+    _propose_relationship(ctx, "SUPPLIES", "supplies_2025.csv")
+
+    plan = get_proposed_construction_plan(ctx)
+    assert list(plan) == ["SUPPLIES"]
+    assert plan["SUPPLIES"]["source_file"] == "supplies_2025.csv"
+
+
+def test_a_colliding_batch_entry_fails_with_its_index_and_keeps_earlier_entries(
+    ctx, any_column_exists
+):
+    _propose_supplier_node(ctx)
+    before_node = copy.deepcopy(get_proposed_construction_plan(ctx)["Supplier"])
+
+    def entry(relationship_type):
+        return {
+            "approved_file": "supplies.csv",
+            "proposed_relationship_type": relationship_type,
+            "from_node_label": "Supplier",
+            "from_node_column": "supplier_id",
+            "to_node_label": "Product",
+            "to_node_column": "product_id",
+            "proposed_properties": [],
+        }
+
+    result = propose_relationship_constructions(
+        [entry("SUPPLIES"), entry("Supplier")], ctx
+    )
+
+    assert result["status"] == "error"
+    assert result["error_message"].startswith(
+        "relationship construction 1 (Supplier) failed:"
+    )
+    plan = get_proposed_construction_plan(ctx)
+    assert set(plan) == {"Supplier", "SUPPLIES"}
+    assert plan["Supplier"] == before_node
+
+
+def test_an_entry_of_no_known_kind_does_not_count_as_a_collision(
+    ctx, any_column_exists
+):
+    """Only the propose tools write the plan, so this cannot arise in a session;
+    the tools must still behave as they did before for it, not guess a kind."""
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN] = {
+        "Odd": {"label": "Odd"},
+        "Junk": "not a rule",
+    }
+
+    assert _propose_relationship(ctx, "Odd")["status"] == "success"
+    assert (
+        propose_node_construction("junk.csv", "Junk", "junk_id", [], ctx)["status"]
+        == "success"
+    )
+    ctx.state[PROPOSED_CONSTRUCTION_PLAN]["Stale"] = {"label": "Stale"}
+    assert remove_node_construction("Stale", ctx)["status"] == "success"
+    assert "Stale" not in get_proposed_construction_plan(ctx)
 
 
 # --- batch proposal ---------------------------------------------------------
