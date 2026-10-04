@@ -4,14 +4,22 @@ This module is where correctness lives for KG-7: every other piece is wiring.
 It needs no database and no source files.
 """
 
+from datetime import timedelta
+
+import pytest
+from neo4j import time as neo4j_time
+
 from agentic_kg.common.value_types import (
     BARE_NUMERIC,
     BLANK,
     BOOLEAN,
     BOOLEAN_LIKE,
     CONVERTED,
+    DATE,
+    DATETIME,
     FLOAT,
     INTEGER,
+    LOCALDATETIME,
     NUMERIC_AFTER_CLEANING,
     TEXT,
     UNCONVERTIBLE,
@@ -19,6 +27,7 @@ from agentic_kg.common.value_types import (
     coerce,
     has_fractional_part,
     is_blank,
+    parse_temporal,
 )
 
 
@@ -249,3 +258,147 @@ def test_classify_still_prefers_boolean_for_a_genuine_flag():
     real 0/1 flag has nothing else in the column."""
     assert classify(["1", "0", "1", "1", "0"]) == BOOLEAN_LIKE
     assert classify(["yes", "no", "yes", "5"]) == BOOLEAN_LIKE
+
+
+# --- temporal types (KG-31) ---------------------------------------------------
+
+ACCEPTED = [
+    ("2025-03-04", DATE),
+    ("9999-12-31", DATE),
+    ("0001-01-01", DATE),
+    ("2025-03-04T10:11", LOCALDATETIME),
+    ("2025-03-04 10:11:12", LOCALDATETIME),
+    ("2025-03-04T10:11:12.1", LOCALDATETIME),
+    ("2025-03-04T10:11:12.123456789", LOCALDATETIME),
+    ("2025-03-04T10:11:12Z", DATETIME),
+    ("2025-03-04T10:11:12.123456789+01:00", DATETIME),
+    ("2025-03-04T10:11-05:30", DATETIME),
+    ("2025-03-04T10:11:12+18:00", DATETIME),
+    ("2025-03-04T10:11:12-00:00", DATETIME),
+    ("9999-12-31T23:59:59+01:00", DATETIME),
+    ("0001-01-01T00:00:00-01:00", DATETIME),
+    ("9999-12-31T23:59:59Z", DATETIME),
+]
+
+
+@pytest.mark.parametrize("text, kind", ACCEPTED)
+def test_parse_temporal_reads_each_shape_as_its_own_kind(text, kind):
+    parsed = parse_temporal(text)
+    assert parsed is not None, text
+    assert parsed[0] == kind
+
+
+REFUSED = [
+    # other date spellings: guessing which one is meant stores a wrong date
+    "03/04/2025",
+    "20250304",
+    "2025-W10-2",
+    "2025-063",
+    "20250304T101112",
+    "25-03-04",
+    "2025-3-4",
+    # separators and case: only 'T' or one space, only upper-case 'Z'
+    "2025-03-04t10:11",
+    "2025-03-04T10:11:12z",
+    "2025-03-04  10:11",
+    "2025-03-04T10:11:12,5",
+    "2025-03-04T10:11:12+0100",
+    # ranges the grammar cannot express
+    "2025-03-04T24:00:00",
+    "2025-03-04T23:59:60",
+    "2025-03-04T10:11:12.1234567890",
+    "2025-03-04T10:11.5",
+    "2025-03-04T10",
+    "2025-03-04Z",
+    "2025-03-04T10:11:12+05:75",
+    # offsets the server refuses
+    "2025-03-04T10:11:12+18:01",
+    "2025-03-04T10:11:12+23:59",
+    # not real dates
+    "2025-02-30",
+    "0000-01-01",
+    # Unicode digits: \d would match these, int() would convert them
+    "٢٠٢٥-٠٣-٠٤",
+    # a time with no date
+    "15:15:00",
+    "",
+    "2025-03-04\n",
+]
+
+
+@pytest.mark.parametrize("text", REFUSED)
+def test_parse_temporal_refuses_everything_outside_the_grammar(text):
+    assert parse_temporal(text) is None
+
+
+def test_the_temporal_type_names_mirror_cypher():
+    assert (DATE, DATETIME, LOCALDATETIME) == ("date", "datetime", "localdatetime")
+
+
+def test_coerce_stores_a_date_as_a_neo4j_date():
+    assert coerce("2025-03-04", DATE) == (neo4j_time.Date(2025, 3, 4), CONVERTED)
+
+
+@pytest.mark.parametrize(
+    "digits",
+    ["1", "12", "123", "1234", "12345", "123456", "1234567", "12345678", "123456789"],
+)
+@pytest.mark.parametrize(
+    "suffix, declared", [("", LOCALDATETIME), ("Z", DATETIME), ("+01:00", DATETIME)]
+)
+def test_every_fractional_digit_is_kept(digits, suffix, declared):
+    """fromisoformat truncates .123456789 to six digits with no error; the whole
+    point of the strict pattern is that it never does."""
+    value, outcome = coerce(f"2025-03-04T10:11:12.{digits}{suffix}", declared)
+    assert outcome == CONVERTED
+    assert value.nanosecond == int(digits.ljust(9, "0"))
+
+
+def test_a_zoned_value_keeps_its_offset_as_written():
+    expected = {
+        "2025-03-04T10:11:12+01:00": timedelta(hours=1),
+        "2025-03-04T10:11:12-05:30": -timedelta(hours=5, minutes=30),
+        "2025-03-04T10:11:12Z": timedelta(0),
+    }
+    for text, offset in expected.items():
+        value, outcome = coerce(text, DATETIME)
+        assert outcome == CONVERTED
+        assert value.utcoffset() == offset, text
+
+
+@pytest.mark.parametrize(
+    "text, declared",
+    [
+        ("2025-03-04", DATETIME),
+        ("2025-03-04", LOCALDATETIME),
+        ("2025-03-04T10:11:12", DATE),
+        ("2025-03-04T10:11:12Z", DATE),
+        ("2025-03-04T10:11:12Z", LOCALDATETIME),
+        ("2025-03-04T10:11:12", DATETIME),
+    ],
+)
+def test_each_type_takes_only_its_own_shape(text, declared):
+    assert coerce(text, declared) == (None, UNCONVERTIBLE)
+
+
+@pytest.mark.parametrize(
+    "text", ["9999-12-31T23:59:59-01:00", "0001-01-01T00:00:00+01:00"]
+)
+def test_a_zoned_value_whose_utc_instant_does_not_exist_is_unconvertible(text):
+    """These construct fine in Python. The driver then converts to UTC while
+    packing and raises, which fails the whole batch 'after N rows committed'.
+    9999-12-31 is a common 'no end date' value in real exports."""
+    assert parse_temporal(text) is None
+    assert coerce(text, DATETIME) == (None, UNCONVERTIBLE)
+
+
+def test_a_temporal_value_tolerates_surrounding_whitespace_but_not_inner_space():
+    assert coerce("  2025-03-04  ", DATE)[1] == CONVERTED
+    assert coerce(" 2025-03-04T10:11:12Z ", DATETIME)[1] == CONVERTED
+    assert coerce("2025-03-04  10:11:12", LOCALDATETIME) == (None, UNCONVERTIBLE)
+
+
+def test_a_blank_temporal_cell_is_blank_not_unconvertible():
+    for declared in (DATE, DATETIME, LOCALDATETIME):
+        for value in ("", "   ", None):
+            assert coerce(value, declared) == (None, BLANK), (declared, value)
