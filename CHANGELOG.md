@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.10.1] - 2026-10-04
 
 ### Fixed
-- **A node could be proposed on a key whose rows would collapse (KG-48)**: a node keyed on a column that
+- **A node could be proposed on a key whose rows would collapse (#81, KG-48)**: a node keyed on a column that
   repeats or has blank values was accepted, and the build then silently merged the rows sharing a key into
   fewer nodes, keeping one row's values (an order-line node keyed by order held 830 nodes for 2155 rows).
   Proposing a node now refuses a key with a blank value, and a repeating key whose rows disagree on a
