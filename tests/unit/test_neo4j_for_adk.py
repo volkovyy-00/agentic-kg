@@ -7,11 +7,14 @@ driver/session boundary, so the real send_query body runs.
 """
 
 import logging
+from datetime import timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
+from neo4j import time as neo4j_time
 
 from agentic_kg.common import neo4j_for_adk
-from agentic_kg.common.neo4j_for_adk import Neo4jForADK, is_write_query
+from agentic_kg.common.neo4j_for_adk import Neo4jForADK, is_write_query, to_python
 
 
 class FakeResult:
@@ -476,3 +479,43 @@ def test_get_config_reconnects_after_close(db, monkeypatch):
 
     assert db.get_config() is fresh
     assert db._closed is False
+
+
+def _zoned(offset_minutes):
+    return neo4j_time.DateTime(
+        2025, 3, 4, 1, 2, 3, 0, tzinfo=timezone(timedelta(minutes=offset_minutes))
+    )
+
+
+@pytest.mark.parametrize(
+    "offset_minutes, suffix",
+    [
+        (-330, "-05:30"),
+        (-210, "-03:30"),
+        (-30, "-00:30"),
+        (330, "+05:30"),
+        (0, "+00:00"),
+        (60, "+01:00"),
+        (-480, "-08:00"),
+        (1080, "+18:00"),
+    ],
+)
+def test_to_python_reports_the_offset_that_was_stored(offset_minutes, suffix):
+    """DateTime.iso_format() prints a stored -05:30 as -06:30 and -03:30 as
+    -04:30, so the GraphRAG agent would be shown an offset an hour out. Z reads
+    back as +00:00, as it always did."""
+    assert to_python(_zoned(offset_minutes)) == "2025-03-04T01:02:03.000000000" + suffix
+
+
+def test_to_python_reports_a_named_zone_by_its_offset():
+    """Newfoundland is UTC-3:30 in early March; values with a named zone already
+    exist in other graphs."""
+    value = neo4j_time.DateTime(
+        2025, 3, 4, 1, 2, 3, 0, tzinfo=ZoneInfo("America/St_Johns")
+    )
+    assert to_python(value) == "2025-03-04T01:02:03.000000000-03:30"
+
+
+def test_to_python_keeps_all_nine_digits_of_a_local_datetime():
+    value = neo4j_time.DateTime(2025, 3, 4, 10, 11, 12, 123456789)
+    assert to_python(value) == "2025-03-04T10:11:12.123456789"

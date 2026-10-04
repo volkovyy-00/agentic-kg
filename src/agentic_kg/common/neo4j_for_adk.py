@@ -117,6 +117,27 @@ def result_to_adk(result: Result) -> Dict[str, Any]:
     return tool_success("records", records)
 
 
+def _datetime_text(value) -> str:
+    """ISO text for a neo4j.time.DateTime that keeps the stored offset.
+
+    DateTime.iso_format() prints a negative half-hour offset an hour out (a
+    stored -05:30 as -06:30), so the offset is written from utcoffset(), which is
+    right, and also covers named zones. A local value has no offset and keeps
+    iso_format(), nine fractional digits included.
+    """
+    offset = value.utcoffset()
+    if offset is None:
+        return value.iso_format()
+    seconds = int(offset.total_seconds())
+    sign = "-" if seconds < 0 else "+"
+    hours, remainder = divmod(abs(seconds), 3600)
+    minutes, leftover = divmod(remainder, 60)
+    zone = f"{sign}{hours:02d}:{minutes:02d}"
+    if leftover:
+        zone += f":{leftover:02d}"
+    return value.replace(tzinfo=None).iso_format() + zone
+
+
 def to_python(value):
     import neo4j.time
     from neo4j import Record
@@ -133,7 +154,7 @@ def to_python(value):
     elif isinstance(value, (list, tuple)):
         return [to_python(v) for v in value]
     elif isinstance(value, neo4j.time.DateTime):
-        return value.iso_format()
+        return _datetime_text(value)
     elif isinstance(value, (neo4j.time.Date, neo4j.time.Time, neo4j.time.Duration)):
         return str(value)
     else:
