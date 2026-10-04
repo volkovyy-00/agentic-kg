@@ -17,6 +17,7 @@ from .kg_construction_tools import (
     node_rule_name_problem,
     required_relationship_name_problem,
 )
+from .node_key_check import node_key_refusal, summarize_node_key
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -101,6 +102,13 @@ def propose_node_construction(
     and the error lists the file's headers: choose one of them rather than trying
     another spelling.
 
+    The unique column must have a value in every row. It may repeat across rows
+    only if the rows sharing a value agree on every property you list for the node,
+    because the build keeps one node per value and one row's values on it. If it
+    does not, the proposal is refused: the error gives the row, distinct and blank
+    counts and names the properties that disagree. Choose another key, model the
+    file as a relationship, or leave those properties off the node.
+
     Args:
         approved_file: The approved file to propose a node construction for
         proposed_label: The proposed label for constructed nodes (used as key in the construction plan)
@@ -153,6 +161,20 @@ def propose_node_construction(
     column_error = check_columns_in_header(approved_file, [unique_column_name])
     if column_error is not None:
         return column_error
+
+    # Then the key's own values, and the properties of a repeating key (KG-48).
+    # After the names and the header, so a bad name never costs a data read.
+    key_summary, key_error = summarize_node_key(
+        approved_file, unique_column_name, declared_properties(node_construction_rule)
+    )
+    if key_error is not None:
+        return key_error
+    assert key_summary is not None
+    key_refusal = node_key_refusal(
+        proposed_label, approved_file, unique_column_name, key_summary
+    )
+    if key_refusal is not None:
+        return tool_error(key_refusal)
 
     # get the current construction plan, or an empty one if none exists
     construction_plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
