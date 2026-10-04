@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.10.0] - 2026-10-04
 
 ### Added
-- **Plans can declare a property `date`, `datetime` or `localdatetime` (#NN, KG-31)**: every date column
+- **Plans can declare a property `date`, `datetime` or `localdatetime` (#80, KG-31)**: every date column
   reached the graph as text, so it could not be compared, sorted or subtracted as a date. A build now stores
   a real Neo4j DATE, zoned DATE_TIME or LOCAL_DATE_TIME when the plan declares one, keeping up to nine
   fractional digits and the offset as written. Each type accepts only its own ISO shape; any other value,
@@ -20,7 +20,7 @@ There is no `[Unreleased]` section.
   most of the non-blank values, and the proposer, critic and GraphRAG prompts describe the types.
 
 ### Fixed
-- **A stored negative half-hour offset was shown an hour out (#NN, KG-31)**: query results printed a
+- **A stored negative half-hour offset was shown an hour out (#80, KG-31)**: query results printed a
   datetime stored at `-05:30` as `-06:30` (and `-03:30` as `-04:30`), so the GraphRAG agent could be told
   the wrong offset. The offset is now shown as stored.
 
