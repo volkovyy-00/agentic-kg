@@ -7,6 +7,7 @@ failures propagate, without a Neo4j instance.
 import logging
 
 import pytest
+from neo4j import time as neo4j_time
 
 from agentic_kg.common.cypher_identifiers import quote
 from agentic_kg.common.value_types import CONVERTED, UNCONVERTIBLE
@@ -1722,3 +1723,72 @@ def test_a_load_failure_counts_only_the_rows_it_sent(monkeypatch):
     monkeypatch.setattr(kg, "graphdb", db)
     message = kg.import_relationships(dict(ITEM_REL_RULE))["error_message"]
     assert "load failed after 1 rows committed" in message
+
+
+# --- temporal types (KG-31) ---------------------------------------------------
+
+
+@pytest.fixture
+def dated_batch(monkeypatch):
+    def fake_batches(relative_path, batch_size=1000):
+        yield (
+            ["id", "when"],
+            [
+                {"id": "1", "when": "2025-03-04"},
+                {"id": "2", "when": "03/04/2025"},
+            ],
+        )
+
+    monkeypatch.setattr(kg, "read_csv_batches", fake_batches)
+
+
+def test_a_date_is_sent_as_a_real_date_and_a_misspelt_one_is_cleared(
+    fake_db, dated_batch
+):
+    """A date left as a string cannot be compared or sorted as a date -- the
+    defect itself. The second row is a day/month value the grammar refuses: it is
+    counted, and cleared rather than guessed."""
+    result = kg.load_nodes_from_csv("p.csv", "P", "id", ["when"], {"when": "date"})
+
+    assert result["status"] == "success"
+    _query, params = fake_db.queries[0]
+    assert params["rows"][0]["when"] == neo4j_time.Date(2025, 3, 4)
+    assert params["rows"][1]["when"] == kg.CLEAR_SENTINEL
+    assert result["rows_loaded"]["type_conversion"]["when"][UNCONVERTIBLE] == 1
+
+
+MIXED_WHEN = [
+    "2025-03-04T10:11:12Z",
+    "03/04/2025",
+    "",
+    "2025-03-05T10:11:12.123456789+01:00",
+    "2025-03-05",
+    "9999-12-31T23:59:59-01:00",
+    "  2025-03-06T01:02:03-05:30 ",
+    "2025-03-04T10:11:12",
+    "x",
+    "",
+]
+
+
+def _converted_in_batches(size):
+    rows = [{"id": str(n), "when": value} for n, value in enumerate(MIXED_WHEN)]
+    converted = []
+    for start in range(0, len(rows), size):
+        batch_rows, _tallies = kg._coerce_batch(
+            rows[start : start + size], {"when": "datetime"}
+        )
+        converted.extend(batch_rows)
+    return converted
+
+
+def test_temporal_conversion_does_not_depend_on_batch_size():
+    """Conversion is a pure function of one value, so two batch sizes store and
+    clear the same values. (The refusal GATE is deliberately batch-aware, so on a
+    file that trips it the abort point may differ; this file is converted without
+    the gate.)"""
+    whole = _converted_in_batches(len(MIXED_WHEN))
+    for size in (1, 3, 7):
+        assert _converted_in_batches(size) == whole, size
+    cleared = [row["when"] == kg.CLEAR_SENTINEL for row in whole]
+    assert cleared == [False, True, True, False, True, True, False, True, True, True]
