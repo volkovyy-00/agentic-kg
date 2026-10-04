@@ -880,11 +880,12 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
               'localdatetime', or null when the column is text). 'date' is a day
               ('2025-03-04'), 'datetime' a timestamp with an offset or Z, and
               'localdatetime' a timestamp with neither; a type takes only its
-              own shape, so a column that mixes them gets the majority's type
-              and reports the others as unconvertible,
-              'convertible_count', 'blank_count' (empty cells: cleared if you
-              declare a type for the property, stored as an empty string if you
-              leave it text), 'missing_count' (rows too short to reach this
+              own shape, so a column that mixes them is suggested a type only
+              when one kind alone is a strict majority, and the other values are
+              then reported as unconvertible. Also 'convertible_count',
+              'blank_count' (empty cells: cleared if you declare a type for the
+              property, stored as an empty string if you leave it text),
+              'missing_count' (rows too short to reach this
               column, which the build leaves untouched either way),
               'unconvertible_count' and up to three 'example_unconvertible'
               values.

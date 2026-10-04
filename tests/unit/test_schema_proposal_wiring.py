@@ -163,9 +163,8 @@ def test_the_type_name_match_does_not_take_date_from_datetime():
 def test_every_allowed_type_is_named_in_the_tool_description(fn):
     """The closed set lives in value_types.ALLOWED_TYPES, but the model only
     ever learns it from prose -- these docstrings are the tool descriptions ADK
-    sends. Adding a fourth type (dates are the named candidate) to the constant
-    without touching the text leaves the model told it is illegal, and the
-    consistency check would accept a type the model never proposes."""
+    sends. Any new entry in ALLOWED_TYPES must be named, as a whole quoted
+    word, in both descriptions, or the model is never told it may propose it."""
     for allowed in ALLOWED_TYPES:
         assert names_type(fn.__doc__, allowed), allowed
 

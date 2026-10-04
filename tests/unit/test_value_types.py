@@ -4,7 +4,7 @@ This module is where correctness lives for KG-7: every other piece is wiring.
 It needs no database and no source files.
 """
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 import pytest
 from neo4j import time as neo4j_time
@@ -367,6 +367,50 @@ def test_a_zoned_value_keeps_its_offset_as_written():
         value, outcome = coerce(text, DATETIME)
         assert outcome == CONVERTED
         assert value.utcoffset() == offset, text
+
+
+def _fields(value):
+    """Every date and clock field plus the offset, as a tuple.
+
+    DateTime.__eq__ compares two zoned values by UTC instant when their offsets
+    differ, so 10:11-05:30 equals 15:41Z. Comparing fields and offset as well
+    pins what was written, not just when it was.
+    """
+    return (
+        value.year,
+        value.month,
+        value.day,
+        value.hour,
+        value.minute,
+        value.second,
+        value.nanosecond,
+        value.utcoffset(),
+    )
+
+
+def test_a_zoned_value_keeps_every_field_it_was_written_with():
+    """Distinct month/day and hour/minute/second, so a swapped group fails."""
+    value, outcome = coerce("2025-03-04T10:11:12.123456789-05:30", DATETIME)
+    assert outcome == CONVERTED
+    zone = timezone(-timedelta(hours=5, minutes=30))
+    assert value == neo4j_time.DateTime(2025, 3, 4, 10, 11, 12, 123456789, tzinfo=zone)
+    assert _fields(value) == (
+        2025,
+        3,
+        4,
+        10,
+        11,
+        12,
+        123456789,
+        -timedelta(hours=5, minutes=30),
+    )
+
+
+def test_a_local_value_keeps_every_field_it_was_written_with():
+    value, outcome = coerce("2025-03-04 10:11:12.5", LOCALDATETIME)
+    assert outcome == CONVERTED
+    assert value == neo4j_time.DateTime(2025, 3, 4, 10, 11, 12, 500000000)
+    assert _fields(value) == (2025, 3, 4, 10, 11, 12, 500000000, None)
 
 
 @pytest.mark.parametrize(
