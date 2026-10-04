@@ -11,6 +11,7 @@ from datetime import timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+import pytz
 from neo4j import time as neo4j_time
 
 from agentic_kg.common import neo4j_for_adk
@@ -512,6 +513,15 @@ def test_to_python_reports_a_named_zone_by_its_offset():
     exist in other graphs."""
     value = neo4j_time.DateTime(
         2025, 3, 4, 1, 2, 3, 0, tzinfo=ZoneInfo("America/St_Johns")
+    )
+    assert to_python(value) == "2025-03-04T01:02:03.000000000-03:30"
+
+
+def test_to_python_reports_a_driver_hydrated_named_zone_by_its_offset():
+    """The driver hydrates a named zone with pytz (zone.localize(...)), so this
+    is the shape a query result actually has."""
+    value = pytz.timezone("America/St_Johns").localize(
+        neo4j_time.DateTime(2025, 3, 4, 1, 2, 3, 0)
     )
     assert to_python(value) == "2025-03-04T01:02:03.000000000-03:30"
 

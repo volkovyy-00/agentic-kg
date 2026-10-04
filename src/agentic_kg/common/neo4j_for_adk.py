@@ -124,8 +124,15 @@ def _datetime_text(value) -> str:
     stored -05:30 as -06:30), so the offset is written from utcoffset(), which is
     right, and also covers named zones. A local value has no offset and keeps
     iso_format(), nine fractional digits included.
+
+    The offset is read from value.to_native(), a real datetime.datetime.
+    neo4j.time.DateTime is not a datetime subclass, and a C-implemented tzinfo
+    (zoneinfo.ZoneInfo) handed one reads its memory as a datetime: a wrong
+    offset, or a segfault that depends on heap state. The driver itself hydrates
+    named zones with pytz, which is safe either way; this guards a value built
+    by hand. Nanoseconds are dropped by to_native(), which the offset ignores.
     """
-    offset = value.utcoffset()
+    offset = value.to_native().utcoffset()
     if offset is None:
         return value.iso_format()
     seconds = int(offset.total_seconds())
