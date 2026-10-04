@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.10.2] - 2026-10-04
 
 ### Fixed
-- **A relationship named like a node label replaced that node's rule (KG-39)**: the proposed plan files every
+- **A relationship named like a node label replaced that node's rule (#82, KG-39)**: the proposed plan files every
   rule under its name, so proposing a relationship whose type equals an existing node label (or a node
   whose label equals a relationship type) replaced the other rule, reported success, and the graph was
   built without it. Proposing now refuses a name the other kind already holds, leaves that rule in the
