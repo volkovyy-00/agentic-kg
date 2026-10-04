@@ -40,9 +40,7 @@ DATE = "date"
 DATETIME = "datetime"  # zoned: carries an offset or Z
 LOCALDATETIME = "localdatetime"  # no offset
 TEMPORAL_TYPES = (DATE, DATETIME, LOCALDATETIME)
-# ALLOWED_TYPES stays at the first three until the prompts and tool descriptions
-# name the new ones (Task 4): the tests that keep them in step fail otherwise.
-ALLOWED_TYPES = (INTEGER, FLOAT, BOOLEAN)
+ALLOWED_TYPES = (INTEGER, FLOAT, BOOLEAN, *TEMPORAL_TYPES)
 
 # What a column's values look like. Reported to the model as evidence; never
 # used to decide a type at write time.

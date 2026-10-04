@@ -83,8 +83,11 @@ def propose_node_construction(
     - unique_column_name: the name of the column that will be used to uniquely identify constructed nodes
     - properties: A list of property names for the node, derived from column names in the approved file
     - property_types: An optional map of property name to declared type, one of
-      "integer", "float" or "boolean". A property absent from this map is stored
-      as text. Never declare a type for the unique_column_name, or for any column
+      "integer", "float", "boolean", "date", "datetime" or "localdatetime". A
+      property absent from this map is stored as text. "date" is a day
+      ("2025-03-04"); "datetime" is a timestamp with an offset or Z;
+      "localdatetime" is one with neither. Declare the type column_type_hint
+      reports. Never declare a type for the unique_column_name, or for any column
       a relationship joins on -- both are compared as raw text and typing them
       makes the join match nothing.
 
@@ -105,7 +108,8 @@ def propose_node_construction(
         proposed_properties: The columns of the approved file to store on each
             constructed node
         proposed_property_types: Optional map of property name to "integer",
-            "float" or "boolean". Omit or pass {} to store every property as text.
+            "float", "boolean", "date", "datetime" or "localdatetime". Omit or
+            pass {} to store every property as text.
 
     Returns:
         dict: A dictionary containing metadata about the content.
@@ -256,8 +260,11 @@ def propose_relationship_construction(
 
     The construction entry will be a dictionary with the following keys:
     - property_types: An optional map of property name to declared type, one of
-      "integer", "float" or "boolean". A property absent from this map is stored
-      as text. Never declare a type for from_node_column or to_node_column: they
+      "integer", "float", "boolean", "date", "datetime" or "localdatetime". A
+      property absent from this map is stored as text. "date" is a day
+      ("2025-03-04"); "datetime" is a timestamp with an offset or Z;
+      "localdatetime" is one with neither. Declare the type column_type_hint
+      reports. Never declare a type for from_node_column or to_node_column: they
       are compared against the stored node property as raw text, so typing them
       makes the relationship match nothing. The same holds for the node property
       an end is matched on: declare no type for it on its node either.
@@ -285,7 +292,8 @@ def propose_relationship_construction(
         proposed_properties: The columns of the approved file to store on each
             constructed relationship
         proposed_property_types: Optional map of property name to "integer",
-            "float" or "boolean". Omit or pass {} to store every property as text.
+            "float", "boolean", "date", "datetime" or "localdatetime". Omit or
+            pass {} to store every property as text.
         from_node_property: Optional. The property of the from node that the
             from_node_column value is matched against. Omit it when the from node
             stores that value under the column's own name.
