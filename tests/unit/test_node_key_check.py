@@ -245,10 +245,13 @@ def test_a_blank_key_is_refused_with_the_counts_and_a_way_forward():
     )
 
     assert text is not None
-    assert "'plot'" in text and "plots.csv" in text and "Plot" in text
+    assert "'plot'" in text
+    assert "plots.csv" in text
+    assert "Plot" in text
     assert "2155 rows, 830 distinct values, 3 blank" in text
     assert "a blank line at the end of the file counts" in text
-    assert "another key" in text and "relationship" in text
+    assert "another key" in text
+    assert "relationship" in text
     # Whitespace-only keys neither merge nor fail, so the text never says every
     # blank row merges.
     assert "every blank row" not in text
@@ -270,7 +273,9 @@ def test_a_collapsing_key_is_refused_naming_every_property_and_one_example():
     assert text is not None
     assert "2155 rows, 830 distinct values, 0 blank" in text
     assert "'unitPrice', 'quantity'" in text
-    assert "'10248'" in text and "'14.0'" in text and "'9.8'" in text
+    assert "'10248'" in text
+    assert "'14.0'" in text
+    assert "'9.8'" in text
     assert "'10249'" not in text, "only the first property is shown with an example"
     assert "another key" in text
     assert "relationship" in text

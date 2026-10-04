@@ -14,6 +14,13 @@ nothing is lost. Agreement is judged by `summarize_key_groups`, the reader behin
 `collapse_check`, so the two cannot disagree: a blank cell is a value, a missing
 cell is not.
 
+Cells are compared as written, before the loader types them, so `42` and `42.0`
+in a column declared integer count as disagreeing although the build would store
+one value. That over-refuses and never under-refuses, it is what `collapse_check`
+does too, and the refusal quotes both values so the agent can see the cause.
+Typing the cells first would need the declared types passed into the shared reader
+and would make the two disagree; it was left out on purpose (KG-48).
+
 This runs when a node is proposed and not at approval; why it is not a plan check
 is in `.claude/rules/construction-plan.md`. Its refusal has no build-time twin, so
 KG-44's rule that a proposal refuses in the build's own words does not apply.
