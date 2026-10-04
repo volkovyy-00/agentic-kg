@@ -27,6 +27,7 @@ from agentic_kg.common.value_types import (
     FLOAT,
     INTEGER,
     NUMERIC_AFTER_CLEANING,
+    TEMPORAL_SHAPE_TYPES,
     classify,
     coerce,
     has_fractional_part,
@@ -720,6 +721,8 @@ def _suggested_type(shape: str, values) -> str | None:
     it; one unstorable outlier does not cost the whole column its type, the same
     tolerance classify() already applies.
     """
+    if shape in TEMPORAL_SHAPE_TYPES:
+        return TEMPORAL_SHAPE_TYPES[shape]
     if shape == BOOLEAN_LIKE:
         return BOOLEAN
     if shape == NUMERIC_AFTER_CLEANING:
@@ -856,11 +859,18 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
     Returns:
         dict: 'status' of 'success' or 'error'. On success, a 'column_type_hint'
               key with 'path', 'column', 'shape' (one of 'bare_numeric',
-              'numeric_after_cleaning', 'boolean_like', 'text'), 'suggested_type'
-              ('integer', 'float', 'boolean', or null when the column is text),
-              'convertible_count', 'blank_count' (empty cells: cleared if you
-              declare a type for the property, stored as an empty string if you
-              leave it text), 'missing_count' (rows too short to reach this
+              'numeric_after_cleaning', 'boolean_like', 'date_like',
+              'datetime_like', 'localdatetime_like', 'text'), 'suggested_type'
+              ('integer', 'float', 'boolean', 'date', 'datetime',
+              'localdatetime', or null when the column is text). 'date' is a day
+              ('2025-03-04'), 'datetime' a timestamp with an offset or Z, and
+              'localdatetime' a timestamp with neither; a type takes only its
+              own shape, so a column that mixes them is suggested a type only
+              when one kind alone is a strict majority, and the other values are
+              then reported as unconvertible. Also 'convertible_count',
+              'blank_count' (empty cells: cleared if you declare a type for the
+              property, stored as an empty string if you leave it text),
+              'missing_count' (rows too short to reach this
               column, which the build leaves untouched either way),
               'unconvertible_count' and up to three 'example_unconvertible'
               values.

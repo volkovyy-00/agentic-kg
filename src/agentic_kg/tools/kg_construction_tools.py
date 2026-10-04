@@ -47,8 +47,9 @@ APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 # need opposite treatment: the first must leave an earlier row's value alone,
 # the second must clear a stale one. This sentinel is the signal an absent key
 # cannot produce by accident. It cannot collide with source data: a typed
-# property's row value is only ever a converted number/bool, this sentinel, or
-# an omitted key -- a raw source string never survives coercion.
+# property's row value is only ever a converted number, bool or temporal value,
+# this sentinel, or an omitted key -- a raw source string never survives
+# coercion.
 CLEAR_SENTINEL = "\x00__agentic_kg_clear__"
 
 # Above this share of a batch's present, non-blank values failing to convert,

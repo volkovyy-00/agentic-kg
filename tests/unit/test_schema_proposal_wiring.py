@@ -142,17 +142,31 @@ def test_the_matched_properties_stay_optional_in_the_declaration():
         assert name not in schema.get("required", []), name
 
 
+def names_type(text: str, name: str) -> bool:
+    """True when `name` appears as a whole quoted word ('date' or "date").
+
+    A bare substring test passes for 'date' when only 'datetime' is written, so
+    a prompt that forgot the plain date type would still look complete.
+    """
+    return re.search(rf"""(["']){re.escape(name)}\1""", text) is not None
+
+
+def test_the_type_name_match_does_not_take_date_from_datetime():
+    assert not names_type("one of 'datetime' or 'localdatetime'", "date")
+    assert names_type('"integer", "date", "datetime"', "date")
+    assert names_type("'date', 'datetime'", "datetime")
+
+
 @pytest.mark.parametrize(
     "fn", [propose_node_construction, propose_relationship_construction]
 )
 def test_every_allowed_type_is_named_in_the_tool_description(fn):
     """The closed set lives in value_types.ALLOWED_TYPES, but the model only
     ever learns it from prose -- these docstrings are the tool descriptions ADK
-    sends. Adding a fourth type (dates are the named candidate) to the constant
-    without touching the text leaves the model told it is illegal, and the
-    consistency check would accept a type the model never proposes."""
+    sends. Any new entry in ALLOWED_TYPES must be named, as a whole quoted
+    word, in both descriptions, or the model is never told it may propose it."""
     for allowed in ALLOWED_TYPES:
-        assert allowed in fn.__doc__, allowed
+        assert names_type(fn.__doc__, allowed), allowed
 
 
 @pytest.mark.parametrize(
@@ -179,7 +193,7 @@ def test_every_allowed_type_is_named_in_the_validation_rules():
     for name in ("schema_proposal_agent_v1", "schema_critic_agent_v1"):
         instruction = variants[name]["instruction"]
         for allowed in ALLOWED_TYPES:
-            assert allowed in instruction, f"{name}: {allowed}"
+            assert names_type(instruction, allowed), f"{name}: {allowed}"
 
 
 @pytest.mark.parametrize(
@@ -549,3 +563,48 @@ def test_the_critic_instruction_renders_against_a_bare_state():
     )
     template = variants["schema_critic_agent_v1"]["instruction"]
     assert asyncio.run(inject_session_state(template, ctx)) == template
+
+
+def test_the_allowed_types_are_the_six_named_ones():
+    assert ALLOWED_TYPES == (
+        "integer",
+        "float",
+        "boolean",
+        "date",
+        "datetime",
+        "localdatetime",
+    )
+
+
+def test_the_rules_name_the_hint_shape_for_each_temporal_type():
+    """The proposer must declare the kind the hint reports and never choose
+    between zoned and local from a column name."""
+    for name in ("schema_proposal_agent_v1", "schema_critic_agent_v1"):
+        instruction = variants[name]["instruction"]
+        for shape in ("date_like", "datetime_like", "localdatetime_like"):
+            assert f"'{shape}'" in instruction, f"{name}: {shape}"
+        assert "never one chosen from the column name" in " ".join(
+            instruction.split()
+        ), name
+
+
+def test_the_critic_checks_date_columns_but_never_for_keys_and_joins():
+    """A key, join column or matched property must stay text: approval refuses a
+    type on one. Without the exception a date column used as a join would send
+    the critic and the proposer in a loop."""
+    text = " ".join(variants["schema_critic_agent_v1"]["instruction"].split())
+    assert (
+        "Is a column that looks like a date or timestamp left without a declared "
+        "type?" in text
+    )
+    assert "unless the column is a node's unique identifier" in text
+    assert "those must stay text" in text
+
+
+def test_the_critic_never_pushes_a_temporal_type_that_would_clear_real_values():
+    """A 60% date / 40% zoned column is suggested 'date', and declaring it clears
+    every timestamp with only a warning. The proposer is told to read
+    'example_unconvertible' first; the critic must not then overrule it."""
+    text = " ".join(variants["schema_critic_agent_v1"]["instruction"].split())
+    assert "'localdatetime' with an 'unconvertible_count' of 0" in text
+    assert "leaving that column as text is the proposer's call" in text

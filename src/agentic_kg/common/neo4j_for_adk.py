@@ -117,6 +117,29 @@ def result_to_adk(result: Result) -> Dict[str, Any]:
     return tool_success("records", records)
 
 
+def _datetime_text(value) -> str:
+    """ISO text for a neo4j.time.DateTime that keeps the stored offset.
+
+    DateTime.iso_format() prints a negative half-hour offset an hour out (a
+    stored -05:30 as -06:30), so the offset is written from utcoffset(), which is
+    right, and also covers named zones. A local value has no offset and keeps
+    iso_format(), nine fractional digits included.
+
+    The offset is read from value.to_native(), a real datetime.datetime.
+    neo4j.time.DateTime is not a datetime subclass, and a C-implemented tzinfo
+    (zoneinfo.ZoneInfo) handed one reads its memory as a datetime: a wrong
+    offset, or a segfault that depends on heap state. The driver itself hydrates
+    named zones with pytz, which is safe either way; this guards a value built
+    by hand. Nanoseconds are dropped by to_native(), which the offset ignores.
+    """
+    native = value.to_native()
+    if native.utcoffset() is None:
+        return value.iso_format()
+    # %:z prints +HH:MM, and +HH:MM:SS for a sub-minute offset (an old named
+    # zone's local mean time).
+    return value.replace(tzinfo=None).iso_format() + native.strftime("%:z")
+
+
 def to_python(value):
     import neo4j.time
     from neo4j import Record
@@ -133,7 +156,7 @@ def to_python(value):
     elif isinstance(value, (list, tuple)):
         return [to_python(v) for v in value]
     elif isinstance(value, neo4j.time.DateTime):
-        return value.iso_format()
+        return _datetime_text(value)
     elif isinstance(value, (neo4j.time.Date, neo4j.time.Time, neo4j.time.Duration)):
         return str(value)
     else:

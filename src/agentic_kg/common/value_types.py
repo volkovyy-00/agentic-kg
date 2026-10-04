@@ -14,18 +14,33 @@ them. The profile is retrieval-side and out of scope for this change, and the
 ticket's dependency reasoning -- that a genuinely typed property takes the
 profile's type branch and never reaches its regex path -- holds only while that
 file stays untouched.
+
+The temporal types build neo4j.time objects, never datetime.datetime and never
+through fromisoformat. A Python datetime stops at microseconds, so nine
+fractional digits would be cut with no error; fromisoformat also accepts
+"20250304" and week dates, which this module must refuse. neo4j.time is a pure
+value library (no connection), so the "no I/O" rule above still holds.
 """
 
 import re
+from collections import Counter
+from datetime import timedelta, timezone
 from math import isfinite
 from typing import Any, Iterable, Optional, Tuple
 
+from neo4j import time as neo4j_time
+
 # The closed set of types a construction plan may declare. Lowercase to match
 # the plan's other values ("node", "relationship"), not Neo4j's schema spelling.
+# The temporal names mirror Cypher's date(), datetime() and localdatetime().
 INTEGER = "integer"
 FLOAT = "float"
 BOOLEAN = "boolean"
-ALLOWED_TYPES = (INTEGER, FLOAT, BOOLEAN)
+DATE = "date"
+DATETIME = "datetime"  # zoned: carries an offset or Z
+LOCALDATETIME = "localdatetime"  # no offset
+TEMPORAL_TYPES = (DATE, DATETIME, LOCALDATETIME)
+ALLOWED_TYPES = (INTEGER, FLOAT, BOOLEAN, *TEMPORAL_TYPES)
 
 # What a column's values look like. Reported to the model as evidence; never
 # used to decide a type at write time.
@@ -33,6 +48,9 @@ BARE_NUMERIC = "bare_numeric"
 NUMERIC_AFTER_CLEANING = "numeric_after_cleaning"
 BOOLEAN_LIKE = "boolean_like"
 TEXT = "text"
+DATE_LIKE = "date_like"
+DATETIME_LIKE = "datetime_like"
+LOCALDATETIME_LIKE = "localdatetime_like"
 
 # What happened to one value. Three outcomes rather than success/failure:
 # blank clears a stale value exactly as unconvertible does, but it is not
@@ -78,6 +96,15 @@ _BOOLEAN_VALUES = _TRUE_VALUES | _FALSE_VALUES
 # was told was fine.
 MAJORITY_SHARE = 0.5
 
+# A temporal shape names its own type: unlike the numeric shapes there is nothing
+# to split within it. classify() reports the shape and file_tools suggests the
+# type from this one table.
+TEMPORAL_SHAPE_TYPES = {
+    DATE_LIKE: DATE,
+    DATETIME_LIKE: DATETIME,
+    LOCALDATETIME_LIKE: LOCALDATETIME,
+}
+
 # Neo4j's INTEGER is a signed 64-bit value, and the driver packs it as one.
 # Python's int is unbounded, so a wider value converts happily here and then
 # raises OverflowError inside the driver, mid-batch -- an opaque failure with
@@ -86,6 +113,23 @@ MAJORITY_SHARE = 0.5
 # cannot be stored: counted, cleared, and named by the loader's gate.
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
+
+
+# One strict pattern for all three temporal shapes. [0-9] and fullmatch on
+# purpose: \d matches Arabic-Indic digits (and int() converts them), and "$"
+# matches before a trailing newline. A fraction needs seconds; the offset is
+# only legal after a time.
+_TEMPORAL = re.compile(
+    r"(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
+    r"(?:[T ](?P<hour>[0-9]{2}):(?P<minute>[0-9]{2})"
+    r"(?::(?P<second>[0-9]{2})(?:\.(?P<fraction>[0-9]{1,9}))?)?"
+    r"(?P<offset>Z|[+-][0-9]{2}:[0-9]{2})?)?"
+)
+
+# Neo4j accepts offsets up to +-18:00. Python's constructors accept up to just
+# under 24:00 and the server then rejects the value mid-batch, dropping the
+# connection -- the same shape as INT64_MAX above.
+MAX_OFFSET_MINUTES = 18 * 60
 
 
 def is_blank(value: Any) -> bool:
@@ -161,6 +205,20 @@ def classify(values: Iterable[Any]) -> str:
 
     if majority(numeric_after_cleaning):
         return NUMERIC_AFTER_CLEANING
+
+    # Temporal text cannot match any test above (it carries '-' and ':'), so the
+    # order is not load-bearing here. Each value is parsed once, stripped, as
+    # coerce() does. A kind has to be a strict majority ALONE: a 45% zoned / 45%
+    # local column gets no suggestion, because either type would clear the other
+    # half.
+    kinds = Counter(
+        parsed[0]
+        for value in non_blank
+        if (parsed := parse_temporal(value.strip())) is not None
+    )
+    for shape, kind in TEMPORAL_SHAPE_TYPES.items():
+        if kinds[kind] > len(non_blank) * MAJORITY_SHARE:
+            return shape
     return TEXT
 
 
@@ -204,6 +262,67 @@ def _as_storable_integer(number: int) -> Tuple[Optional[int], str]:
     if INT64_MIN <= number <= INT64_MAX:
         return number, CONVERTED
     return None, UNCONVERTIBLE
+
+
+def _fixed_offset(text: str) -> Optional[timezone]:
+    """The timezone for 'Z' or '+-HH:MM', or None when Neo4j cannot store it."""
+    if text == "Z":
+        return timezone.utc
+    hours, minutes = int(text[1:3]), int(text[4:6])
+    if minutes > 59 or hours * 60 + minutes > MAX_OFFSET_MINUTES:
+        return None
+    sign = -1 if text[0] == "-" else 1
+    return timezone(sign * timedelta(hours=hours, minutes=minutes))
+
+
+def parse_temporal(text: str) -> Optional[Tuple[str, Any]]:
+    """Read one already-stripped string as a date, a zoned or a local datetime.
+
+    Returns (kind, neo4j.time value), kind being DATE, DATETIME or LOCALDATETIME,
+    or None when the text is not exactly one of those shapes. The one function
+    both classify() and coerce() use, so the shape the hint reports and the value
+    the loader stores cannot disagree -- a column of well-formed but impossible
+    dates ("2025-02-30") is never suggested, because it does not parse.
+
+    Validity is established by constructing the value: neo4j.time raises
+    ValueError for an impossible date, an hour of 24 or a second of 60, which
+    become None. A zoned value must also exist in UTC: 9999-12-31T23:59:59-01:00
+    builds fine, then the driver raises converting it to UTC while packing, and
+    one such cell would fail the whole batch. So the value is converted to UTC
+    here, with the same astimezone() call the driver's packer makes, and a
+    refusal there is a refusal here.
+    """
+    match = _TEMPORAL.fullmatch(text)
+    if match is None:
+        return None
+    parts = match.groupdict()
+    year, month, day = int(parts["year"]), int(parts["month"]), int(parts["day"])
+    # Year 0 is outside the driver's range, but neo4j.time does not always raise
+    # for it: 0000-00-00 (MySQL's "no value") builds a ZeroDate, which would be
+    # stored as a wrong date, or as a DateTime the driver refuses mid-batch.
+    if year == 0:
+        return None
+    try:
+        if parts["hour"] is None:
+            return DATE, neo4j_time.Date(year, month, day)
+        hour, minute = int(parts["hour"]), int(parts["minute"])
+        second = int(parts["second"] or 0)
+        # Padded on the right, so ".5" is 500000000 ns and every digit is kept.
+        nanosecond = int((parts["fraction"] or "").ljust(9, "0"))
+        if parts["offset"] is None:
+            return LOCALDATETIME, neo4j_time.DateTime(
+                year, month, day, hour, minute, second, nanosecond
+            )
+        zone = _fixed_offset(parts["offset"])
+        if zone is None:
+            return None
+        value = neo4j_time.DateTime(
+            year, month, day, hour, minute, second, nanosecond, tzinfo=zone
+        )
+        value.astimezone(timezone.utc)
+        return DATETIME, value
+    except (ValueError, OverflowError):
+        return None
 
 
 def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
@@ -261,6 +380,14 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
             # store Infinity and the load would report success.
             return None, UNCONVERTIBLE
         return number, CONVERTED
+
+    if declared_type in TEMPORAL_TYPES:
+        parsed = parse_temporal(text)
+        # Each type takes only its own shape: a bare date is not a datetime, and
+        # a zoned value is not a local one. Never trimmed, never filled in.
+        if parsed is not None and parsed[0] == declared_type:
+            return parsed[1], CONVERTED
+        return None, UNCONVERTIBLE
 
     # An unknown declared type reaches here only if the plan carried one that
     # check_construction_plan_consistency should have refused. Fail closed.

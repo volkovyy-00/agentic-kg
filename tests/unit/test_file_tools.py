@@ -942,3 +942,157 @@ def test_the_row_reader_yields_absent_and_blank_cells_apart(ragged_source):
         ("k3", " x"),
         ("k4", "   "),
     ]
+
+
+# --- temporal hints (KG-31) ---------------------------------------------------
+
+
+def _temporal_hint(monkeypatch, values, column="d"):
+    """The column_type_hint payload for a CSV whose `column` holds `values`.
+
+    Two columns on purpose. With a single column the dialect sniffer takes '-',
+    ':' or a space inside the values for the delimiter and splits them
+    ('2025-03-04T10:11:12Z' reads as '2025'). That is a limit of one-column files,
+    out of scope for KG-31; do not simplify this helper to one column.
+    """
+    fs = fsspec.filesystem("memory")
+    fs.store.clear()
+    fs.pseudo_dirs.clear()
+    try:
+        with fs.open("/temporal/t.csv", "w") as handle:
+            rows = "\n".join(f"{value},{n}" for n, value in enumerate(values))
+            handle.write(f"{column},n\n{rows}\n")
+        monkeypatch.setenv("SOURCE_URI", "memory://temporal")
+        reset_settings()
+        return file_tools.column_type_hint("t.csv", column, FakeToolContext())[
+            "column_type_hint"
+        ]
+    finally:
+        fs.store.clear()
+        fs.pseudo_dirs.clear()
+        reset_settings()
+
+
+@pytest.mark.parametrize(
+    "values, shape, suggested",
+    [
+        (["2025-03-04", "2025-03-05", "2025-03-06"], "date_like", "date"),
+        (
+            ["2025-03-04T10:11:12Z", "2025-03-05T10:11:12+01:00"],
+            "datetime_like",
+            "datetime",
+        ),
+        (
+            ["2025-03-04T10:11:12", "2025-03-05 10:11:12.5"],
+            "localdatetime_like",
+            "localdatetime",
+        ),
+    ],
+)
+def test_the_hint_suggests_the_kind_the_values_have(
+    monkeypatch, values, shape, suggested
+):
+    hint = _temporal_hint(monkeypatch, values)
+    assert hint["shape"] == shape
+    assert hint["suggested_type"] == suggested
+    assert hint["unconvertible_count"] == 0
+    assert hint["convertible_count"] == len(values)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["03/04/2025", "04/05/2025", "13/05/2025"],  # day/month ambiguous
+        ["15:15:00", "09:30:00", "11:00:00"],  # a bare time
+        ["2025-03-04T10:00:00Z"] * 9 + ["2025-03-04T10:00:00"] * 9 + ["n/a"] * 2,
+        ["2025-02-30"] * 4,  # well formed, not a real date
+        ["2025-02-30"] * 6 + ["2025-03-04"] * 4,  # 60% impossible dates
+    ],
+)
+def test_the_hint_suggests_no_temporal_type_without_a_clear_majority(
+    monkeypatch, values
+):
+    hint = _temporal_hint(monkeypatch, values)
+    assert hint["shape"] == "text"
+    assert hint["suggested_type"] is None
+
+
+def test_a_mostly_date_column_reports_its_datetimes_as_unconvertible(monkeypatch):
+    """55% dates, 45% datetimes: the datetimes would be cleared with only a
+    warning, so the hint must say how many and show examples before the model
+    declares the type."""
+    values = ["2025-03-04"] * 11 + [f"2025-03-0{n}T10:00:00Z" for n in range(1, 10)]
+    hint = _temporal_hint(monkeypatch, values)
+    assert hint["suggested_type"] == "date"
+    assert hint["convertible_count"] == 11
+    assert hint["unconvertible_count"] == 9
+    assert hint["example_unconvertible"] == [
+        "2025-03-01T10:00:00Z",
+        "2025-03-02T10:00:00Z",
+        "2025-03-03T10:00:00Z",
+    ]
+
+
+def test_a_padded_date_column_is_suggested_a_date(monkeypatch):
+    hint = _temporal_hint(monkeypatch, ['" 2025-03-04"', '"2025-03-05 "'])
+    assert hint["suggested_type"] == "date"
+    assert hint["unconvertible_count"] == 0
+
+
+BOM_HINTS = [
+    ("assemblies.csv", "assembly_name", "text", None),
+    ("assemblies.csv", "component_name", "text", None),
+    ("assemblies.csv", "quantity", "bare_numeric", "integer"),
+    ("assemblies.csv", "assembly_id", "text", None),
+    ("assemblies.csv", "product_id", "text", None),
+    ("components.csv", "sub_assembly_name", "text", None),
+    ("components.csv", "part_name", "text", None),
+    ("components.csv", "quantity", "bare_numeric", "integer"),
+    ("components.csv", "part_id", "text", None),
+    ("components.csv", "assembly_id", "text", None),
+    ("part_supplier_mapping.csv", "part_id", "text", None),
+    ("part_supplier_mapping.csv", "part_name", "text", None),
+    ("part_supplier_mapping.csv", "supplier_id", "text", None),
+    ("part_supplier_mapping.csv", "supplier_name", "text", None),
+    ("part_supplier_mapping.csv", "lead_time_days", "bare_numeric", "integer"),
+    ("part_supplier_mapping.csv", "unit_cost", "numeric_after_cleaning", "float"),
+    ("part_supplier_mapping.csv", "minimum_order_quantity", "bare_numeric", "integer"),
+    ("part_supplier_mapping.csv", "preferred_supplier", "boolean_like", "boolean"),
+    ("products.csv", "product_name", "text", None),
+    ("products.csv", "price", "numeric_after_cleaning", "float"),
+    ("products.csv", "description", "text", None),
+    ("products.csv", "product_id", "text", None),
+    ("suppliers.csv", "supplier_id", "text", None),
+    ("suppliers.csv", "name", "text", None),
+    ("suppliers.csv", "specialty", "text", None),
+    ("suppliers.csv", "city", "text", None),
+    ("suppliers.csv", "country", "text", None),
+    ("suppliers.csv", "website", "text", None),
+    ("suppliers.csv", "contact_email", "text", None),
+]
+
+
+@pytest.mark.parametrize("file_name, column, shape, suggested", BOM_HINTS)
+def test_every_bundled_bom_column_keeps_its_hint(
+    bom_source, file_name, column, shape, suggested
+):
+    """The values were captured from this repo before KG-31. The bundled example
+    must keep working: no BOM column may suddenly read as a date."""
+    hint = file_tools.column_type_hint(file_name, column, FakeToolContext())[
+        "column_type_hint"
+    ]
+    assert (hint["shape"], hint["suggested_type"]) == (shape, suggested)
+
+
+def test_the_hint_docstring_names_every_temporal_shape_and_type():
+    """The model learns the shapes and types only from this docstring."""
+    doc = file_tools.column_type_hint.__doc__
+    for word in (
+        "date_like",
+        "datetime_like",
+        "localdatetime_like",
+        "date",
+        "datetime",
+        "localdatetime",
+    ):
+        assert f"'{word}'" in doc, word

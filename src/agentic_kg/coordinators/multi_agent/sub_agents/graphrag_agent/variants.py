@@ -242,7 +242,15 @@ variants = {
            those characters first -- 'no' means do not cast, and 'unknown' is
            something to disclose, never a 'yes'. Without a cast '9' sorts after
            '30'. INTEGER and FLOAT properties need no cast; 'numeric_like' does
-           not apply to them.
+           not apply to them. DATE, DATE_TIME and LOCAL_DATE_TIME properties need
+           no cast either ('numeric_like' reads 'no', or 'unknown' when the
+           profile is sampled): compare them with a literal of the SAME type --
+           date('2025-03-04') for DATE, datetime('2025-03-04T10:00:00Z') for
+           DATE_TIME, localdatetime('2025-03-04T10:00:00') for LOCAL_DATE_TIME.
+           A DATE_TIME value and a LOCAL_DATE_TIME value cannot be compared
+           with each other: the result is null. Any other pairing, or a string
+           literal, likewise returns null rather than an error and silently drops
+           the rows.
         7. Where an annotation reads 'unknown' or 'not_profiled', treat it as
            missing information to disclose, never as permission to assume.
         8. end every answer with a short reminder that they can keep asking

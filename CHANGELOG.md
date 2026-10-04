@@ -8,6 +8,22 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.10.0] - 2026-10-04
+
+### Added
+- **Plans can declare a property `date`, `datetime` or `localdatetime` (#80, KG-31)**: every date column
+  reached the graph as text, so it could not be compared, sorted or subtracted as a date. A build now stores
+  a real Neo4j DATE, zoned DATE_TIME or LOCAL_DATE_TIME when the plan declares one, keeping up to nine
+  fractional digits and the offset as written. Each type accepts only its own ISO shape; any other value,
+  such as `03/04/2025`, `20250304`, a bare date in a datetime column, or a zoned value in a local one, is
+  counted, reported and cleared, never trimmed or guessed. The column hint suggests a type when one shape is
+  most of the non-blank values, and the proposer, critic and GraphRAG prompts describe the types.
+
+### Fixed
+- **A stored negative half-hour offset was shown an hour out (#80, KG-31)**: query results printed a
+  datetime stored at `-05:30` as `-06:30` (and `-03:30` as `-04:30`), so the GraphRAG agent could be told
+  the wrong offset. The offset is now shown as stored.
+
 ## [0.9.3] - 2026-10-03
 
 ### Changed

@@ -2779,3 +2779,33 @@ def test_approving_a_plan_documents_the_matched_property_not_the_column():
         "matches an end on a property the referenced node does not carry"
         in " ".join(doc.split())
     )
+
+
+@pytest.mark.parametrize("declared", ["date", "datetime", "localdatetime"])
+def test_a_temporal_type_is_accepted(declared):
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unit_cost": declared}
+    assert check_construction_plan_consistency(plan) == []
+
+
+def test_an_unknown_type_is_refused_naming_every_allowed_type():
+    plan = _typed_plan()
+    plan["Part"]["property_types"] = {"unit_cost": "timestamp"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any(
+        "timestamp" in problem
+        and "integer, float, boolean, date, datetime, localdatetime" in problem
+        for problem in problems
+    ), problems
+
+
+def test_typing_the_unique_column_as_a_date_is_refused():
+    """A date stored on a key would be compared against the raw CSV string and
+    match nothing, with no error at all."""
+    plan = _typed_plan()
+    plan["Part"]["properties"] = ["part_id", "part_name"]
+    plan["Part"]["property_types"] = {"part_id": "date"}
+
+    problems = check_construction_plan_consistency(plan)
+    assert any("part_id" in problem for problem in problems)

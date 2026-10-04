@@ -16,6 +16,8 @@ Kept separate from test_value_types.py: those pin decisions ("42.7 must not
 round"), these pin relationships ("whatever coerce accepts, the driver stores").
 """
 
+import io
+from datetime import timedelta, timezone
 from decimal import Decimal
 from math import isfinite
 
@@ -24,8 +26,13 @@ import pytest
 # Deliberately the driver's own packer rather than our belief about its limits:
 # the seam being pinned is coerce-versus-driver, and asserting against a
 # reimplementation of the rule would pin the belief instead. A neo4j upgrade
-# that moves this import should fail loudly here -- that is the signal to
-# re-verify the bounds, not a reason to guard the import.
+# that moves either import should fail loudly here -- that is the signal to
+# re-verify the bounds, not a reason to guard the import. The hydration handler
+# is needed because a plain Packer refuses neo4j.time values outright ("Values
+# of type neo4j.time.Date are not supported"); the driver registers temporal
+# dehydration through it.
+from neo4j import time as neo4j_time
+from neo4j._codec.hydration.v2 import HydrationHandler
 from neo4j._codec.packstream.v1 import Packer
 
 from agentic_kg.common.value_types import (
@@ -34,8 +41,11 @@ from agentic_kg.common.value_types import (
     BOOLEAN,
     BOOLEAN_LIKE,
     CONVERTED,
+    DATE,
+    DATETIME,
     FLOAT,
     INTEGER,
+    LOCALDATETIME,
     MAJORITY_SHARE,
     NUMERIC_AFTER_CLEANING,
     TEXT,
@@ -46,6 +56,8 @@ from agentic_kg.common.value_types import (
     is_blank,
 )
 from agentic_kg.tools.file_tools import _suggested_type
+
+_DEHYDRATION_HOOKS = HydrationHandler().dehydration_hooks
 
 INT64_LIMIT = 2**63
 
@@ -114,6 +126,31 @@ ADVERSARIAL_VALUES = [
     "()",
     # too many digits for a double
     "1" + "0" * 400,
+    # temporal: the accepted shapes, then each way a date string has surprised us
+    "2025-03-04",
+    "2025-03-04T10:11:12",
+    "2025-03-04 10:11:12.123456789",
+    "2025-03-04T10:11:12Z",
+    "2025-03-04T10:11:12.123456789-05:30",
+    "  2025-03-04  ",
+    "9999-12-31",
+    "0001-01-01",
+    # a zoned value whose UTC instant is outside the driver's range ...
+    "9999-12-31T23:59:59-01:00",
+    "0001-01-01T00:00:00+01:00",
+    # ... and its neighbours that are inside it
+    "9999-12-31T23:59:59+01:00",
+    "0001-01-01T00:00:00-01:00",
+    "2025-03-04T10:11:12+18:01",
+    "2025-02-30",
+    "0000-01-01",
+    "0000-00-00",
+    "0000-00-00 00:00:00",
+    "٢٠٢٥-٠٣-٠٤",
+    "20250304",
+    "03/04/2025",
+    "15:15:00",
+    "2025-03-04T24:00:00",
 ]
 
 # Columns, not values: the majority rules only mean something over a column.
@@ -133,17 +170,23 @@ ADVERSARIAL_COLUMNS = [
     ["", "  ", "12", "13"],
     ["Nordic Wood", "Shanghai Metal"],
     ["1", "", "2", None, "3"],
+    ["2025-03-04", "2025-03-05", "2025-03-06"],
+    ["2025-03-04T10:11:12Z", "2025-03-05T10:11:12+01:00"],
+    ["2025-03-04T10:11:12", "2025-03-05 10:11"],
+    ["2025-03-04", "2025-03-05", "2025-03-06", "2025-03-04T10:11:12Z"],
+    [" 2025-03-04", "2025-03-05 "],
+    ["2025-02-30"] * 5,
+    ["9999-12-31T23:59:59-01:00", "9999-12-31T23:59:59Z", "9999-12-31T23:59:59+01:00"],
+    ["2025-03-04T10:11:12Z"] * 45 + ["2025-03-04T10:11:12"] * 45 + ["n/a"] * 10,
 ]
 
-ALL_TYPES = (INTEGER, FLOAT, BOOLEAN)
+ALL_TYPES = (INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, LOCALDATETIME)
 
 
 def _packs(value) -> bool:
     """True when the driver can actually put this on the wire."""
-    import io
-
     try:
-        Packer(io.BytesIO()).pack(value)
+        Packer(io.BytesIO()).pack(value, dehydration_hooks=_DEHYDRATION_HOOKS)
         return True
     except Exception:  # noqa: BLE001 - any refusal is a refusal
         return False
@@ -320,3 +363,61 @@ def test_a_numeric_shape_is_never_reported_for_a_column_of_text(column):
         f"column {column!r} was classified {shape}, but only {convertible} of "
         f"{len(non_blank)} non-blank values convert as {declared}"
     )
+
+
+def _zoned(year, month, day, hour, offset_hours):
+    return neo4j_time.DateTime(
+        year,
+        month,
+        day,
+        hour,
+        0,
+        0,
+        0,
+        tzinfo=timezone(timedelta(hours=offset_hours)),
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        _zoned(9999, 12, 31, 23, -1),
+        _zoned(1, 1, 1, 0, 1),
+        _zoned(1, 1, 1, 0, 18),
+        _zoned(9999, 12, 31, 23, -18),
+    ],
+)
+def test_the_driver_refuses_a_zoned_value_whose_utc_instant_is_out_of_range(value):
+    """Why parse_temporal checks the UTC instant at all. If a driver upgrade makes
+    these pack, the check is no longer needed -- re-verify and simplify; if it
+    starts refusing more, parse_temporal must refuse the same values."""
+    assert not _packs(value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "9999-12-31T23:59:59-01:00",
+        "0001-01-01T00:00:00+01:00",
+        "0001-01-01T00:00:00+18:00",
+        "9999-12-31T23:59:59-18:00",
+    ],
+)
+def test_the_converter_refuses_exactly_the_zoned_values_the_driver_refuses(text):
+    assert coerce(text, DATETIME)[1] != CONVERTED
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "9999-12-31T23:59:59+01:00",
+        "9999-12-31T00:00:00Z",
+        "0001-01-01T00:00:00Z",
+        "0001-01-01T00:00:00-01:00",
+        "2025-03-04T10:11:12+18:00",
+    ],
+)
+def test_the_converter_accepts_the_zoned_values_the_driver_stores(text):
+    converted, outcome = coerce(text, DATETIME)
+    assert outcome == CONVERTED
+    assert _packs(converted)

@@ -105,8 +105,9 @@ _VALIDATION_RULES = """
             - Every property is stored as text unless the construction declares a type for it.
               A number stored as text sorts lexicographically ('9' after '30'), so any question
               about how many, how much, or which is largest returns a wrong answer rather than
-              an error. Declare a type for every property that holds a quantity, a duration, a
-              price, a cost or a yes/no flag.
+              an error. A date stored as text cannot be compared or subtracted as a date. Declare
+              a type for every property that holds a quantity, a duration, a price, a cost, a
+              yes/no flag, a date or a timestamp.
             - Call 'column_type_hint' with the file and the column before declaring a type, or
               'column_type_hints' for several columns of one file at once. It reports the shape
               of the column's values, a suggested type, and how many values could not be
@@ -115,8 +116,14 @@ _VALIDATION_RULES = """
               product code, a year, or a postal code; only the column name and the user goal
               can tell those from a quantity. If a high 'unconvertible_count' comes back, the
               column is not that type -- do not declare it.
-            - The allowed types are exactly 'integer', 'float' and 'boolean'. Anything else,
-              including dates, stays text.
+            - The allowed types are exactly 'integer', 'float', 'boolean', 'date', 'datetime' and
+              'localdatetime'. Anything else stays text. 'date' is a day ('2025-03-04'); 'datetime'
+              is a timestamp with an offset or Z ('2025-03-04T10:11:12Z'); 'localdatetime' is a
+              timestamp with neither. Declare the kind the hint reports as 'date_like',
+              'datetime_like' or 'localdatetime_like', never one chosen from the column name: a
+              type takes only its own shape, so the other values are cleared. If a temporal
+              suggestion comes back with a non-zero 'unconvertible_count', read
+              'example_unconvertible' before declaring it.
             - NEVER declare a type for a node's 'unique_column_name', for a column any relationship
               reads as an end's column, or for a node property any relationship end is matched on.
               These are compared as raw text from the CSV, so a typed one matches zero rows with no
@@ -345,6 +352,13 @@ variants = {
             - Is a property that clearly holds a quantity, duration, price, cost or yes/no flag left
               without a declared type? Call 'column_type_hint' to check what the data supports, and
               reject with 'retry' when a numeric or boolean column is being stored as text.
+            - Is a column that looks like a date or timestamp left without a declared type? Call
+              'column_type_hint' and reject with 'retry' when it suggests 'date', 'datetime' or
+              'localdatetime' with an 'unconvertible_count' of 0 -- unless the column is a node's
+              unique identifier, a column a relationship reads as an end's column, or a node
+              property a relationship end is matched on: those must stay text. When some values do
+              not convert they may be real dates of another kind that the type would clear, so
+              leaving that column as text is the proposer's call, not a reason to retry.
             - Is a declared type wrong for the data? A high 'unconvertible_count' from
               'column_type_hint' means the build would refuse that column outright.
             - Is a node's unique identifier, a column a relationship reads as an end's column, or a node
