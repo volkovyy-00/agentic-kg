@@ -599,3 +599,12 @@ def test_the_critic_checks_date_columns_but_never_for_keys_and_joins():
     )
     assert "unless the column is a node's unique identifier" in text
     assert "those must stay text" in text
+
+
+def test_the_critic_never_pushes_a_temporal_type_that_would_clear_real_values():
+    """A 60% date / 40% zoned column is suggested 'date', and declaring it clears
+    every timestamp with only a warning. The proposer is told to read
+    'example_unconvertible' first; the critic must not then overrule it."""
+    text = " ".join(variants["schema_critic_agent_v1"]["instruction"].split())
+    assert "'localdatetime' with an 'unconvertible_count' of 0" in text
+    assert "leaving that column as text is the proposer's call" in text

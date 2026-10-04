@@ -24,7 +24,7 @@ value library (no connection), so the "no I/O" rule above still holds.
 
 import re
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from math import isfinite
 from typing import Any, Iterable, Optional, Tuple
 
@@ -96,10 +96,13 @@ _BOOLEAN_VALUES = _TRUE_VALUES | _FALSE_VALUES
 # was told was fine.
 MAJORITY_SHARE = 0.5
 
-_TEMPORAL_SHAPES = {
-    DATE: DATE_LIKE,
-    DATETIME: DATETIME_LIKE,
-    LOCALDATETIME: LOCALDATETIME_LIKE,
+# A temporal shape names its own type: unlike the numeric shapes there is nothing
+# to split within it. classify() reports the shape and file_tools suggests the
+# type from this one table.
+TEMPORAL_SHAPE_TYPES = {
+    DATE_LIKE: DATE,
+    DATETIME_LIKE: DATETIME,
+    LOCALDATETIME_LIKE: LOCALDATETIME,
 }
 
 # Neo4j's INTEGER is a signed 64-bit value, and the driver packs it as one.
@@ -208,8 +211,12 @@ def classify(values: Iterable[Any]) -> str:
     # coerce() does. A kind has to be a strict majority ALONE: a 45% zoned / 45%
     # local column gets no suggestion, because either type would clear the other
     # half.
-    kinds = Counter(_temporal_kind(value.strip()) for value in non_blank)
-    for kind, shape in _TEMPORAL_SHAPES.items():
+    kinds = Counter(
+        parsed[0]
+        for value in non_blank
+        if (parsed := parse_temporal(value.strip())) is not None
+    )
+    for shape, kind in TEMPORAL_SHAPE_TYPES.items():
         if kinds[kind] > len(non_blank) * MAJORITY_SHARE:
             return shape
     return TEXT
@@ -281,8 +288,9 @@ def parse_temporal(text: str) -> Optional[Tuple[str, Any]]:
     ValueError for an impossible date, an hour of 24 or a second of 60, which
     become None. A zoned value must also exist in UTC: 9999-12-31T23:59:59-01:00
     builds fine, then the driver raises converting it to UTC while packing, and
-    one such cell would fail the whole batch. The standard library performs the
-    same conversion and raises OverflowError for exactly those values.
+    one such cell would fail the whole batch. So the value is converted to UTC
+    here, with the same astimezone() call the driver's packer makes, and a
+    refusal there is a refusal here.
     """
     match = _TEMPORAL.fullmatch(text)
     if match is None:
@@ -303,20 +311,13 @@ def parse_temporal(text: str) -> Optional[Tuple[str, Any]]:
         zone = _fixed_offset(parts["offset"])
         if zone is None:
             return None
-        datetime(year, month, day, hour, minute, second, tzinfo=zone).astimezone(
-            timezone.utc
-        )
-        return DATETIME, neo4j_time.DateTime(
+        value = neo4j_time.DateTime(
             year, month, day, hour, minute, second, nanosecond, tzinfo=zone
         )
+        value.astimezone(timezone.utc)
+        return DATETIME, value
     except (ValueError, OverflowError):
         return None
-
-
-def _temporal_kind(text: str) -> Optional[str]:
-    """The kind parse_temporal reads in `text`, or None."""
-    parsed = parse_temporal(text)
-    return parsed[0] if parsed is not None else None
 
 
 def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:

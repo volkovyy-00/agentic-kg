@@ -132,17 +132,12 @@ def _datetime_text(value) -> str:
     named zones with pytz, which is safe either way; this guards a value built
     by hand. Nanoseconds are dropped by to_native(), which the offset ignores.
     """
-    offset = value.to_native().utcoffset()
-    if offset is None:
+    native = value.to_native()
+    if native.utcoffset() is None:
         return value.iso_format()
-    seconds = int(offset.total_seconds())
-    sign = "-" if seconds < 0 else "+"
-    hours, remainder = divmod(abs(seconds), 3600)
-    minutes, leftover = divmod(remainder, 60)
-    zone = f"{sign}{hours:02d}:{minutes:02d}"
-    if leftover:
-        zone += f":{leftover:02d}"
-    return value.replace(tzinfo=None).iso_format() + zone
+    # %:z prints +HH:MM, and +HH:MM:SS for a sub-minute offset (an old named
+    # zone's local mean time).
+    return value.replace(tzinfo=None).iso_format() + native.strftime("%:z")
 
 
 def to_python(value):

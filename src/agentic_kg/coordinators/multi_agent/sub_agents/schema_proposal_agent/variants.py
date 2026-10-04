@@ -354,9 +354,11 @@ variants = {
               reject with 'retry' when a numeric or boolean column is being stored as text.
             - Is a column that looks like a date or timestamp left without a declared type? Call
               'column_type_hint' and reject with 'retry' when it suggests 'date', 'datetime' or
-              'localdatetime' -- unless the column is a node's unique identifier, a column a
-              relationship reads as an end's column, or a node property a relationship end is
-              matched on: those must stay text.
+              'localdatetime' with an 'unconvertible_count' of 0 -- unless the column is a node's
+              unique identifier, a column a relationship reads as an end's column, or a node
+              property a relationship end is matched on: those must stay text. When some values do
+              not convert they may be real dates of another kind that the type would clear, so
+              leaving that column as text is the proposer's call, not a reason to retry.
             - Is a declared type wrong for the data? A high 'unconvertible_count' from
               'column_type_hint' means the build would refuse that column outright.
             - Is a node's unique identifier, a column a relationship reads as an end's column, or a node

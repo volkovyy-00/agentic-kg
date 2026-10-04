@@ -24,15 +24,10 @@ from agentic_kg.common.value_types import (
     BOOLEAN,
     BOOLEAN_LIKE,
     CONVERTED,
-    DATE,
-    DATE_LIKE,
-    DATETIME,
-    DATETIME_LIKE,
     FLOAT,
     INTEGER,
-    LOCALDATETIME,
-    LOCALDATETIME_LIKE,
     NUMERIC_AFTER_CLEANING,
+    TEMPORAL_SHAPE_TYPES,
     classify,
     coerce,
     has_fractional_part,
@@ -703,15 +698,6 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
     )
 
 
-# A temporal shape names its own type: unlike the numeric shapes there is nothing
-# to split within it. The kind was decided by the same parser the loader runs.
-_TEMPORAL_SUGGESTION = {
-    DATE_LIKE: DATE,
-    DATETIME_LIKE: DATETIME,
-    LOCALDATETIME_LIKE: LOCALDATETIME,
-}
-
-
 def _suggested_type(shape: str, values) -> str | None:
     """Map a column's shape to the type to suggest for it.
 
@@ -735,9 +721,8 @@ def _suggested_type(shape: str, values) -> str | None:
     it; one unstorable outlier does not cost the whole column its type, the same
     tolerance classify() already applies.
     """
-    temporal = _TEMPORAL_SUGGESTION.get(shape)
-    if temporal is not None:
-        return temporal
+    if shape in TEMPORAL_SHAPE_TYPES:
+        return TEMPORAL_SHAPE_TYPES[shape]
     if shape == BOOLEAN_LIKE:
         return BOOLEAN
     if shape == NUMERIC_AFTER_CLEANING:
