@@ -17,8 +17,9 @@ try:
 except Exception as exc:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {exc}", allow_module_level=True)
 
-# The same query create_uniqueness_constraint checks with (cypher_tools), written
-# out here so a change to one is noticed by the other's test.
+# The query create_uniqueness_constraint checks with (cypher_tools), written out
+# here on purpose instead of imported, so the test's oracle cannot share a bug with
+# the production check. Keep the two in step by hand.
 FOUND = (
     "SHOW UNIQUENESS CONSTRAINTS YIELD entityType, labelsOrTypes, properties "
     "WHERE entityType = 'NODE' AND labelsOrTypes = [$label] AND properties = [$key] "

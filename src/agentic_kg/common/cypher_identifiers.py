@@ -45,6 +45,14 @@ MAX_NAME_LENGTH = 16383
 _SHOWN_CHARACTERS = 80
 
 
+def shown_name(value: object) -> str:
+    """A name as an error message shows it: at most 80 characters, then '...'."""
+    shown = str(value)
+    if len(shown) > _SHOWN_CHARACTERS:
+        shown = shown[:_SHOWN_CHARACTERS] + "..."
+    return shown
+
+
 class InvalidIdentifier(ValueError):
     """A label, relationship type or column/property name failed validation.
 
@@ -97,12 +105,9 @@ def checked_field(kind: str, value: str) -> str:
         or len(value) > MAX_NAME_LENGTH
         or "\x00" in value
     ):
-        shown = str(value)
-        if len(shown) > _SHOWN_CHARACTERS:
-            shown = shown[:_SHOWN_CHARACTERS] + "..."
         raise InvalidIdentifier(
-            f"Invalid {kind}: '{shown}'. It must be 1 to {MAX_NAME_LENGTH:,} "
-            f"characters of text, with no NUL.",
+            f"Invalid {kind}: '{shown_name(value)}'. "
+            f"It must be 1 to {MAX_NAME_LENGTH:,} characters of text, with no NUL.",
             renamable=False,
         )
     return value

@@ -8,6 +8,7 @@ from agentic_kg.common.cypher_identifiers import (
     checked,
     checked_field,
     quote,
+    shown_name,
 )
 from agentic_kg.common.graph_profile import get_cached_profile
 from agentic_kg.common.neo4j_for_adk import (
@@ -244,7 +245,6 @@ _NODE_UNIQUENESS_FOUND = """SHOW UNIQUENESS CONSTRAINTS
     YIELD entityType, labelsOrTypes, properties
     WHERE entityType = 'NODE' AND labelsOrTypes = [$label] AND properties = [$key]
     RETURN count(*) AS found"""
-_SHOWN_CHARACTERS = 80
 
 
 def create_uniqueness_constraint(
@@ -296,11 +296,9 @@ def create_uniqueness_constraint(
     records = listed.get("records") or []
     found = records[0].get("found") if records else None
     if not isinstance(found, int) or found < 1:
-        shown = unique_property_key
-        if len(shown) > _SHOWN_CHARACTERS:
-            shown = shown[:_SHOWN_CHARACTERS] + "..."
         return tool_error(
-            f"No single-key uniqueness constraint on {label}/{shown} was found "
+            "No single-key uniqueness constraint on "
+            f"{label}/{shown_name(unique_property_key)} was found "
             "after the create."
         )
     return results

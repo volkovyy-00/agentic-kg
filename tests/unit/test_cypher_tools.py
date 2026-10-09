@@ -129,13 +129,12 @@ def test_a_successful_create_with_a_matching_constraint_returns_the_creates_resu
 
 def test_the_check_sends_label_and_key_as_parameters_never_in_the_text(fake_db):
     cypher_tools.create_uniqueness_constraint("Order", "we`ird")
-    create, _ = fake_db.queries[0]
     check, params = fake_db.queries[1]
     assert "SHOW UNIQUENESS CONSTRAINTS" in check
     assert "entityType = 'NODE'" in check
     assert params == {"label": "Order", "key": "we`ird"}
     assert "Order" not in check and "we`ird" not in check
-    assert len(fake_db.queries) == 2, create
+    assert len(fake_db.queries) == 2
 
 
 def test_a_create_that_leaves_no_matching_constraint_is_an_error(fake_db):
