@@ -100,6 +100,19 @@ def test_loads_bom_csvs_into_the_graph(neo4j_graph, monkeypatch):
     )
     assert named["records"][0]["c"] == 20
 
+    # KG-52: one uniqueness constraint per node rule, and none extra.
+    constraints = neo4j_graph.send_query(
+        "SHOW UNIQUENESS CONSTRAINTS YIELD entityType, labelsOrTypes, properties "
+        "WHERE entityType = 'NODE' RETURN labelsOrTypes[0] AS label, "
+        "properties AS properties"
+    )["records"]
+    assert sorted((row["label"], tuple(row["properties"])) for row in constraints) == [
+        ("Part", ("part_id",)),
+        ("Product", ("product_id",)),
+        ("Supplier", ("supplier_id",)),
+    ]
+    assert len(neo4j_graph.send_query("SHOW CONSTRAINTS")["records"]) == 3
+
 
 def test_loading_twice_is_idempotent(neo4j_graph, monkeypatch):
     import agentic_kg.tools.kg_construction_tools as kg
