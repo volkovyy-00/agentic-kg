@@ -123,11 +123,12 @@ def test_name_limits_agree_between_checked_field_and_the_container(db):
 
     A 16,383-character key is the longest Aura accepts (TokenLengthError above
     it, verified 2026-10-03), as a property key and as a uniqueness-constraint
-    key, although the constraint's name `<label>_<key>_constraint` is longer
-    than the key. A NUL is refused by both Neo4j targets, so the container MERGE
-    must fail too: that pins the refusal as Neo4j's own. The Community neo4j:5
-    container accepts names longer than 16,383 characters (verified up to 70,000
-    on 5.26.31), so the 16,384 refusal is pinned in the unit tests, not here.
+    key. The constraint carries no name of ours (KG-52), so the key is the
+    longest name involved. A NUL is refused by both Neo4j targets, so the
+    container MERGE must fail too: that pins the refusal as Neo4j's own. The
+    Community neo4j:5 container accepts names longer than 16,383 characters
+    (verified up to 70,000 on 5.26.31), so the 16,384 refusal is pinned in the
+    unit tests, not here.
     If either assertion fails after a Neo4j upgrade, the rule must follow it.
     """
     import agentic_kg.tools.cypher_tools as cypher_tools

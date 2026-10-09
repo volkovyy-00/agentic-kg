@@ -7,6 +7,7 @@ failures propagate, without a Neo4j instance.
 import logging
 
 import pytest
+from fakes import RecordingGraphDb
 from neo4j import time as neo4j_time
 
 from agentic_kg.common.cypher_identifiers import quote
@@ -273,6 +274,38 @@ def test_import_nodes_rejects_injection_payload_before_creating_constraint(
     assert result["status"] == "error"
     assert constraint_calls == [], "create_uniqueness_constraint must not be reached"
     assert fake_db.queries == []
+
+
+def test_import_nodes_loads_no_nodes_when_the_database_lists_no_constraint(
+    monkeypatch,
+):
+    """KG-52 SC2: create_uniqueness_constraint is the real function here, fed
+    by a fake database whose create "succeeds" but whose listing finds nothing.
+    The build must report that and load nothing."""
+    import agentic_kg.tools.cypher_tools as cypher_tools
+
+    listing_db = RecordingGraphDb()
+    listing_db.constraint_listing = {"status": "success", "records": [{"found": 0}]}
+    monkeypatch.setattr(cypher_tools, "graphdb", listing_db)
+    loaded = []
+    monkeypatch.setattr(
+        kg,
+        "load_nodes_from_csv",
+        lambda *args, **kwargs: loaded.append(args) or {"status": "success"},
+    )
+
+    result = kg.import_nodes(
+        {
+            "source_file": "people.csv",
+            "label": "Person",
+            "unique_column_name": "id",
+            "properties": ["name"],
+        }
+    )
+
+    assert result["status"] == "error"
+    assert "Person/id" in result["error_message"]
+    assert loaded == []
 
 
 def test_batch_failure_reports_rows_committed(monkeypatch, one_batch):
@@ -913,6 +946,12 @@ def test_a_read_failure_does_not_escape_the_agent_facing_tool(
     import agentic_kg.tools.cypher_tools as cypher_tools
 
     monkeypatch.setattr(cypher_tools, "graphdb", fake_db)
+    # The test is about the read failure, not the constraint (KG-52): this
+    # file's FakeGraphDb answers every query with empty records, which the
+    # constraint check would report as its own error.
+    monkeypatch.setattr(
+        kg, "create_uniqueness_constraint", lambda label, column: {"status": "success"}
+    )
 
     class FakeToolContext:
         def __init__(self, state):

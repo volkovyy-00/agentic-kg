@@ -8,6 +8,7 @@ from agentic_kg.common.cypher_identifiers import (
     checked,
     checked_field,
     quote,
+    shown_name,
 )
 from agentic_kg.common.graph_profile import get_cached_profile
 from agentic_kg.common.neo4j_for_adk import (
@@ -217,6 +218,35 @@ def reset_neo4j_data() -> Dict[str, Any]:
     return tool_success("message", "Neo4j database has been reset.")
 
 
+# KG-52. The constraint carries no name of ours. IF NOT EXISTS matches on the
+# NAME when one is given, and `{label}_{key}_constraint` is ambiguous: label A_b
+# with key c and label A with key b_c both gave A_b_c_constraint, so the second
+# create was skipped silently and its nodes loaded with no constraint and no
+# index. Unnamed, IF NOT EXISTS matches on label and key, so it is skipped
+# exactly when a single-key uniqueness constraint on that pair already exists,
+# whatever it is called (constraints a 0.8.x build named still match; so do ones
+# made by hand). Neo4j generates the name, the same one for the same pair
+# (constraint_58c5f77e). Old constraints are neither renamed nor dropped, so a
+# graph can hold both kinds.
+#
+# The check below stays even though names can no longer collide: "success means
+# the constraint exists" must hold for any outcome the create does not report.
+# On Neo4j 5.26 a constraint squatting the generated name, or a single-property
+# node key constraint on the same pair, already makes the create itself fail;
+# the case left is a role that may create constraints but not list them. It is
+# sent through send_query (write access mode), not send_read_query, because on a
+# cluster a read session could land on a follower that has not yet applied the
+# create. SHOW UNIQUENESS CONSTRAINTS is used rather than SHOW CONSTRAINTS
+# filtered on `type` because the keyword does not depend on the `type` strings,
+# which are unverified for newer versions. entityType keeps a relationship
+# constraint on a same-named type out; `properties = [$key]` keeps a composite
+# constraint that contains the key out. Parameters, so no name is interpolated.
+_NODE_UNIQUENESS_FOUND = """SHOW UNIQUENESS CONSTRAINTS
+    YIELD entityType, labelsOrTypes, properties
+    WHERE entityType = 'NODE' AND labelsOrTypes = [$label] AND properties = [$key]
+    RETURN count(*) AS found"""
+
+
 def create_uniqueness_constraint(
     label: str,
     unique_property_key: str,
@@ -224,6 +254,8 @@ def create_uniqueness_constraint(
     """Creates a uniqueness constraint for a node label and property key.
     A uniqueness constraint ensures that no two nodes with the same label and property key have the same value.
     This improves the performance and integrity of data import and later queries.
+    After creating it, the tool checks that the database lists a uniqueness
+    constraint on exactly this label and property key, and returns an error if not.
 
     Args:
         label: The label of the node to create a constraint for.
@@ -231,7 +263,7 @@ def create_uniqueness_constraint(
 
     Returns:
         A dictionary with a status key ('success' or 'error').
-        On error, includes an 'error_message' key.
+        On error, includes an 'error_message' key (also when no such constraint exists after the create).
     """
     # Validate input, then quote. checked() refuses anything but a plain
     # identifier for the label, so a label never carries newlines, parens or
@@ -248,16 +280,27 @@ def create_uniqueness_constraint(
         return tool_error(str(exc))
 
     # Use string formatting since Neo4j doesn't support parameterization of labels and property keys when creating a constraint.
-    # The name's value is unchanged since 0.8.0 -- only quoted -- so IF NOT EXISTS
-    # still matches constraints earlier builds created. The format is knowingly
-    # ambiguous: label A_b with key c and label A with key b_c both give
-    # A_b_c_constraint, and IF NOT EXISTS then skips the second one silently.
-    # Fixing that changes the name, so it needs its own migration (follow-up to KG-44).
-    constraint_name = f"{label}_{unique_property_key}_constraint"
-    query = f"""CREATE CONSTRAINT {quote(constraint_name)} IF NOT EXISTS
+    # No name: see the comment above _NODE_UNIQUENESS_FOUND.
+    query = f"""CREATE CONSTRAINT IF NOT EXISTS
     FOR (n:{quote(label)})
     REQUIRE n.{quote(unique_property_key)} IS UNIQUE"""
     results = graphdb.send_query(query)
+    if is_error(results):
+        return results
+
+    listed = graphdb.send_query(
+        _NODE_UNIQUENESS_FOUND, {"label": label, "key": unique_property_key}
+    )
+    if is_error(listed):
+        return listed
+    records = listed.get("records") or []
+    found = records[0].get("found") if records else None
+    if not isinstance(found, int) or found < 1:
+        return tool_error(
+            "No single-key uniqueness constraint on "
+            f"{label}/{shown_name(unique_property_key)} was found "
+            "after the create."
+        )
     return results
 
 

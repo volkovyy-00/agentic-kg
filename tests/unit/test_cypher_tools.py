@@ -42,12 +42,16 @@ def test_create_uniqueness_constraint_quotes_a_keyword_label_and_key(fake_db):
     assert "REQUIRE n.`END` IS UNIQUE" in query
 
 
-def test_constraint_name_keeps_its_0_8_0_value(fake_db):
-    """IF NOT EXISTS matches by name: a changed value would stop matching the
-    constraints earlier builds created, and every re-run would add another."""
+def test_the_constraint_statement_carries_no_name(fake_db):
+    """KG-52: a given name makes IF NOT EXISTS match on the name, so two pairs
+    that join to the same text (A_b + c, A + b_c) shared one and the second
+    constraint was skipped silently. With no name it matches on label and key.
+    A name creeping back must fail here."""
     cypher_tools.create_uniqueness_constraint("Person", "id")
     query, _params = fake_db.queries[0]
-    assert query.startswith("CREATE CONSTRAINT `Person_id_constraint` IF NOT EXISTS")
+    assert " ".join(query.split()) == (
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (n:`Person`) REQUIRE n.`id` IS UNIQUE"
+    )
 
 
 def test_create_uniqueness_constraint_rejects_label_injection_payload_before_any_query(
@@ -67,12 +71,7 @@ UNICODE_ESCAPE_PAYLOAD = "x\\u0060: 1}) SET n.pwned = true //"
 
 def _only_quoted_names_remain(query, label, key):
     """The query with every quoted name removed: nothing of a payload is left."""
-    constraint_name = quote(f"{label}_{key}_constraint")
-    return (
-        query.replace(constraint_name, "")
-        .replace(quote(key), "")
-        .replace(quote(label), "")
-    )
+    return query.replace(quote(key), "").replace(quote(label), "")
 
 
 @pytest.mark.parametrize(
@@ -92,9 +91,6 @@ def test_create_uniqueness_constraint_quotes_any_key_text(fake_db, key):
     assert result["status"] == "success"
     query, _params = fake_db.queries[0]
     assert f"REQUIRE n.{quote(key)} IS UNIQUE" in query
-    assert query.startswith(
-        f"CREATE CONSTRAINT {quote('Person_' + key + '_constraint')} IF NOT EXISTS"
-    )
     remaining = _only_quoted_names_remain(query, "Person", key)
     assert " ".join(remaining.split()) == (
         "CREATE CONSTRAINT IF NOT EXISTS FOR (n:) REQUIRE n. IS UNIQUE"
@@ -119,6 +115,84 @@ def test_create_uniqueness_constraint_refuses_an_empty_nul_or_non_text_key(
     assert result["status"] == "error"
     assert result["error_message"] == f"Invalid property key: '{shown}'. {FIELD_RULE}"
     assert fake_db.queries == []
+
+
+FOUND_NONE = {"status": "success", "records": [{"found": 0}]}
+
+
+def test_a_successful_create_with_a_matching_constraint_returns_the_creates_result(
+    fake_db,
+):
+    result = cypher_tools.create_uniqueness_constraint("Person", "id")
+    assert result == {"status": "success", "records": []}
+
+
+def test_the_check_sends_label_and_key_as_parameters_never_in_the_text(fake_db):
+    cypher_tools.create_uniqueness_constraint("Order", "we`ird")
+    check, params = fake_db.queries[1]
+    assert "SHOW UNIQUENESS CONSTRAINTS" in check
+    assert "entityType = 'NODE'" in check
+    assert params == {"label": "Order", "key": "we`ird"}
+    assert "Order" not in check and "we`ird" not in check
+    assert len(fake_db.queries) == 2
+
+
+def test_a_create_that_leaves_no_matching_constraint_is_an_error(fake_db):
+    """KG-52 SC2: the create reported success but the database lists no
+    single-key uniqueness constraint on this label and key."""
+    fake_db.constraint_listing = FOUND_NONE
+    result = cypher_tools.create_uniqueness_constraint("A", "b_c")
+    assert result == {
+        "status": "error",
+        "error_message": (
+            "No single-key uniqueness constraint on A/b_c was found after the create."
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        {"status": "success", "records": []},
+        {"status": "success", "records": [{}]},
+        {"status": "success"},
+        {"status": "success", "records": [{"found": "1"}]},
+    ],
+    ids=["no-record", "no-found", "no-records-key", "found-not-a-number"],
+)
+def test_an_unusable_listing_is_an_error_not_an_exception(fake_db, listing):
+    fake_db.constraint_listing = listing
+    result = cypher_tools.create_uniqueness_constraint("A", "b_c")
+    assert result["status"] == "error"
+    assert "A/b_c" in result["error_message"]
+
+
+def test_a_failing_listing_returns_its_own_error(fake_db):
+    fake_db.constraint_listing = {"status": "error", "error_message": "no privilege"}
+    result = cypher_tools.create_uniqueness_constraint("A", "b_c")
+    assert result == {"status": "error", "error_message": "no privilege"}
+
+
+def test_a_failed_create_is_returned_before_any_check(fake_db, monkeypatch):
+    """Data that already breaks uniqueness still fails the create, and the
+    build reports that error, as before."""
+
+    def failing(query, parameters=None):
+        fake_db.queries.append((query, parameters or {}))
+        return {"status": "error", "error_message": "duplicate values"}
+
+    monkeypatch.setattr(fake_db, "send_query", failing)
+    result = cypher_tools.create_uniqueness_constraint("Person", "id")
+    assert result == {"status": "error", "error_message": "duplicate values"}
+    assert len(fake_db.queries) == 1
+
+
+def test_the_error_shows_at_most_80_characters_of_a_key(fake_db):
+    fake_db.constraint_listing = FOUND_NONE
+    key = "k" * 16383
+    message = cypher_tools.create_uniqueness_constraint("Person", key)["error_message"]
+    assert key not in message
+    assert f"Person/{'k' * 80}..." in message
 
 
 from agentic_kg.common.neo4j_for_adk import MAX_RETURNED_ROWS

@@ -26,9 +26,17 @@ class RecordingGraphDb:
     def __init__(self):
         self.queries = []
         self.read_queries = []
+        # What a SHOW UNIQUENESS CONSTRAINTS query returns (KG-52). The default
+        # says "one constraint found", so a test that only feeds the real
+        # create_uniqueness_constraint keeps passing; a test of the check
+        # replaces it. The query only counts, so this fake cannot show which
+        # label and key were asked about: only the integration test does.
+        self.constraint_listing = {"status": "success", "records": [{"found": 1}]}
 
     def send_query(self, query, parameters=None):
         self.queries.append((query, parameters or {}))
+        if "SHOW UNIQUENESS CONSTRAINTS" in query:
+            return self.constraint_listing
         return {"status": "success", "records": []}
 
     def send_read_query(self, query, parameters=None, max_rows=None):
