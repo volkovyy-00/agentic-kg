@@ -8,6 +8,21 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.10.3] - 2026-10-09
+
+### Fixed
+- **A node type could load with no uniqueness constraint and nobody was told (#83, KG-52)**: the build
+  named each constraint `<label>_<key>_constraint` and created it only if that name was free, so two node
+  rules whose names joined to the same text (label `A_b` with key `c`, and label `A` with key `b_c`)
+  shared one name, and the second constraint was skipped without an error. Its nodes then loaded with no
+  duplicate protection and no index. A constraint is now created without a name, so it is skipped only
+  when a uniqueness constraint on that label and key already exists, whatever it is called, and the build
+  then checks that the database lists one: if not, that node rule reports an error and loads no nodes.
+  A graph built by an earlier version rebuilds without error and gains no duplicate constraints.
+  Existing constraints are not renamed or dropped. Constraints made from this version on have names Neo4j
+  generates (such as `constraint_58c5f77e`), so a graph can hold both kinds; anything that drops a
+  constraint by its old name `<label>_<key>_constraint` must list the constraints first.
+
 ## [0.10.2] - 2026-10-04
 
 ### Fixed
