@@ -17,6 +17,7 @@ from agentic_kg.common.agent_names import (
     SCHEMA_PROPOSAL_COORDINATOR,
 )
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
+from agentic_kg.common.rejected_call_cap import was_stopped
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_plan_tools import (
     StateLike,
@@ -70,6 +71,21 @@ EMPTY_VERDICT_SUMMARY = (
     "no verdict: the critic produced no verdict. Call "
     "'get_proposed_construction_plan_with_approval_check' and judge the "
     "plan yourself rather than running the loop again on no feedback."
+)
+
+# The loop's result when the rejected-call cap stopped its proposal or review
+# step (rejected_call_cap.py). A stopped step's text is the cap's message, not
+# a proposal or a verdict, so this is never 'retry' (the coordinator re-runs
+# the loop on that), never 'valid', and never 'stopped:' (already ran this
+# turn). It covers both steps: the user only needs to know the plan was not
+# properly produced or reviewed.
+STUCK_LOOP_RESULT = (
+    "stuck: the plan step stopped after repeated tool calls that could not "
+    "run, so the plan may be incomplete or unreviewed. Do not call "
+    "schema_refinement_loop again this turn. Call "
+    "get_proposed_construction_plan_with_approval_check, show the user what "
+    "it returns, tell them the plan step got stuck, and ask how they want to "
+    "continue."
 )
 
 
@@ -344,12 +360,35 @@ class CheckStatusAndEscalate(BaseAgent):
     PLAN_PROBLEM_HEADER's "retry:") and FEEDBACK_KIND_KEY through the event's
     state_delta, never by mutating ctx.session.state: the loop runs inside an
     AgentTool, and AgentTool copies only state_delta out of the child session.
+
+    If the rejected-call cap stopped the proposal or review step this run, it
+    yields STUCK_LOOP_RESULT and ends the loop, before reading any verdict.
     """
 
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
+        if was_stopped(state, AGENT_NAME) or was_stopped(state, CRITIC_NAME):
+            # Checked before the verdict and the plan checks: whatever the
+            # critic said, a stopped step means this is not a review. End the
+            # loop -- the stuck agent's in-a-row count carries over within
+            # this run, so another iteration would stop again at once -- and
+            # leave no verdict, so a second call this turn reports none.
+            yield Event(
+                author=self.name,
+                content=types.Content(
+                    role="model", parts=[types.Part(text=STUCK_LOOP_RESULT)]
+                ),
+                actions=EventActions(
+                    escalate=True,
+                    state_delta={
+                        "feedback": "",
+                        FEEDBACK_KIND_KEY: VerdictKind.NONE.value,
+                    },
+                ),
+            )
+            return
         # This iteration's own critic text, or "" if the critic was silent:
         # clear_verdict_before_critic emptied the slot before it ran, so
         # nothing from an earlier iteration can be read here as this one's.
@@ -465,7 +504,8 @@ root_agent = LlmAgent(
       description and the tool result differ on any field, the tool result is correct and yours is wrong.
     - After calling 'schema_refinement_loop', do not assume the requested change was made, and do not
       report it as made. The loop returns only its final verdict ('valid' or 'retry' plus feedback, from
-      the critic or from the plan checks, or 'no verdict:' when the critic said nothing), never the plan
+      the critic or from the plan checks; 'no verdict:' when the critic said nothing; 'stopped:' when it
+      already ran this turn; 'stuck:' when its proposal or review step got stuck), never the plan
       itself and never raw tool output such as column statistics — a verdict
       is not evidence of what the plan says. Call 'get_proposed_construction_plan_with_approval_check'
       and compare the result against what the user asked for. If the change is missing, or if something
@@ -495,6 +535,13 @@ root_agent = LlmAgent(
       which will run in a fresh turn with a new budget. Otherwise present that plan together with the
       verdict quoted in the 'stopped:' message, and let the user decide whether to approve it or ask for
       another change, which will run in a fresh turn with a new budget.
+    - If the verdict the loop returns begins with 'stuck:', the plan step stopped after repeated tool calls
+      that could not run, so the plan may be incomplete or unreviewed -- do not call 'schema_refinement_loop'
+      again this turn. Call 'get_proposed_construction_plan_with_approval_check'. If it returns an error
+      saying there is no proposed construction plan, tell the user nothing has been proposed yet. Otherwise
+      show the plan as returned, with any problems it lists, tell the user plainly that the plan step got
+      stuck and the plan has not been reviewed, and ask how they want to continue, which will run in a
+      fresh turn with a new budget.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.
