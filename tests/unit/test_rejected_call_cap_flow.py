@@ -336,7 +336,8 @@ def test_every_agent_the_user_talks_to_stops_after_three_stuck_replies(
     assert not _unanswered_calls(saved)
 
 
-def test_the_coordinators_real_transfer_is_neither_refused_nor_counted(monkeypatch):
+def test_the_coordinators_real_transfer_is_not_refused(monkeypatch):
+    """Not counted is pinned by test_rejected_call_cap.py::test_the_real_transfer_is_progress_not_stuck."""
     coordinator = ScriptedLlm(
         model="scripted",
         responses=[

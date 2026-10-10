@@ -183,6 +183,7 @@ def test_a_stuck_critic_makes_the_loop_report_stuck_and_never_records_the_stop(
 
     assert _loop_results(events) == [STUCK_LOOP_RESULT]
     assert final.state["feedback"] == ""
+    assert seen
     texts = [
         part.text or ""
         for response in seen
