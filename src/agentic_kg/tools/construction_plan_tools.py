@@ -21,6 +21,8 @@ from .kg_construction_tools import (
     required_relationship_name_problem,
 )
 from .node_key_check import node_key_refusal, summarize_node_key
+from .plan_revision_record import PENDING
+from .plan_revision_record import revision as _revision
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -28,6 +30,21 @@ from .reference_reachability import (
 from .relationship_endpoints import is_omitted, relationship_endpoints
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
+
+# Added to the approval check's result only while a revision is pending, so the
+# schema stage learns from a tool -- not from the conversation -- that the user
+# came back from construction. Absent otherwise, so a first approval is unchanged.
+REVISION_NOTE = (
+    "The user came back from the construction step to change this plan, and its "
+    "approval was withdrawn. Show them this plan, apply the change they asked for, "
+    "and ask them to approve it again."
+)
+
+
+def _revision_pending(tool_context: ToolContext) -> bool:
+    record = _revision(tool_context.state)
+    return record is not None and record["status"] == PENDING
+
 
 # Added after the build's own refusal text (KG-44), but only where a way forward
 # exists: a label or relationship type can be renamed to follow its rule. A
@@ -1116,7 +1133,7 @@ def get_proposed_construction_plan_with_approval_check(
     notes = _format_unverified_notes(unverified)
 
     if problems:
-        return tool_error(
+        refused = tool_error(
             # States the fact and stops. It deliberately does NOT say "run
             # schema_refinement_loop with these as feedback": that is right
             # mid-turn but contradicts the instruction outright on the second
@@ -1139,39 +1156,42 @@ def get_proposed_construction_plan_with_approval_check(
             "has you presenting it, but do not present it for approval until "
             "this tool reports success." + notes
         )
+        if _revision_pending(tool_context):
+            refused["revision"] = REVISION_NOTE
+        return refused
 
-    return tool_success(
-        "result",
-        {
-            "proposed_construction_plan": construction_plan,
-            "not_verified": unverified,
-            "message": (
-                # Does NOT claim the critic's remaining objections are advisory
-                # or that no schema change will clear them: this tool cannot see
-                # which branch the coordinator is in, and on a first 'retry' the
-                # instruction mandates another schema_refinement_loop pass on an
-                # objection these checks have no way to observe (they only know
-                # joins, endpoint labels, typed join columns, multi-valued joined
-                # properties, and reference-column reachability). An
-                # unconditional claim here would be true on 'stopped:' and the
-                # second 'retry' but false on the first, contradicting the
-                # instruction on exactly the branch where refinement is still
-                # required.
-                "This plan can be approved right now: "
-                "'approve_proposed_construction_plan' will accept it as it stands. "
-                "That is all this tool knows: it checks joins, endpoint labels, "
-                "typed columns, relationships whose two ends are the same node, "
-                "whether each joined node property holds one value "
-                "per node, and whether every approved file's reference "
-                "columns can still be reached, not whether the plan is the right "
-                "one. When your instruction has you presenting this plan, show it "
-                "to the user together with any outstanding critic objections, ask "
-                "them to approve it as it stands or ask for a change, and leave "
-                "that decision to them -- when you present it, do not tell them "
-                "the plan is not ready for approval."
-            ),
-        },
-    )
+    payload = {
+        "proposed_construction_plan": construction_plan,
+        "not_verified": unverified,
+        "message": (
+            # Does NOT claim the critic's remaining objections are advisory
+            # or that no schema change will clear them: this tool cannot see
+            # which branch the coordinator is in, and on a first 'retry' the
+            # instruction mandates another schema_refinement_loop pass on an
+            # objection these checks have no way to observe (they only know
+            # joins, endpoint labels, typed join columns, multi-valued joined
+            # properties, and reference-column reachability). An
+            # unconditional claim here would be true on 'stopped:' and the
+            # second 'retry' but false on the first, contradicting the
+            # instruction on exactly the branch where refinement is still
+            # required.
+            "This plan can be approved right now: "
+            "'approve_proposed_construction_plan' will accept it as it stands. "
+            "That is all this tool knows: it checks joins, endpoint labels, "
+            "typed columns, relationships whose two ends are the same node, "
+            "whether each joined node property holds one value "
+            "per node, and whether every approved file's reference "
+            "columns can still be reached, not whether the plan is the right "
+            "one. When your instruction has you presenting this plan, show it "
+            "to the user together with any outstanding critic objections, ask "
+            "them to approve it as it stands or ask for a change, and leave "
+            "that decision to them -- when you present it, do not tell them "
+            "the plan is not ready for approval."
+        ),
+    }
+    if _revision_pending(tool_context):
+        payload["revision"] = REVISION_NOTE
+    return tool_success("result", payload)
 
 
 # Tool: Get Proposed construction Plan
