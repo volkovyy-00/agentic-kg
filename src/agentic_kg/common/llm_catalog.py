@@ -6,6 +6,7 @@ import litellm
 from google.adk.models.lite_llm import LiteLlm
 
 from .config import get_settings
+from .litellm_client import ToolArgsRepairingClient
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,10 @@ def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
     LLMRegistry does resolve "openrouter/..." to LiteLlm, but only with default
     arguments -- none of the timeout, retry, max_tokens and reasoning settings
     this instance carries.
+
+    Every instance carries ToolArgsRepairingClient, so a tool call whose
+    arguments do not parse is retried as on google-adk 2.9.2 instead of being
+    dropped (see common/litellm_client.py).
     """
     if kind not in _llm_instances:
         model = _model_name(kind)
@@ -94,5 +99,7 @@ def get_llm(kind: LlmKind = LlmKind.reasoning) -> LiteLlm:
         }
         if kind is LlmKind.reasoning:
             kwargs["reasoning_effort"] = _REASONING_EFFORT
-        _llm_instances[kind] = LiteLlm(model=model, **kwargs)
+        _llm_instances[kind] = LiteLlm(
+            model=model, llm_client=ToolArgsRepairingClient(), **kwargs
+        )
     return _llm_instances[kind]

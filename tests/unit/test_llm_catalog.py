@@ -89,3 +89,15 @@ def test_output_token_cap_never_exceeds_8192():
     _clear_cache()
     for kind in LlmKind:
         assert 0 < get_llm(kind)._additional_args["max_tokens"] <= 8192
+
+
+def test_every_kind_gets_the_tool_args_repairing_client(monkeypatch):
+    """The client must be set when the cached instance is built: every agent's
+    model comes from here, and a LiteLlm without it drops tool calls whose
+    arguments do not parse (see common/litellm_client.py)."""
+    from agentic_kg.common.litellm_client import ToolArgsRepairingClient
+
+    reset_settings()
+    _clear_cache()
+    for kind in LlmKind:
+        assert isinstance(get_llm(kind).llm_client, ToolArgsRepairingClient)
