@@ -297,7 +297,7 @@ def test_the_agent_does_not_disallow_transfers():
     disallow_transfer_to_parent would also close the door -- and would make
     Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every follow-up question back
-    through the coordinator. On google-adk 2.9 either flag also makes a
+    through the coordinator. On google-adk 2.10 either flag also makes a
     blocked 'finished' call raise ValueError. See the spec's 'Why not'
     section."""
     assert graphrag_agent.disallow_transfer_to_parent is False
@@ -433,8 +433,9 @@ def test_a_confirmed_handoff_still_reaches_the_coordinator(monkeypatch):
     path broke.
 
     Both models are scripted: the transfer runs inline in the same turn (the
-    transfer loop in Context._run_node_internal, agents/context.py), so the
-    coordinator's real model would otherwise be invoked for real.
+    transfer loop in DynamicNodeScheduler.__call__,
+    workflow/_dynamic_node_scheduler.py), so the coordinator's real model would
+    otherwise be invoked for real.
     """
     monkeypatch.setattr(
         graphrag_agent,

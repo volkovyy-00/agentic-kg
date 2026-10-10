@@ -16,8 +16,12 @@ Check, cheapest first:
    attributes at all (ADK sets them only per response), and the span JSON has no status field.
 3. **Server log:** the `adk web` process's own output is the only place a swallowed exception surfaces.
 
-An exception that escapes the run is not swallowed: on google-adk 2.9, `/run_sse` sends it to the
+An exception that escapes the run is not swallowed: on google-adk 2.10, `/run_sse` sends it to the
 browser, which shows a red error event in the chat plus a one-line snackbar.
+
+**Trace shape.** On google-adk 2.10 a `call_llm` span covers only the model call. The tool calls it
+asked for (`execute_tool <name>`) and any agent transfer are traced beside it, as siblings under the
+agent's `invoke_agent <name>` span, not inside it: look for a hung tool there.
 
 **Reasoning-model calls failing.** A 402 from OpenRouter shows as the red event and snackbar, and the
 `call_llm` span has no attributes. Check the OpenRouter balance and the server log before assuming a

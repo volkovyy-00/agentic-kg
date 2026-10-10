@@ -9,6 +9,7 @@ unit-testable and is verified by hand (see the plan's Task 5).
 
 import asyncio
 import inspect
+from collections import Counter
 
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
@@ -123,8 +124,9 @@ def test_the_retrieval_agent_resolves_in_the_agent_tree():
     that structurally impossible, since there is only one definition to read.
     Do not delete this as redundant with that: the failure it catches is a
     correct name pointing at an agent no longer in the tree: find_agent
-    returns None for it, so ADK's transfer loop (Context._run_node_internal)
-    raises ValueError and the turn ends with only a one-line error.
+    returns None for it, so ADK's transfer loop (DynamicNodeScheduler.__call__,
+    workflow/_dynamic_node_scheduler.py) raises ValueError and the turn ends
+    with only a one-line error.
     """
     assert full_workflow_agent.find_agent(GRAPHRAG_AGENT_NAME) is not None
 
@@ -251,7 +253,7 @@ def _declaration_names(request):
 
 async def _run_turns(agent, app_name, messages):
     """Drive real user turns through ADK, all in ONE session, and return each
-    turn's events.
+    turn's events and the session's saved events.
 
     Points the Runner at an agent that is already wired into the real tree
     rather than re-parenting it, which BaseAgent's sub-agent parenting
@@ -275,7 +277,10 @@ async def _run_turns(agent, app_name, messages):
                 )
             ]
         )
-    return turns
+    saved = await runner.session_service.get_session(
+        app_name=app_name, user_id="u1", session_id=session.id
+    )
+    return turns, saved.events
 
 
 def _hidden_transfer_replies(events):
@@ -293,16 +298,22 @@ def _final_text(events):
     return "".join(part.text or "" for part in parts)
 
 
-def _unanswered_calls(llm_request):
-    """Function-call ids in a request's history with no matching response --
-    the shape OpenAI and Anthropic reject with a 400."""
-    calls, answered = set(), set()
-    for content in llm_request.contents:
-        for part in content.parts or []:
+def _unanswered_calls(events):
+    """Function calls in a session's saved events with no matching response
+    -- the shape OpenAI and Anthropic reject with a 400.
+
+    Reads the session, not the model's request: google-adk 2.10 drops an
+    unanswered call from the request (drop_orphaned_function_calls), and ADK
+    strips call ids from a request to this fake model, so a request cannot
+    show one. Counts per id rather than comparing sets, because a scripted
+    reply reused across model calls gives every call it makes the same id."""
+    calls, answered = Counter(), Counter()
+    for event in events:
+        for part in (event.content.parts if event.content else None) or []:
             if part.function_call:
-                calls.add(part.function_call.id)
+                calls[part.function_call.id] += 1
             if part.function_response:
-                answered.add(part.function_response.id)
+                answered[part.function_response.id] += 1
     return calls - answered
 
 
@@ -311,7 +322,8 @@ _TRANSFER = _call("transfer_to_agent", {"agent_name": "kg_construction_agent_v1"
 
 async def _run_one_turn(agent, app_name, message="hello"):
     """One user turn through ADK; the events it produced."""
-    return (await _run_turns(agent, app_name, [message]))[0]
+    turns, _ = await _run_turns(agent, app_name, [message])
+    return turns[0]
 
 
 def test_the_strip_callback_is_wired_onto_the_construction_agent():
@@ -329,7 +341,7 @@ def test_the_agent_does_not_disallow_transfers():
     disallow_transfer_to_parent would also close the door -- and would make
     Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every in-phase follow-up back
-    through the coordinator. On google-adk 2.9 either flag also makes a
+    through the coordinator. On google-adk 2.10 either flag also makes a
     blocked 'finished' call raise ValueError. See the spec's 'Why not'
     section."""
     assert graph_construction_agent.disallow_transfer_to_parent is False
@@ -468,7 +480,7 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
             responses=[_TRANSFER] * (cap + 1) + [_text("back to work")],
         ),
     )
-    first, second = asyncio.run(
+    (first, second), saved = asyncio.run(
         _run_turns(
             graph_construction_agent,
             "construction_transfer_loop_test",
@@ -484,7 +496,7 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
     # Turn 2: one refused call (the count restarted), then an answer.
     assert len(requests) == cap + 2
     assert all(is_error(reply) for reply in _hidden_transfer_replies(second))
-    assert not _unanswered_calls(requests[-1])
+    assert not _unanswered_calls(saved)
 
 
 def test_a_reply_that_also_runs_a_real_tool_lets_the_model_report_it(
@@ -677,8 +689,9 @@ def test_a_confirmed_handoff_still_reaches_the_retrieval_agent(monkeypatch):
     a FakeToolContext and would pass even if ADK's resolution path broke.
 
     Both models are scripted: the transfer runs inline in the same turn (the
-    transfer loop in Context._run_node_internal, agents/context.py), so
-    graphrag_agent's real model would otherwise be invoked for real.
+    transfer loop in DynamicNodeScheduler.__call__,
+    workflow/_dynamic_node_scheduler.py), so graphrag_agent's real model would
+    otherwise be invoked for real.
     """
     monkeypatch.setattr(
         graph_construction_agent,
@@ -728,8 +741,8 @@ def test_both_model_callbacks_are_present_on_the_construction_agent():
     The strip removes the transfer_to_agent DECLARATION; drop_foreign_context
     removes the coordinator's own delegating call, which ADK rewrites into a
     'For context: ... called tool `transfer_to_agent` with parameters: ...'
-    message (_present_other_agent_message, flows/llm_flows/_fencing.py) and
-    then keeps in history for every later turn. Either one alone leaves the
+    message (_present_other_agent_message, flows/llm_flows/context/_fencing.py)
+    and then keeps in history for every later turn. Either one alone leaves the
     model a standing worked example of a door it is not supposed to use.
     """
     callbacks = graph_construction_agent.canonical_before_model_callbacks

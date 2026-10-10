@@ -1,6 +1,6 @@
 [project]
 name = "agentic_kg"
-version = "0.10.3"
+version = "0.10.4"
 description = "Multi-agent system that builds a Neo4j knowledge graph from source files, built on Google ADK"
 readme = "README.md"
 authors = [
@@ -12,10 +12,10 @@ dependencies = [
     "clevercsv[full]>=0.8.3",
     "fsspec>=2024.9,<2025.0.0",
     # One minor window on purpose: 2.x minors change behaviour this code relies on,
-    # so each move gets its own ticket (KG-25; 2.10 is KG-42). CVE-2026-4810
-    # (unauthenticated RCE in the ADK web server) is fixed on 2.x from 2.0.0a2
-    # (GHSA-rg7c-g689-fr3x).
-    "google-adk>=2.9.2,<2.10",
+    # so each move gets its own ticket (KG-25 and KG-42 were the 2.9 and 2.10 moves;
+    # 2.11 is KG-59). CVE-2026-4810 (unauthenticated RCE in the ADK web server) is
+    # fixed on 2.x from 2.0.0a2 (GHSA-rg7c-g689-fr3x).
+    "google-adk>=2.10.0,<2.11",
     # >=1.82.3 required for GPT-5 / reasoning-model streaming: it maps `reasoning`
     # -> `reasoning_content` in the streaming Delta and requires openai>=2.8.0,
     # which understands GPT-5's reasoning stream events (old openai 1.54 parsed

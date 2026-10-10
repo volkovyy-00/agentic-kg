@@ -2,22 +2,22 @@
 """Remove ADK's injected agent-transfer tool from a gated agent's request.
 
 ADK gives every LlmAgent with a parent or peers a `transfer_to_agent` tool and
-a system-instruction block advertising it (`agent_transfer.py`). That tool does
-not consult the handoff gates, so a gated agent could leave its phase through
-it with the confirmation flag still unset -- the exact defect the gates exist
-to prevent.
+a system-instruction block advertising it
+(`flows/llm_flows/extensions/_agent_transfer.py`). That tool does not consult
+the handoff gates, so a gated agent could leave its phase through it with the
+confirmation flag still unset -- the exact defect the gates exist to prevent.
 
 The obvious fix, `disallow_transfer_to_parent`, is deliberately NOT used. That
 flag also turns off phase stickiness: `Runner._find_agent_to_run` reads it
-through `_is_transferable_across_agent_tree` when choosing who handles each NEW
-user message, so setting it sends every in-phase follow-up question back
-through the coordinator to be re-arbitrated. A multi-question window is what
-the construction phase is for. Stripping the request instead leaves the flag
-unset, and `_find_agent_to_run` never inspects request contents. On
-google-adk 2.9 either flag also makes a blocked `finished` call raise
-ValueError (`_transfer_utils.resolve_and_derive_transfer_context`), so a
-`make_finished` target must be the agent's parent or a peer -- one more
-reason not to set it.
+through `is_transferable_across_agent_tree` (agents/_agent_router.py) when
+choosing who handles each NEW user message, so setting it sends every in-phase
+follow-up question back through the coordinator to be re-arbitrated. A
+multi-question window is what the construction phase is for. Stripping the
+request instead leaves the flag unset, and `_find_agent_to_run` never inspects
+request contents. On google-adk 2.10 either flag also makes a blocked
+`finished` call raise ValueError
+(`_transfer_utils.resolve_and_derive_transfer_context`), so a `make_finished`
+target must be the agent's parent or a peer -- one more reason not to set it.
 
 The cost is coupling: we remove something ADK built, so we depend on the shape
 it built it in -- marker phrases in an interpolated instruction block, and the
@@ -125,11 +125,11 @@ _TRANSFER_INSTRUCTION_BODY_ANCHOR = _phrase(
 # ...and this closes the fixed body. The end boundary is needed because the
 # block is NOT reliably the last thing in the system instruction.
 # _preprocess_async runs every request processor first -- agent_transfer last
-# among them (AutoFlow) -- and THEN, in a separate loop, each of the agent's
-# own tools' process_llm_request. No tool on any gated agent appends to the
-# system instruction today, so nothing currently lands after the block. A
-# future toolset that did would have its own legitimate instructions silently
-# deleted by a truncate-to-end-of-string removal.
+# among them (AutoFlow) -- and THEN, from a second list (tool_request_processors),
+# each of the agent's own tools' process_llm_request. No tool on any gated agent
+# appends to the system instruction today, so nothing currently lands after the
+# block. A future toolset that did would have its own legitimate instructions
+# silently deleted by a truncate-to-end-of-string removal.
 _TRANSFER_INSTRUCTION_ENDING = _phrase("the function call.")
 
 # Paragraphs ADK appends after the body, in this order. Each is recognised only
@@ -160,9 +160,9 @@ def strip_transfer_to_agent(
     """Remove the injected transfer tool from the request, in place.
 
     The parameter NAMES are load-bearing: ADK invokes this purely by keyword,
-    as callback(callback_context=..., llm_request=...) (_handle_before_model_callback
-    in base_llm_flow.py). Renaming either one fails at request time with a
-    TypeError, not at import.
+    as callback(callback_context=..., llm_request=...) (handle_before_model_callback
+    in flows/llm_flows/core/_finalizer.py). Renaming either one fails at request
+    time with a TypeError, not at import.
 
     Always returns None so ADK proceeds with the (now stripped) request. The
     Optional[LlmResponse] annotation documents ADK's contract rather than this
@@ -216,13 +216,13 @@ def refuse_transfer_to_agent(
     """Answer a call to the stripped transfer tool before ADK does.
 
     The strip removes the tool, but a model can still call it from memory.
-    ADK 2.9 would answer with build_tool_not_found_response, which invites a
+    ADK 2.10 would answer with build_tool_not_found_response, which invites a
     retry, and nothing but RunConfig.max_llm_calls (default 500) would stop a
     model that keeps retrying. ADK runs before-tool callbacks ahead of that
-    reply (_tool_caller.py _execute_single_prepared_call), so this one answers
-    first, naming this agent's real exit. Every call gets an answer, so the
-    history never holds an unanswered call; the retry cap lives in the
-    callbacks below.
+    reply (flows/llm_flows/tools/_caller.py _execute_single_prepared_call), so
+    this one answers first, naming this agent's real exit. Every call gets an
+    answer, so the history never holds an unanswered call; the retry cap lives
+    in the callbacks below.
 
     If the reply that made the call also spoke to the user -- typically a
     question, then the call, which is how the intent agent left its phase in
@@ -233,10 +233,10 @@ def refuse_transfer_to_agent(
     answered. That is the only place to set skip_summarization: a turn must
     never end on it without text for the user.
 
-    Always answer, never raise: a raise leaves the transfer call unanswered in
-    history, and providers reject that history on every later turn. The same
-    holds for ending the turn, which end_turn_past_hidden_transfer_cap does
-    with a text reply.
+    Always answer, never raise: a raise ends the turn with an error, and the
+    model never sees the refusal (google-adk 2.10 drops the unanswered call
+    from later requests). The same holds for ending the turn, which
+    end_turn_past_hidden_transfer_cap does with a text reply.
 
     Returns None for every other tool, so ADK runs it as usual. The parameter
     NAMES are load-bearing: ADK passes tool=, args= and tool_context= by

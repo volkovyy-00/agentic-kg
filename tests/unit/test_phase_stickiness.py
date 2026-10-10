@@ -1,7 +1,7 @@
 """Empirical proof that a gated agent keeps the user across turns.
 
 ADK decides who handles each NEW top-level user message in
-Runner._find_agent_to_run (on google-adk 2.9, find_agent_to_run in
+Runner._find_agent_to_run (on google-adk 2.10, find_agent_to_run in
 agents/_agent_router.py): it walks back to the agent that replied last and
 returns it only if is_transferable_across_agent_tree finds
 disallow_transfer_to_parent unset on that agent and every ancestor. Setting

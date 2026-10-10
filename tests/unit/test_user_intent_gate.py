@@ -245,7 +245,7 @@ def _multi_call(*name_arg_pairs):
 
     It dispatches them concurrently, not sequentially:
     _execute_prepared_function_calls_async
-    (google/adk/flows/llm_flows/_batch_tool_executor.py) creates one asyncio
+    (google/adk/flows/llm_flows/tools/_batch_executor.py) creates one asyncio
     task per call and gathers them, so emission order is not a documented contract.
     It holds here because every tool on this agent is synchronous and no plugin
     is registered, leaving no suspension point inside a task -- each runs to
@@ -333,7 +333,7 @@ def test_the_agent_does_not_disallow_transfers():
     disallow_transfer_to_parent would also close the door -- and would make
     Runner._find_agent_to_run (agents/_agent_router.py) stop returning this agent
     for the user's SECOND message, sending every mid-interview reply back
-    through the coordinator to be re-arbitrated. On google-adk 2.9 either
+    through the coordinator to be re-arbitrated. On google-adk 2.10 either
     flag also makes a blocked 'finished' call raise ValueError."""
     assert user_intent_agent.disallow_transfer_to_parent is False
     assert user_intent_agent.disallow_transfer_to_peers is False
@@ -369,10 +369,10 @@ def test_the_coordinators_transfer_call_never_reaches_this_agents_context(monkey
     Wiring assertions prove drop_foreign_context is attached, not that it does
     anything -- the same gap TRAP 5 guards for the strip. This agent is entered
     BY the coordinator's transfer_to_agent call, which ADK rewrites into a
-    'For context: ...' turn (flows/llm_flows/_fencing.py) that would otherwise
-    sit in history for the whole interview: a worked example of the exact call
-    the strip removes the declaration for. Catches drop_foreign_context being
-    dropped, or being wired somewhere it never runs.
+    'For context: ...' turn (flows/llm_flows/context/_fencing.py) that would
+    otherwise sit in history for the whole interview: a worked example of the
+    exact call the strip removes the declaration for. Catches
+    drop_foreign_context being dropped, or being wired somewhere it never runs.
     """
     monkeypatch.setattr(
         full_workflow_agent,
