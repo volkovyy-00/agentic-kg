@@ -100,6 +100,8 @@ add a new numbered one only when an A/B comparison is wanted. Keep the dict shap
   fast with `tool_error(...)` when an earlier key is missing — that is how "requires approved X" is
   enforced. When a bug crosses agents, check which state keys each tool reads and writes first.
 - A new tool returns a `ToolResult` (`src/agentic_kg/common/tool_result.py`), never an ad hoc dict.
+- The top-level `warnings` key of any tool result is reserved for an optional list of warning strings, passed
+  as `tool_success(..., warnings=...)` or `tool_error(..., warnings=...)`; no tool uses it as its payload key.
 - All Cypher goes through the `get_graphdb()` singleton (`src/agentic_kg/common/neo4j_for_adk.py`);
   `NEO4J_DSN` takes a local `bolt://` or an Aura `neo4j+s://` DSN.
 - `get_llm(kind)` (`src/agentic_kg/common/llm_catalog.py`) returns one cached LiteLLM instance per

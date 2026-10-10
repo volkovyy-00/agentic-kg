@@ -8,6 +8,16 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.12.1] - YYYY-MM-DD
+
+### Changed
+- **A partly failed build reports its warnings in the same place as a successful one (#NN, KG-16)**: the
+  warnings from the rules that did load used to arrive twice on a partial failure, as a list and again as text
+  inside the error message, and the construction agent was told to look in both. They now arrive only in the
+  result's `warnings` list, whether the build succeeded or partly failed, and the error message lists only what
+  loaded and what failed. Tool results may carry that `warnings` list on success and on error, and the result
+  helpers keep it instead of failing on it or dropping it.
+
 ## [0.12.0] - 2026-10-10
 
 ### Fixed
