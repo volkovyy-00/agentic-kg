@@ -111,7 +111,8 @@ def test_pending_and_empty_settles_without_asking(contents):
     contents(_EMPTY)
     state = _state(record.PENDING)
     result = tools.check_database_before_rebuild(FakeToolContext(state))
-    assert result["status"] == "success" and "rebuild" in result
+    assert result["status"] == "success"
+    assert "rebuild" in result
     assert record.revision(state) == {"status": record.ANSWERED, "cleared": None}
 
 

@@ -102,7 +102,8 @@ def test_counts_per_label_and_type(db):
     contents = _contents()
     assert contents["labels"] == {"Person": 2, "My Label": 1}
     assert contents["relationship_types"] == {"KNOWS": 1}
-    assert contents["nodes"] == 3 and contents["relationships"] == 1
+    assert contents["nodes"] == 3
+    assert contents["relationships"] == 1
 
 
 def test_a_name_needing_quotes_is_counted(db):
