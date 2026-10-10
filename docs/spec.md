@@ -55,7 +55,7 @@ A/B comparison — the one pair documented as a deliberate retention; `user_inte
 | Coordinator tools | `get_physical_schema`, `get_source_location`, `neo4j_is_ready` | **none** — its only capability is transferring away |
 | Can read source files | Yes — the whole `SOURCE_URI` seam | **No** — has no file tools at all |
 | Approval gates | Yes, between every stage | None |
-| Session state | Eleven keys across five stages | `{}` — uses none |
+| Session state | Thirteen keys across five stages | `{}` — uses none |
 | Commits since the fork | 22 — PRs #2, #3, #4, #8, #9, #11, #12, #13, #15 | 1 — mechanical repairs in #2 |
 | Test coverage | Yes | Zero tests reference it |
 
@@ -114,10 +114,15 @@ except the next stage's tools failing on the missing state key, the same fail-fa
    consistency, a joined property holding one value per node, or reference-column reachability — finds a
    problem, so the repair happens in the same turn rather than at approval time, as long as one of the
    loop's two iterations remains. Writes `proposed_construction_plan`, `feedback`,
-   `approved_construction_plan`.
+   `approved_construction_plan`. On re-entry from construction it finds the current plan, not an empty
+   one, and once the revised plan is approved its `finished` hands the user straight back to
+   `graph_construction_agent_v1`.
 4. **`graph_construction_agent_v1`** — reads the approved plan, creates uniqueness constraints, and runs
-   `build_graph_from_construction_rules`. Writes one key,
-   `construction_handoff_confirmed`, a per-turn flag gating the explicit handoff to stage 5. ADK's
+   `build_graph_from_construction_rules`. Writes two per-turn flags, `construction_handoff_confirmed` (the
+   handoff to stage 5) and `plan_revision_confirmed` (the way back to stage 3, which withdraws the approval
+   by writing `None` and records `plan_revision`). After a way back it asks, once, whether to clear the
+   database before rebuilding, if the database is not empty; the build refuses until that is answered, and
+   a clear erases the whole database but keeps Neo4j's built-in lookup indexes. ADK's
    injected `transfer_to_agent` tool is stripped from this agent's requests, so that gated `finished`
    is the only exit the model is offered.
 5. **`graphrag_agent_v2`** — answers questions over the finished graph. Reads and writes one key,
@@ -142,12 +147,13 @@ which is what makes the whole path work unchanged on Aura.
   invocation, the second call short-circuited with `stopped: …`, and the coordinator correctly fell back
   to asking the user to decide. Note the key is zeroed on every entry to the stage coordinator, so its
   stored value tells you nothing about earlier turns.
-- **Stages 4 and 5 each write one flow-control flag; neither records what it did.** Whether a graph was
+- **Stages 4 and 5 write flow-control flags, and stage 4 a `plan_revision` record after a way back; neither records what it built.** Whether a graph was
   built, and what it contains, is still recoverable only from the event transcript or by querying
   Neo4j. A resumed session cannot tell.
 - The coordinator's `get_physical_schema` check is framed as "is the database empty," but **nothing
-  gates on the answer**. Construction MERGEs into whatever is already there, and the retrieval stage
-  will then profile those foreign labels as part of the graph.
+  gates on the answer** for a first build. Construction MERGEs into whatever is already there, and the
+  retrieval stage will then profile those foreign labels as part of the graph. After a way back,
+  construction reads the database itself and asks before rebuilding.
 - `graph_construction_agent_v1` was observed emitting a "Construction warnings" section that the
   construction tool did not produce — it re-labelled the schema critic's `feedback` text from two turns
   earlier as construction output. The same class of error §4 exists to prevent, one stage later.
@@ -243,6 +249,8 @@ See `CONTRIBUTING.md` for the branch/PR workflow, testing expectations, and CHAN
   `docs/backlog/`. Documents there are absent from a fresh clone — do not cite those paths as if a
   reader can open them. Only those two subdirectories are excluded; the rest of `docs/`, including this
   file, is tracked normally and is where a durable, shared project doc belongs.
+- **A turn-scoped confirmation gate takes its key and plumbing from `TurnFlag` (`common/turn_flags.py`);
+  its tools and texts stay its own.**
 - **Tests.** `uv run pytest` defaults to `-m 'not integration'`, so it never touches Docker; integration
   tests are opt-in with `-m integration` and skip cleanly when no Docker daemon is reachable.
 - **Ruff lints and formats.** `ruff check .` / `ruff format --check .` (config: `pyproject.toml`'s
