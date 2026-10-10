@@ -2,6 +2,9 @@
 
 A tool returns tool_success(key, value) -- {"status": "success", key: value} --
 or tool_error(message) -- {"status": "error", "error_message": message}.
+Either may also carry warnings=[...]: a top-level "warnings" list of strings,
+present only when the list is non-empty. The name "warnings" is reserved for
+that list in every tool's result; never use it as a payload key.
 Callers read a result through is_success, is_error, get_or_else, get_or_raise,
 map_result and map_error rather than indexing the dict. Do not invent another
 dict shape for a new tool. Never return a bare {"error": ...}: the
@@ -24,33 +27,47 @@ from typing import Any, Callable, Dict, Mapping
 ToolResult = Dict[str, Any]
 
 
-def tool_success(key: str, result: Any) -> ToolResult:
+def tool_success(
+    key: str, result: Any, *, warnings: list[str] | None = None
+) -> ToolResult:
     """Create a successful result containing the given value.
 
     Args:
-        key: the key to store the result under
+        key: the key to store the result under; never "warnings"
         result: The successful result value
+        warnings: warning strings, stored under "warnings" only when non-empty
 
     Returns:
         ToolResult: success dict with the result under the given key
     """
-    return {"status": "success", key: result}
+    return _with_warnings({"status": "success", key: result}, warnings)
 
 
-def tool_error(message: str) -> ToolResult:
+def tool_error(message: str, *, warnings: list[str] | None = None) -> ToolResult:
     """Create an error result with the given message.
 
     Args:
         message: The error message
-        error_type: Optional exception type to use (defaults to ValueError)
+        warnings: warning strings, stored under "warnings" only when non-empty
 
     Returns:
         ToolResult: error dict
     """
-    return {
-        "status": "error",
-        "error_message": str(message) if message is not None else "Unknown error",
-    }
+    return _with_warnings(
+        {
+            "status": "error",
+            "error_message": str(message) if message is not None else "Unknown error",
+        },
+        warnings,
+    )
+
+
+def _with_warnings(result: ToolResult, warnings: list[str] | None) -> ToolResult:
+    # Only when non-empty: a build with nothing to warn about returns the same
+    # result it always did, and no other tool's result gains the key.
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def is_success(result: ToolResult) -> bool:
@@ -66,12 +83,12 @@ def is_error(result: ToolResult) -> bool:
 def _payload_key(result: Mapping[str, Any]) -> str:
     """Return the key holding the payload of a success result.
 
-    Prefers "result" when present; otherwise requires exactly one
-    non-"status" key, since that's the only key tool_success() sets.
+    Prefers "result" when present; otherwise requires exactly one key other
+    than "status" and "warnings", since tool_success() sets only those.
     """
     if "result" in result:
         return "result"
-    keys = [k for k in result if k != "status"]
+    keys = [k for k in result if k not in ("status", "warnings")]
     if len(keys) != 1:
         raise ValueError(
             f"Ambiguous or missing payload key in success result: {result!r}"
@@ -83,12 +100,12 @@ def map_result(result: ToolResult, f: Callable[[Any], Any]) -> ToolResult:
     if not is_success(result):
         return result
     key = _payload_key(result)
-    return tool_success(key, f(result[key]))
+    return tool_success(key, f(result[key]), warnings=result.get("warnings"))
 
 
 def map_error(result: ToolResult, f: Callable[[str], Any]) -> ToolResult:
     return (
-        {"status": "error", "error_message": f(result["error_message"])}
+        tool_error(f(result["error_message"]), warnings=result.get("warnings"))
         if is_error(result)
         else result
     )

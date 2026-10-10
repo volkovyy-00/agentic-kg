@@ -314,6 +314,116 @@ def test_edge_cases():
     print("✓ Edge cases handled correctly")
 
 
+# The "warnings" list (regression guards: these pass before and after it was
+# declared, and pin what must not change)
+
+
+def test_reading_a_result_key_payload_ignores_warnings():
+    result = {"status": "success", "result": 10, "warnings": ["w"]}
+
+    assert get_or_else(result, "default") == 10
+    assert get_or_raise(result) == 10
+
+
+def test_a_custom_key_success_with_another_extra_key_still_raises():
+    result = {"status": "success", "records": [1], "warnings": ["w"], "extra": 1}
+
+    with pytest.raises(ValueError, match="Ambiguous or missing payload key"):
+        get_or_raise(result)
+
+
+def test_a_result_key_success_with_an_extra_key_returns_the_payload():
+    """An extra key is not ambiguous here: "result" is preferred when present."""
+    result = {"status": "success", "result": 10, "extra": 1}
+
+    assert get_or_raise(result) == 10
+
+
+def test_map_result_on_a_custom_key_with_an_extra_key_still_raises():
+    result = {"status": "success", "records": [1], "extra": 1}
+
+    with pytest.raises(ValueError, match="Ambiguous or missing payload key"):
+        map_result(result, lambda rows: rows)
+
+
+def test_map_error_drops_other_keys():
+    result = {"status": "error", "error_message": "boom", "extra": 1}
+
+    assert map_error(result, lambda msg: msg) == {
+        "status": "error",
+        "error_message": "boom",
+    }
+
+
+# The "warnings" list (these fail until it is declared)
+
+
+def test_tool_success_and_tool_error_carry_warnings():
+    success = tool_success("records", [1], warnings=["w1", "w2"])
+    error = tool_error("boom", warnings=["w1"])
+
+    assert success == {"status": "success", "records": [1], "warnings": ["w1", "w2"]}
+    assert error == {"status": "error", "error_message": "boom", "warnings": ["w1"]}
+
+
+@pytest.mark.parametrize("warnings", [None, []])
+def test_no_warnings_leave_no_key(warnings):
+    assert "warnings" not in tool_success("records", [1], warnings=warnings)
+    assert "warnings" not in tool_error("boom", warnings=warnings)
+
+
+def test_reading_a_custom_key_payload_ignores_warnings():
+    result = tool_success("records", [1], warnings=["w"])
+
+    assert get_or_else(result, "default") == [1]
+    assert get_or_raise(result) == [1]
+
+
+def test_warnings_is_never_a_payload_key():
+    """The name is reserved for the list. A tool that stores its payload there
+    gets the generic ambiguous-payload error when the result is read; there is
+    no separate check in tool_success."""
+    with pytest.raises(ValueError, match="Ambiguous or missing payload key"):
+        get_or_raise(tool_success("warnings", "value"))
+
+
+def test_map_result_keeps_warnings_and_drops_other_keys():
+    result = {**tool_success("result", 10, warnings=["w"]), "extra": 1}
+
+    mapped = map_result(result, lambda x: x * 2)
+
+    assert mapped == {"status": "success", "result": 20, "warnings": ["w"]}
+
+
+def test_map_result_keeps_warnings_on_a_custom_key():
+    result = tool_success("records", [1], warnings=["w"])
+
+    mapped = map_result(result, lambda rows: rows + [2])
+
+    assert mapped == {"status": "success", "records": [1, 2], "warnings": ["w"]}
+
+
+def test_map_error_keeps_warnings():
+    result = tool_error("boom", warnings=["w"])
+
+    mapped = map_error(result, lambda msg: f"Wrapped: {msg}")
+
+    assert mapped == {
+        "status": "error",
+        "error_message": "Wrapped: boom",
+        "warnings": ["w"],
+    }
+
+
+@pytest.mark.parametrize("returned, message", [(404, "404"), (None, "Unknown error")])
+def test_map_error_builds_its_message_like_tool_error(returned, message):
+    """map_error rebuilds through tool_error, so its message is a string like
+    every other error result's."""
+    mapped = map_error(tool_error("boom"), lambda msg: returned)
+
+    assert mapped == {"status": "error", "error_message": message}
+
+
 if __name__ == "__main__":
     print("Testing tool_result module...")
     print("=" * 50)
