@@ -402,3 +402,16 @@ def test_the_way_back_lands_in_the_schema_stage_and_stays_there(monkeypatch):
     }
     assert state[APPROVED_CONSTRUCTION_PLAN] is None
     assert state[record.PLAN_REVISION_KEY] == {"status": record.PENDING}
+
+
+def test_moving_on_with_a_changed_plan_unbuilt_says_the_graph_is_the_earlier_build():
+    """A user may leave for retrieval without answering the clear question; they
+    are let go, but told their questions will be answered from the earlier build."""
+    text = " ".join(
+        construction.variants["graph_construction_agent_v1"]["instruction"].split()
+    )
+    step_9 = text[
+        text.index("9. only when the user says") : text.index("Changing the plan:")
+    ]
+    assert "approved and not yet built" in step_9
+    assert "still holds the earlier build" in step_9

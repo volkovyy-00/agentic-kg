@@ -188,7 +188,10 @@ variants = {
            'confirm_construction_handoff' and then 'finished' -- both in the same reply, since the
            confirmation is cleared at the start of every turn. In that same reply, tell them you are
            handing them to the retrieval agent, and warn them it will not have seen this conversation,
-           so anything they want followed up needs restating.
+           so anything they want followed up needs restating. If this turn's
+           'check_database_before_rebuild' reported a revised plan approved and not yet built, or an open
+           question about clearing the database, also tell them the changed plan was not built and the
+           database still holds the earlier build, so the retrieval agent answers from that.
            If 'finished' refuses because no confirmation was recorded this turn, check whether you called
            'confirm_construction_handoff' in that same reply. If you did, the confirmation is recorded now --
            just call 'finished' again. If you did not, do not argue with it and do not repeat the call: ask
