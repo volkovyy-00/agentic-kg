@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.9",
     "clevercsv[full]>=0.8.3",
-    "fsspec>=2024.9,<2025.0.0",
+    "fsspec>=2024.9,<2027.0.0",
     # One minor window on purpose: 2.x minors change behaviour this code relies on,
     # so each move gets its own ticket (KG-25 and KG-42 were the 2.9 and 2.10 moves;
     # 2.11 is KG-59). CVE-2026-4810 (unauthenticated RCE in the ADK web server) is
