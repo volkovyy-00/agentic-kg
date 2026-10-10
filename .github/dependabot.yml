@@ -11,9 +11,9 @@ updates:
       # compatibility reasons (litellm/openai are coupled to a specific reasoning-model
       # streaming fix) -- Dependabot's default "library" handling can otherwise widen a
       # manifest's upper bound itself to admit it.
-      # google-adk's pin is a single minor-version window (>=2.9.2,<2.10): 2.x minors
+      # google-adk's pin is a single minor-version window (>=2.10.0,<2.11): 2.x minors
       # change behaviour this code relies on, so each move is its own ticket (KG-25,
-      # KG-42) -- ignore minor too, not just major. Patches inside the window still arrive.
+      # KG-42, KG-59) -- ignore minor too, not just major. Patches inside the window still arrive.
       - dependency-name: "google-adk"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "openai"

@@ -157,7 +157,7 @@ def test_canary_adk_still_marks_foreign_events_with_our_sentinel():
     assert converted.content.parts[0].text == FOREIGN_CONTEXT_SENTINEL, (
         "ADK's _present_other_agent_message no longer emits our sentinel as part 0. "
         "The graphrag context filter is now a silent no-op. Check the installed "
-        "google-adk version against the >=2.9.2,<2.10 pin in pyproject.toml."
+        "google-adk version against the >=2.10.0,<2.11 pin in pyproject.toml."
     )
 
     # Paired with a surviving human turn: an all-foreign request is
