@@ -8,7 +8,7 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
-## [0.12.1] - YYYY-MM-DD
+## [0.12.1] - 2026-10-11
 
 ### Changed
 - **A partly failed build reports its warnings in the same place as a successful one (#NN, KG-16)**: the
