@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.12.1] - 2026-10-11
 
 ### Changed
-- **A partly failed build reports its warnings in the same place as a successful one (#NN, KG-16)**: the
+- **A partly failed build reports its warnings in the same place as a successful one (#90, KG-16)**: the
   warnings from the rules that did load used to arrive twice on a partial failure, as a list and again as text
   inside the error message, and the construction agent was told to look in both. They now arrive only in the
   result's `warnings` list, whether the build succeeded or partly failed, and the error message lists only what
