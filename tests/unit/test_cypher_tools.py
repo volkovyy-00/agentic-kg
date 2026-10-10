@@ -133,7 +133,8 @@ def test_the_check_sends_label_and_key_as_parameters_never_in_the_text(fake_db):
     assert "SHOW UNIQUENESS CONSTRAINTS" in check
     assert "entityType = 'NODE'" in check
     assert params == {"label": "Order", "key": "we`ird"}
-    assert "Order" not in check and "we`ird" not in check
+    assert "Order" not in check
+    assert "we`ird" not in check
     assert len(fake_db.queries) == 2
 
 
