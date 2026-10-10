@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.11.0] - 2026-10-10
 
 ### Added
-- **Change the plan from the construction stage and rebuild (#NN, KG-46)**: a user who finds a mistake in the
+- **Change the plan from the construction stage and rebuild (#87, KG-46)**: a user who finds a mistake in the
   plan, before or after a build, can ask the construction agent to go back. It withdraws the plan's approval and
   hands them to the plan step with the current plan; once they approve again, they go straight back to
   construction. If the database is not empty, the agent first lists what it holds and asks whether to clear it:
@@ -20,7 +20,7 @@ There is no `[Unreleased]` section.
   build. The build refuses until the question is answered, and refuses a plan whose approval was withdrawn.
 
 ### Changed
-- **The database reset keeps Neo4j's built-in lookup indexes (#NN, KG-46)**: `reset_neo4j_data`, also used by
+- **The database reset keeps Neo4j's built-in lookup indexes (#87, KG-46)**: `reset_neo4j_data`, also used by
   the standalone `cypher_agent`, used to drop every index, including the two lookup indexes a fresh database
   has. It now keeps those, and afterwards checks the database is empty, returning an error naming anything
   that remains. A database an earlier version already stripped of them stays that way.
