@@ -182,6 +182,25 @@ def _rows(query: str) -> tuple[list[dict], Optional[Dict[str, Any]]]:
     return result["records"], None
 
 
+def _counts(
+    listing: str, column: str, pattern: str
+) -> tuple[Dict[str, int], Optional[Dict[str, Any]]]:
+    """Count each name a listing returns with `pattern`, keeping counts above
+    zero; on a failed query, the error instead."""
+    names, error = _rows(listing)
+    if error is not None:
+        return {}, error
+    counts: Dict[str, int] = {}
+    for row in names:
+        name = row[column]
+        rows, error = _rows(pattern.format(name=quote(name)))
+        if error is not None:
+            return {}, error
+        if rows[0]["count"] > 0:
+            counts[name] = rows[0]["count"]
+    return counts, None
+
+
 def database_contents() -> Dict[str, Any]:
     """What the database holds: totals, per-label and per-type counts,
     constraints, and indexes other than built-in and constraint-backed ones.
@@ -215,17 +234,9 @@ def database_contents() -> Dict[str, Any]:
             "MATCH ()-[r:{name}]->() RETURN count(r) AS count",
         ),
     ):
-        names, error = _rows(listing)
+        counts, error = _counts(listing, column, pattern)
         if error is not None:
             return error
-        counts: Dict[str, int] = {}
-        for row in names:
-            name = row[column]
-            rows, error = _rows(pattern.format(name=quote(name)))
-            if error is not None:
-                return error
-            if rows[0]["count"] > 0:
-                counts[name] = rows[0]["count"]
         contents[key] = counts
 
     for key, query in (

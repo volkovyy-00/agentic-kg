@@ -293,7 +293,8 @@ def test_the_instruction_carries_the_way_back_and_the_every_turn_check():
     assert "any earlier build in this conversation is the previous version" in text
     assert "Never offer the way back while the approval is intact" in text
     assert "'confirm_plan_revision' and then 'return_to_plan'" in text
-    assert "{" not in text and "}" not in text
+    assert "{" not in text
+    assert "}" not in text
 
 
 class CapturingLlm(BaseLlm):

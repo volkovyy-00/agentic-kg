@@ -149,7 +149,8 @@ def test_the_schema_instruction_handles_a_revision():
     text = " ".join(schema_module.root_agent.instruction.split())
     assert "came back from the construction step" in text
     assert "ask what they want to change" in text
-    assert "{" not in text and "}" not in text
+    assert "{" not in text
+    assert "}" not in text
 
 
 class CapturingLlm(BaseLlm):

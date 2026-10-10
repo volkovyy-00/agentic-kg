@@ -119,7 +119,8 @@ def test_an_unlabelled_node_counts_and_is_erased(db):
 
     db.send_query("CREATE ()")
     contents = _contents()
-    assert contents["nodes"] == 1 and contents["labels"] == {}
+    assert contents["nodes"] == 1
+    assert contents["labels"] == {}
     assert not is_empty(contents)
     assert reset_neo4j_data()["status"] == "success"
     assert is_empty(_contents())
