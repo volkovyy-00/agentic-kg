@@ -140,6 +140,7 @@ def test_asked_in_an_earlier_turn_says_answer_or_ask_again(contents):
     assert "otherwise ask again" in result["question"]
     assert "whole database" in result["question"]
     assert "end your reply with the question" in result["question"]
+    assert "including anything this program did not build" in result["question"]
     assert record.revision(state)["asked_in"] == "inv-1"
 
 
