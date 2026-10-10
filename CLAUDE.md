@@ -23,6 +23,8 @@ and (*Where project knowledge lives*) every home; humans start at `docs/spec.md`
 - An integration run that reports "skipped" did not run: read "N passed", not "N skipped".
 - Before adding a gated agent or a gate (the flag/reset/confirm shape), read
   `.claude/rules/handoff-gates.md`.
+- Every LlmAgent spreads `**agent_guard_callbacks(gated=...)`, which stops a model stuck on calls ADK
+  rejects, and a test enforces it. Before adding an agent or a tool, read `.claude/rules/rejected-call-cap.md`.
 - Before adding a tool that writes construction-plan rules, read `.claude/rules/construction-plan.md`.
 - Before adding a Neo4j driver entry point, read `.claude/rules/neo4j-access.md`.
 - To debug a silent or failing `adk web` turn, read `.claude/skills/debug-adk-web/SKILL.md`.

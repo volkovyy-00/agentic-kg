@@ -23,3 +23,4 @@ paths:
 - Write each gated `finished` docstring for its own handoff; never share one between gates.
 - Refuse a call or end a gated turn with a reply, never by raising; set `skip_summarization` only on
   a reply that also spoke to the user.
+- Every agent also carries the rejected-call cap; its rules are in `.claude/rules/rejected-call-cap.md`.
