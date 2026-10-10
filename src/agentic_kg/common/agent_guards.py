@@ -36,20 +36,16 @@ from agentic_kg.common.rejected_call_cap import (
 
 def agent_guard_callbacks(gated: bool) -> dict[str, Any]:
     """The callbacks an agent needs; `gated` adds the transfer guard."""
-    if not gated:
-        return {
-            "before_model_callback": [end_turn_past_cap],
-            "after_tool_callback": mark_tool_outcome,
-            "on_tool_error_callback": mark_unknown_tool,
-        }
-    return {
-        "before_model_callback": [
-            end_turn_past_cap,
-            drop_foreign_context,
-            strip_transfer_to_agent,
-        ],
-        "after_model_callback": record_hidden_transfer_reply_text,
-        "before_tool_callback": refuse_transfer_to_agent,
+    callbacks: dict[str, Any] = {
+        "before_model_callback": [end_turn_past_cap],
         "after_tool_callback": mark_tool_outcome,
         "on_tool_error_callback": mark_unknown_tool,
     }
+    if gated:
+        callbacks["before_model_callback"] += [
+            drop_foreign_context,
+            strip_transfer_to_agent,
+        ]
+        callbacks["after_model_callback"] = record_hidden_transfer_reply_text
+        callbacks["before_tool_callback"] = refuse_transfer_to_agent
+    return callbacks

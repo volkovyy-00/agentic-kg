@@ -87,11 +87,11 @@ class _GuardReport:
 
 
 _CAP = {
-    "before_model_callback": [end_turn_past_cap],
-    "after_tool_callback": [mark_tool_outcome],
-    "on_tool_error_callback": [mark_unknown_tool],
+    "before_model_callback": end_turn_past_cap,
+    "after_tool_callback": mark_tool_outcome,
+    "on_tool_error_callback": mark_unknown_tool,
 }
-_CAP_IDS = {id(callback) for callbacks in _CAP.values() for callback in callbacks}
+_CAP_IDS = {id(callback) for callback in _CAP.values()}
 
 _WIRING_FIX = (
     "Fix: spread **agent_guard_callbacks(gated=...) into the Agent(...) call "
@@ -131,14 +131,12 @@ def _cap_problems(agent: Any) -> list[str]:
             f"before_model_callback starts {_names(before_model[:1])}, expected end_turn_past_cap"
         )
     for slot in _SLOTS:
-        callbacks = _as_list(getattr(agent, slot))
-        for callback in [cb for callbacks in _CAP.values() for cb in callbacks]:
-            count = _ids(callbacks).count(id(callback))
-            expected = 1 if callback in _CAP.get(slot, []) else 0
-            if count != expected:
-                problems.append(
-                    f"{slot} has {callback.__name__} {count} times, expected {expected}"
-                )
+        present = [cb for cb in _as_list(getattr(agent, slot)) if id(cb) in _CAP_IDS]
+        expected = [_CAP[slot]] if slot in _CAP else []
+        if _ids(present) != _ids(expected):
+            problems.append(
+                f"{slot} has {_names(present)} of the cap, expected {_names(expected)}"
+            )
     return problems
 
 

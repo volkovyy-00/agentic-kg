@@ -53,14 +53,21 @@ def _context(state=None, agent="probe_agent"):
     return SimpleNamespace(agent_name=agent, state={} if state is None else state)
 
 
+# What a real tool answered, for outcomes that reach only the after-tool marker.
+_TOOL_RESPONSES = {
+    "rejected": _REJECTION,
+    "success": tool_success("pong", True),
+    "own_error": tool_error("the plan has a problem"),
+    # The coordinator's real transfer_to_agent returns None.
+    "transfer_none": None,
+    "plan_read": _PLAN_WITH_AN_ERROR_LABEL,
+}
+
+
 def _answer(context, outcome):
     if outcome == "unknown":
         mark_unknown_tool(
             tool=_STAND_IN, args={}, tool_context=context, error=ValueError("x")
-        )
-    elif outcome == "rejected":
-        mark_tool_outcome(
-            tool=_REAL_TOOL, args={}, tool_context=context, tool_response=_REJECTION
         )
     elif outcome == "transfer":
         # refuse_transfer_to_agent marks, then answers with a tool_error,
@@ -72,34 +79,13 @@ def _answer(context, outcome):
             tool_context=context,
             tool_response=tool_error("refused"),
         )
-    elif outcome == "success":
-        mark_tool_outcome(
-            tool=_REAL_TOOL,
-            args={},
-            tool_context=context,
-            tool_response=tool_success("pong", True),
-        )
-    elif outcome == "own_error":
-        mark_tool_outcome(
-            tool=_REAL_TOOL,
-            args={},
-            tool_context=context,
-            tool_response=tool_error("the plan has a problem"),
-        )
-    elif outcome == "transfer_none":
-        # The coordinator's real transfer_to_agent returns None.
-        mark_tool_outcome(
-            tool=_REAL_TOOL, args={}, tool_context=context, tool_response=None
-        )
-    elif outcome == "plan_read":
-        mark_tool_outcome(
-            tool=_REAL_TOOL,
-            args={},
-            tool_context=context,
-            tool_response=_PLAN_WITH_AN_ERROR_LABEL,
-        )
     else:
-        raise AssertionError(outcome)
+        mark_tool_outcome(
+            tool=_REAL_TOOL,
+            args={},
+            tool_context=context,
+            tool_response=_TOOL_RESPONSES[outcome],
+        )
 
 
 def _run(context, replies):

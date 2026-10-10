@@ -214,6 +214,7 @@ def end_turn_past_cap(callback_context: Any, llm_request: Any) -> Optional[LlmRe
     ):
         return None
     state[_key(_STOPPED, agent)] = True
+    only_transfers = not state.get(_key(_NOT_ONLY_TRANSFERS, agent))
     logger.warning(
         "%s made %d stuck replies this turn (%d since a tool last succeeded); "
         "last stuck reply: %s; every stuck reply a hidden transfer: %s; "
@@ -222,13 +223,9 @@ def end_turn_past_cap(callback_context: Any, llm_request: Any) -> Optional[LlmRe
         total,
         consecutive,
         [kind.value for kind in kinds],
-        not state.get(_key(_NOT_ONLY_TRANSFERS, agent)),
+        only_transfers,
     )
-    text = (
-        STUCK_TURN_END
-        if state.get(_key(_NOT_ONLY_TRANSFERS, agent))
-        else HIDDEN_TRANSFER_TURN_END
-    )
+    text = HIDDEN_TRANSFER_TURN_END if only_transfers else STUCK_TURN_END
     return LlmResponse(
         content=types.Content(role="model", parts=[types.Part(text=text)])
     )

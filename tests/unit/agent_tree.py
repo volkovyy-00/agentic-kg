@@ -11,6 +11,7 @@ cached: the agents are module-level singletons, so one walk serves every test.
 
 import importlib
 import re
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 
@@ -54,16 +55,22 @@ def _children(agent: BaseAgent) -> list[BaseAgent]:
     return [*agent.sub_agents, *wrapped]
 
 
-@cache
-def all_llm_agents() -> list[LlmAgent]:
+def _llm_agents_under(
+    children: Callable[[BaseAgent], list[BaseAgent]],
+) -> list[LlmAgent]:
     seen: dict[int, BaseAgent] = {}
     pending = list(root_agents())  # the cached list is never consumed
     while pending:
         agent = pending.pop()
         if id(agent) not in seen:
             seen[id(agent)] = agent
-            pending.extend(_children(agent))
+            pending.extend(children(agent))
     return [agent for agent in seen.values() if isinstance(agent, LlmAgent)]
+
+
+@cache
+def all_llm_agents() -> list[LlmAgent]:
+    return _llm_agents_under(_children)
 
 
 @cache
@@ -74,11 +81,4 @@ def user_facing_llm_agents() -> list[LlmAgent]:
     proposer and critic) runs inside another agent's tool call, and its
     output reaches the user only through that agent.
     """
-    seen: dict[int, BaseAgent] = {}
-    pending = list(root_agents())
-    while pending:
-        agent = pending.pop()
-        if id(agent) not in seen:
-            seen[id(agent)] = agent
-            pending.extend(agent.sub_agents)
-    return [agent for agent in seen.values() if isinstance(agent, LlmAgent)]
+    return _llm_agents_under(lambda agent: agent.sub_agents)
