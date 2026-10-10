@@ -69,9 +69,8 @@ graphrag_agent = Agent(
     #
     # Gated only for v2, for the same reason as the reset callback below. v1
     # is the ungated A/B baseline -- its 'finished' transfers unconditionally,
-    # so it has no guarantee for the injected tool to bypass, and
-    # test_v1_is_left_intact_for_the_acceptance_ab pins that it gets none of
-    # these callbacks.
+    # so it has no guarantee for the injected tool to bypass. It gets the
+    # rejected-call cap but no transfer guard.
     **agent_guard_callbacks(gated=IS_GATED_VARIANT),
     # Conditional because only v2 is gated. Attaching unconditionally would
     # write inert flags every turn under v1, read by nobody -- harmless, but

@@ -10,6 +10,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import ToolContext, agent_tool
 from google.genai import types
 
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.agent_names import (
     GRAPH_CONSTRUCTION_AGENT,
     MULTI_AGENT_COORDINATOR,
@@ -260,6 +261,8 @@ def record_critic_verdict(
     Returns None: a truthy return would replace the model's reply. Plugin
     after-model callbacks run before this one, and a truthy return from one
     would skip it; the project registers none.
+    The rejected-call cap's stop answers before the model call, so ADK skips
+    this callback for it and a stop text never becomes the verdict.
     """
     if llm_response.partial:
         return None
@@ -293,6 +296,7 @@ schema_proposal_agent = LlmAgent(
     model=get_llm(LlmKind.reasoning),
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
+    **agent_guard_callbacks(gated=False),
 )
 
 CRITIC_NAME = "schema_critic_agent_v1"
@@ -304,6 +308,7 @@ schema_critic_agent = LlmAgent(
     tools=variants[CRITIC_NAME]["tools"],
     before_agent_callback=clear_verdict_before_critic,
     after_model_callback=record_critic_verdict,
+    **agent_guard_callbacks(gated=False),
 )
 
 
@@ -512,4 +517,5 @@ root_agent = LlmAgent(
         approve_proposed_construction_plan,
         finished,
     ],
+    **agent_guard_callbacks(gated=False),
 )

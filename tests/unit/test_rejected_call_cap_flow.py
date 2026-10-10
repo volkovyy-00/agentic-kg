@@ -12,6 +12,7 @@ import asyncio
 from collections import Counter
 
 import pytest
+from agent_tree import user_facing_llm_agents
 from google.adk.agents import LlmAgent
 from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.adk.models.base_llm import BaseLlm
@@ -28,7 +29,11 @@ from agentic_kg.common.rejected_call_cap import (
     STUCK_TURN_END,
     is_adk_rejection,
 )
-from agentic_kg.common.tool_result import tool_error, tool_success
+from agentic_kg.common.tool_result import is_error, tool_error, tool_success
+from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
+from agentic_kg.coordinators.multi_agent.sub_agents.file_suggestion_agent.agent import (
+    file_suggestion_agent,
+)
 
 
 class ScriptedLlm(BaseLlm):
@@ -307,4 +312,53 @@ def test_the_next_turn_starts_at_zero():
     )
     assert _final_text(first) == STUCK_TURN_END
     assert _final_text(second) == "turn two done"
+    assert not _unanswered_calls(saved)
+
+
+@pytest.mark.parametrize(
+    "agent", user_facing_llm_agents(), ids=lambda agent: agent.name
+)
+def test_every_agent_the_user_talks_to_stops_after_three_stuck_replies(
+    agent, monkeypatch
+):
+    """Built from the tree walk, so a new agent in any root is covered without
+    anyone adding it here."""
+    model = ScriptedLlm(
+        model="scripted",
+        responses=[_UNKNOWN] * MAX_CONSECUTIVE_STUCK_REPLIES + [_text("never reached")],
+    )
+    monkeypatch.setattr(agent, "model", model)
+
+    events, saved = _one_turn(agent, f"cap_{agent.name}")
+
+    assert model.call_count == MAX_CONSECUTIVE_STUCK_REPLIES
+    assert _final_text(events) == STUCK_TURN_END
+    assert not _unanswered_calls(saved)
+
+
+def test_the_coordinators_real_transfer_is_neither_refused_nor_counted(monkeypatch):
+    coordinator = ScriptedLlm(
+        model="scripted",
+        responses=[
+            _UNKNOWN,
+            _UNKNOWN,
+            _calls(("transfer_to_agent", {"agent_name": file_suggestion_agent.name})),
+        ],
+    )
+    monkeypatch.setattr(full_workflow_agent, "model", coordinator)
+    monkeypatch.setattr(
+        file_suggestion_agent,
+        "model",
+        ScriptedLlm(model="scripted", responses=[_text("file step speaking")]),
+    )
+
+    events, saved = _one_turn(full_workflow_agent, "cap_real_transfer")
+
+    assert _final_text(events) == "file step speaking"
+    replies = _responses(events, "transfer_to_agent")
+    assert replies and not any(is_error(reply) for reply in replies)
+    assert any(
+        event.actions.transfer_to_agent == file_suggestion_agent.name
+        for event in events
+    )
     assert not _unanswered_calls(saved)

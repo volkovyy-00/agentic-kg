@@ -64,3 +64,21 @@ def all_llm_agents() -> list[LlmAgent]:
             seen[id(agent)] = agent
             pending.extend(_children(agent))
     return [agent for agent in seen.values() if isinstance(agent, LlmAgent)]
+
+
+@cache
+def user_facing_llm_agents() -> list[LlmAgent]:
+    """Every LlmAgent a user can talk to: the walk through sub_agents only.
+
+    An agent reached only through an AgentTool (the refinement loop's
+    proposer and critic) runs inside another agent's tool call, and its
+    output reaches the user only through that agent.
+    """
+    seen: dict[int, BaseAgent] = {}
+    pending = list(root_agents())
+    while pending:
+        agent = pending.pop()
+        if id(agent) not in seen:
+            seen[id(agent)] = agent
+            pending.extend(agent.sub_agents)
+    return [agent for agent in seen.values() if isinstance(agent, LlmAgent)]
