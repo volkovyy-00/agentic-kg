@@ -165,11 +165,123 @@ def write_neo4j_cypher(
     return results
 
 
+# The one test for a built-in index. A fresh Neo4j 5 database holds exactly two
+# indexes, both type LOOKUP (nodes and relationships); they back label and type
+# scans, so an erase keeps them. A uniqueness constraint's backing index is
+# listed too, with owningConstraint set; it goes when its constraint is dropped.
+NON_BUILTIN_INDEXES = (
+    "SHOW INDEXES YIELD name, type, owningConstraint "
+    "WHERE type <> 'LOOKUP' AND owningConstraint IS NULL RETURN name"
+)
+
+
+def _rows(query: str) -> tuple[list[dict], Optional[Dict[str, Any]]]:
+    result = graphdb.send_query(query)
+    if is_error(result):
+        return [], result
+    return result["records"], None
+
+
+def database_contents() -> Dict[str, Any]:
+    """What the database holds: totals, per-label and per-type counts,
+    constraints, and indexes other than built-in and constraint-backed ones.
+
+    Internal, not a tool. The totals catch nodes with no label, which no
+    per-label count sees. db.labels() keeps listing a label while a constraint
+    or index refers to it after its nodes are gone, so only counts above zero
+    are reported. Returns the failing query's error unchanged.
+    """
+    contents: Dict[str, Any] = {}
+    for key, query in (
+        ("nodes", "MATCH (n) RETURN count(n) AS count"),
+        ("relationships", "MATCH ()-[r]->() RETURN count(r) AS count"),
+    ):
+        rows, error = _rows(query)
+        if error is not None:
+            return error
+        contents[key] = rows[0]["count"]
+
+    for key, listing, column, pattern in (
+        (
+            "labels",
+            "CALL db.labels() YIELD label RETURN label",
+            "label",
+            "MATCH (n:{name}) RETURN count(n) AS count",
+        ),
+        (
+            "relationship_types",
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+            "relationshipType",
+            "MATCH ()-[r:{name}]->() RETURN count(r) AS count",
+        ),
+    ):
+        names, error = _rows(listing)
+        if error is not None:
+            return error
+        counts: Dict[str, int] = {}
+        for row in names:
+            name = row[column]
+            rows, error = _rows(pattern.format(name=quote(name)))
+            if error is not None:
+                return error
+            if rows[0]["count"] > 0:
+                counts[name] = rows[0]["count"]
+        contents[key] = counts
+
+    for key, query in (
+        ("constraints", "SHOW CONSTRAINTS YIELD name RETURN name"),
+        ("indexes", NON_BUILTIN_INDEXES),
+    ):
+        rows, error = _rows(query)
+        if error is not None:
+            return error
+        contents[key] = [row["name"] for row in rows]
+
+    return tool_success("contents", contents)
+
+
+def is_empty(contents: Dict[str, Any]) -> bool:
+    """The one test for "the database is empty": no node, no relationship, no
+    constraint, and no index other than the built-in lookup ones."""
+    return not (
+        contents["nodes"]
+        or contents["relationships"]
+        or contents["labels"]
+        or contents["relationship_types"]
+        or contents["constraints"]
+        or contents["indexes"]
+    )
+
+
+def describe_contents(contents: Dict[str, Any]) -> str:
+    """The contents as plain lines, for the clear question and the erase's error."""
+    lines = [
+        f"{contents['nodes']} nodes and {contents['relationships']} relationships in total"
+    ]
+    for title, key in (
+        ("Nodes by label", "labels"),
+        ("Relationships by type", "relationship_types"),
+    ):
+        if contents[key]:
+            lines.append(
+                title
+                + ": "
+                + ", ".join(f"{name}: {count}" for name, count in contents[key].items())
+            )
+    for title, key in (("Constraints", "constraints"), ("Indexes", "indexes")):
+        if contents[key]:
+            lines.append(title + ": " + ", ".join(contents[key]))
+    return "\n".join(lines)
+
+
 def reset_neo4j_data() -> Dict[str, Any]:
-    """Resets the neo4j graph database by removing all data,
-    indexes and constraints.
+    """Resets the neo4j graph database by removing all data, constraints and
+    indexes, keeping Neo4j's two built-in lookup indexes, which back label
+    and relationship-type scans.
     Use with caution! Confirm with the user
     that they know this will completely reset the database.
+    Afterwards it checks that the database is empty, and returns an error
+    naming whatever remains.
 
     Returns:
         Success or an error.
@@ -205,16 +317,25 @@ def reset_neo4j_data() -> Dict[str, Any]:
         if is_error(dropped_constraint):
             return dropped_constraint
 
-    # remove all indexes
-    list_indexes = graphdb.send_query("""SHOW INDEXES YIELD name""")
-    if is_error(list_indexes):
-        return list_indexes
-    index_names = [row["name"] for row in list_indexes["records"]]
-    for index_name in index_names:
-        dropped_index = graphdb.send_query(f"""DROP INDEX {quote(index_name)}""")
+    # remove every index but the built-in lookup ones (NON_BUILTIN_INDEXES).
+    # A database an older version of this erase already stripped of them stays
+    # that way; nothing here recreates them.
+    index_rows, error = _rows(NON_BUILTIN_INDEXES)
+    if error is not None:
+        return error
+    for row in index_rows:
+        dropped_index = graphdb.send_query(f"""DROP INDEX {quote(row["name"])}""")
         if is_error(dropped_index):
             return dropped_index
 
+    after = database_contents()
+    if is_error(after):
+        return after
+    if not is_empty(after["contents"]):
+        return tool_error(
+            "The reset did not leave the database empty. It still holds:\n"
+            + describe_contents(after["contents"])
+        )
     return tool_success("message", "Neo4j database has been reset.")
 
 

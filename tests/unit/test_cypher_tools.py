@@ -391,6 +391,13 @@ class FakeDdlDb(FakeGraphDb):
             }
         if "SHOW INDEXES" in query:
             return {"status": "success", "records": [{"name": n} for n in self.indexes]}
+        # The erase's final emptiness check (KG-46) reads counts and drops.
+        if "count(" in query:
+            return {"status": "success", "records": [{"count": 0}]}
+        if query.startswith("DROP CONSTRAINT"):
+            self.constraints = [n for n in self.constraints if quote(n) not in query]
+        if query.startswith("DROP INDEX"):
+            self.indexes = [n for n in self.indexes if quote(n) not in query]
         return {"status": "success", "records": []}
 
 
