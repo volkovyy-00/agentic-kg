@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
-from agentic_kg.common.adk_transfer import transfer_guard_callbacks
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED
 from agentic_kg.tools.graphrag_partition_tools import (
@@ -62,7 +62,7 @@ graphrag_agent = Agent(
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
     # ADK gives this agent its own 'transfer_to_agent', which does not consult
-    # the handoff gate. transfer_guard_callbacks removes it and answers a call
+    # the handoff gate. agent_guard_callbacks removes it and answers a call
     # made anyway, and carries drop_foreign_context (PR #9's context
     # filtering). The mechanism, and why disallow_transfer_to_parent is NOT
     # used, are in common/adk_transfer.py, once.
@@ -72,11 +72,11 @@ graphrag_agent = Agent(
     # so it has no guarantee for the injected tool to bypass, and
     # test_v1_is_left_intact_for_the_acceptance_ab pins that it gets none of
     # these callbacks.
-    **transfer_guard_callbacks(gated=IS_GATED_VARIANT),
+    **agent_guard_callbacks(gated=IS_GATED_VARIANT),
     # Conditional because only v2 is gated. Attaching unconditionally would
     # write inert flags every turn under v1, read by nobody -- harmless, but
     # untrue to "v1 is untouched" and avoidable in one line; v1 gets None
-    # here, as it gets no callbacks from transfer_guard_callbacks above. A
+    # here, as it gets no transfer guard from agent_guard_callbacks above. A
     # list, not a single callback: ADK's canonical_before_agent_callbacks
     # accepts either.
     before_agent_callback=(

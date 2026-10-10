@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
-from agentic_kg.common.adk_transfer import transfer_guard_callbacks
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.agent_names import GRAPH_CONSTRUCTION_AGENT
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.construction_handoff_tools import (
@@ -56,7 +56,7 @@ graph_construction_agent = Agent(
         reset_plan_revision_confirmation,
     ],
     # ADK gives this agent its own 'transfer_to_agent', which does not consult
-    # the handoff gate above. transfer_guard_callbacks removes it, removes the
+    # the handoff gate above. agent_guard_callbacks removes it, removes the
     # worked example of it that the coordinator's own delegating call leaves
     # in this agent's history, and answers a call made anyway. The mechanism,
     # and why disallow_transfer_to_parent is NOT used, are in
@@ -67,7 +67,7 @@ graph_construction_agent = Agent(
     # 'finished' and 'return_to_plan' are unaffected -- each writes
     # actions.transfer_to_agent directly, which ADK acts on after the tool
     # returns and no request-level strip touches.
-    **transfer_guard_callbacks(gated=True),
+    **agent_guard_callbacks(gated=True),
 )
 
 root_agent = graph_construction_agent

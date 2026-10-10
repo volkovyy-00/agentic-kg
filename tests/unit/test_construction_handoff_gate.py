@@ -18,11 +18,11 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.adk_transfer import (
+from agentic_kg.common.adk_transfer import strip_transfer_to_agent
+from agentic_kg.common.rejected_call_cap import (
     HIDDEN_TRANSFER_TURN_END,
-    MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
-    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
-    strip_transfer_to_agent,
+    MAX_CONSECUTIVE_STUCK_REPLIES,
+    MAX_STUCK_REPLIES_PER_TURN,
 )
 from agentic_kg.common.tool_result import is_error, is_success
 from agentic_kg.coordinators.multi_agent.agent import full_workflow_agent
@@ -471,7 +471,7 @@ def test_a_model_that_keeps_calling_the_hidden_tool_ends_the_turn_cleanly(
     model that keeps retrying. The reply past the cap is still answered, and
     the turn ends with a reply to the user instead of another model call, so
     the next turn starts from a complete history and a fresh count."""
-    cap = MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    cap = MAX_CONSECUTIVE_STUCK_REPLIES
     monkeypatch.setattr(
         graph_construction_agent,
         "model",
@@ -523,7 +523,7 @@ def test_a_reply_that_also_runs_a_real_tool_lets_the_model_report_it(
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1)
+            responses=[_TRANSFER] * (MAX_CONSECUTIVE_STUCK_REPLIES - 1)
             + [both, _text("your handoff is confirmed")],
         ),
     )
@@ -539,7 +539,7 @@ def test_a_reply_that_also_runs_a_real_tool_lets_the_model_report_it(
     }
     assert is_success(responses["confirm_construction_handoff"])
     assert len(graph_construction_agent.model.requests) == (
-        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES + 1
+        MAX_CONSECUTIVE_STUCK_REPLIES + 1
     )
     assert _final_text(events) == "your handoff is confirmed"
 
@@ -562,8 +562,7 @@ def test_retrying_both_exits_in_every_reply_still_ends_the_turn(monkeypatch):
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[both] * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
-            + [_text("never reached")],
+            responses=[both] * MAX_CONSECUTIVE_STUCK_REPLIES + [_text("never reached")],
         ),
     )
     events = asyncio.run(
@@ -571,7 +570,7 @@ def test_retrying_both_exits_in_every_reply_still_ends_the_turn(monkeypatch):
     )
 
     assert len(graph_construction_agent.model.requests) == (
-        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+        MAX_CONSECUTIVE_STUCK_REPLIES
     )
     assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
     assert not any(event.actions.transfer_to_agent for event in events)
@@ -601,17 +600,14 @@ def test_pairing_every_retry_with_a_tool_that_succeeds_still_ends_the_turn(
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[paired] * MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
-            + [_text("never reached")],
+            responses=[paired] * MAX_STUCK_REPLIES_PER_TURN + [_text("never reached")],
         ),
     )
     events = asyncio.run(
         _run_one_turn(graph_construction_agent, "construction_paired_loop_test")
     )
 
-    assert len(graph_construction_agent.model.requests) == (
-        MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
-    )
+    assert len(graph_construction_agent.model.requests) == (MAX_STUCK_REPLIES_PER_TURN)
     assert _final_text(events) == HIDDEN_TRANSFER_TURN_END
 
 
@@ -654,7 +650,7 @@ def test_retrieval_does_not_inherit_constructions_refusals(monkeypatch):
         "model",
         CapturingLlm(
             model="scripted",
-            responses=[_TRANSFER] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1)
+            responses=[_TRANSFER] * (MAX_CONSECUTIVE_STUCK_REPLIES - 1)
             + [_call("confirm_construction_handoff"), _call("finished")],
         ),
     )

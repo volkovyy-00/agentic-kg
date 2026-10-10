@@ -34,18 +34,21 @@ from google.genai import types
 
 from agentic_kg.common.adk_context import drop_foreign_context
 from agentic_kg.common.adk_transfer import (
-    HIDDEN_TRANSFER_TURN_END,
-    MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES,
-    MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN,
     TRANSFER_TOOL_NAME,
-    _state_key,
     _without_transfer_block,
-    count_hidden_transfer_replies,
-    end_turn_past_hidden_transfer_cap,
+    record_hidden_transfer_reply_text,
     refuse_transfer_to_agent,
-    reset_on_real_progress,
     strip_transfer_to_agent,
-    transfer_guard_callbacks,
+)
+from agentic_kg.common.agent_guards import agent_guard_callbacks
+from agentic_kg.common.rejected_call_cap import (
+    HIDDEN_TRANSFER_TURN_END,
+    MAX_CONSECUTIVE_STUCK_REPLIES,
+    MAX_STUCK_REPLIES_PER_TURN,
+    _key,
+    end_turn_past_cap,
+    mark_tool_outcome,
+    mark_unknown_tool,
 )
 from agentic_kg.common.tool_result import is_error, tool_error
 
@@ -369,7 +372,7 @@ def _callback_context(state=None, agent="graph_construction_agent_v1"):
 
 
 def _consecutive(context):
-    return context.state.get(_state_key("consecutive", context.agent_name))
+    return context.state.get(_key("consecutive", context.agent_name))
 
 
 def _reply(*names, partial=None, text=None):
@@ -387,24 +390,28 @@ def _reply(*names, partial=None, text=None):
 
 
 def _run_replies(context, replies, failing=()):
-    """Each reply as ADK runs it: the turn-end check before it, the counter
-    after it, then each call's after-tool callback on its result. The hidden
-    tool gets its refusal, a tool named in `failing` an error, any other tool
-    a success. Returns what the turn-end check returned last."""
+    """Each reply as ADK runs it: the cap's check before it, the text recorder
+    after it, then each call answered -- the hidden tool by its refusal, a
+    tool named in `failing` with its own error, any other with a success --
+    and the after-tool marker on each answer. A partial chunk's calls are
+    never run: ADK runs the complete reply that follows. Returns what the
+    cap's check returned last."""
     ended = None
     for reply in replies:
-        ended = end_turn_past_hidden_transfer_cap(context, None)
+        ended = end_turn_past_cap(context, None)
         if ended is not None:
             return ended
-        count_hidden_transfer_replies(context, reply)
+        record_hidden_transfer_reply_text(context, reply)
+        if reply.partial:
+            continue
         for call in reply.get_function_calls():
             tool = SimpleNamespace(name=call.name)
             result = refuse_transfer_to_agent(tool, {}, context)
             if result is None:
                 failed = call.name in failing
                 result = tool_error("no") if failed else {"status": "success"}
-            reset_on_real_progress(tool, {}, context, result)
-    return end_turn_past_hidden_transfer_cap(context, None)
+            mark_tool_outcome(tool, {}, context, result)
+    return end_turn_past_cap(context, None)
 
 
 def test_refusal_leaves_every_other_tool_alone():
@@ -439,9 +446,7 @@ def test_the_turn_ends_with_a_reply_to_the_user_past_the_cap():
     """The model call after the capped reply is replaced by a text reply, so
     the user gets an answer and the turn ends without another model call."""
     context = _callback_context()
-    replies = [_reply(TRANSFER_TOOL_NAME)] * (
-        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1
-    )
+    replies = [_reply(TRANSFER_TOOL_NAME)] * (MAX_CONSECUTIVE_STUCK_REPLIES - 1)
 
     assert _run_replies(context, replies) is None
 
@@ -458,16 +463,14 @@ def test_a_model_that_recovers_after_each_slip_keeps_its_turn():
     context = _callback_context()
     slip_then_work = [_reply(TRANSFER_TOOL_NAME), _reply("read_neo4j_cypher")]
 
-    replies = slip_then_work * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    replies = slip_then_work * MAX_CONSECUTIVE_STUCK_REPLIES
     assert _run_replies(context, replies) is None
 
 
 def test_a_reply_that_also_calls_a_real_tool_resets_the_count():
     """So the turn never ends on a real result the model has not reported."""
     context = _callback_context()
-    replies = [_reply(TRANSFER_TOOL_NAME)] * (
-        MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1
-    )
+    replies = [_reply(TRANSFER_TOOL_NAME)] * (MAX_CONSECUTIVE_STUCK_REPLIES - 1)
     replies.append(_reply(TRANSFER_TOOL_NAME, "confirm_construction_handoff"))
 
     assert _run_replies(context, replies) is None
@@ -481,7 +484,7 @@ def test_the_per_turn_ceiling_holds_when_every_retry_is_paired_with_a_success():
     context = _callback_context()
     paired = _reply(TRANSFER_TOOL_NAME, "confirm_construction_handoff")
 
-    early = [paired] * (MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN - 1)
+    early = [paired] * (MAX_STUCK_REPLIES_PER_TURN - 1)
     assert _run_replies(context, early) is None
     assert _run_replies(context, [paired]) is not None
 
@@ -492,7 +495,7 @@ def test_a_reply_that_asks_the_user_something_ends_the_turn_on_its_refusal():
     context = _callback_context()
     asking = _reply(TRANSFER_TOOL_NAME, text="Which products matter most?")
 
-    count_hidden_transfer_replies(context, asking)
+    record_hidden_transfer_reply_text(context, asking)
     refuse_transfer_to_agent(_HIDDEN, {}, context)
 
     assert context.actions.skip_summarization is True
@@ -500,10 +503,10 @@ def test_a_reply_that_asks_the_user_something_ends_the_turn_on_its_refusal():
 
 def test_a_reply_that_only_calls_the_hidden_tool_keeps_the_turn():
     context = _callback_context()
-    count_hidden_transfer_replies(
+    record_hidden_transfer_reply_text(
         context, _reply(TRANSFER_TOOL_NAME, text="Which products matter most?")
     )
-    count_hidden_transfer_replies(context, _reply(TRANSFER_TOOL_NAME))
+    record_hidden_transfer_reply_text(context, _reply(TRANSFER_TOOL_NAME))
     refuse_transfer_to_agent(_HIDDEN, {}, context)
 
     assert not context.actions.skip_summarization
@@ -516,7 +519,7 @@ def test_retrying_both_exits_together_is_still_capped():
     context = _callback_context()
     both = _reply(TRANSFER_TOOL_NAME, "finished")
 
-    replies = [both] * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    replies = [both] * MAX_CONSECUTIVE_STUCK_REPLIES
     assert _run_replies(context, replies, failing={"finished"}) is not None
 
 
@@ -527,7 +530,7 @@ def test_a_text_reply_between_retries_does_not_reset_the_count():
     context = _callback_context()
     narrated = [_reply(), _reply(TRANSFER_TOOL_NAME)]
 
-    replies = narrated * MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
+    replies = narrated * MAX_CONSECUTIVE_STUCK_REPLIES
     assert _run_replies(context, replies) is not None
 
 
@@ -540,8 +543,9 @@ def test_parallel_calls_in_one_reply_count_once():
 
 
 def test_replies_without_the_hidden_tool_and_partial_chunks_are_not_counted():
-    """ADK passes streaming chunks to after-model callbacks too, and the full
-    reply follows them; counting both would count one reply twice."""
+    """ADK passes streaming chunks to after-model callbacks too, and runs only
+    the complete reply's calls; counting a chunk's would count one reply
+    twice."""
     context = _callback_context()
     replies = [
         _reply("finished"),
@@ -551,7 +555,7 @@ def test_replies_without_the_hidden_tool_and_partial_chunks_are_not_counted():
     ]
 
     assert _run_replies(context, replies) is None
-    assert context.state == {}
+    assert not context.state.get(_key("total", context.agent_name))
 
 
 def test_each_agent_keeps_its_own_count():
@@ -562,7 +566,7 @@ def test_each_agent_keeps_its_own_count():
     construction = _callback_context(state)
     _run_replies(
         construction,
-        [_reply(TRANSFER_TOOL_NAME)] * (MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES - 1),
+        [_reply(TRANSFER_TOOL_NAME)] * (MAX_CONSECUTIVE_STUCK_REPLIES - 1),
     )
 
     retrieval = _callback_context(state, agent="graphrag_agent_v2")
@@ -573,7 +577,7 @@ def test_the_count_lives_in_invocation_scoped_state():
     """temp: keys are dropped from the persisted delta, so each turn starts at
     zero with no reset callback and nothing lands in the session store."""
     context = _callback_context()
-    count_hidden_transfer_replies(context, _reply(TRANSFER_TOOL_NAME))
+    _run_replies(context, [_reply(TRANSFER_TOOL_NAME)])
 
     assert context.state
     assert all(key.startswith("temp:") for key in context.state)
@@ -591,35 +595,36 @@ def test_callback_parameter_names_are_the_ones_adk_passes():
         return list(inspect.signature(callback).parameters)
 
     assert names(refuse_transfer_to_agent) == ["tool", "args", "tool_context"]
-    assert names(end_turn_past_hidden_transfer_cap) == [
-        "callback_context",
-        "llm_request",
-    ]
-    assert names(count_hidden_transfer_replies) == [
+    assert names(end_turn_past_cap) == ["callback_context", "llm_request"]
+    assert names(record_hidden_transfer_reply_text) == [
         "callback_context",
         "llm_response",
     ]
-    assert names(reset_on_real_progress) == [
+    assert names(mark_tool_outcome) == [
         "tool",
         "args",
         "tool_context",
         "tool_response",
     ]
+    assert names(mark_unknown_tool) == ["tool", "args", "tool_context", "error"]
 
 
 def test_the_guard_wires_all_its_callbacks_together_or_none():
     """The strip, the context filter, the refusal and its cap only work as a
     set, so a gated agent takes them from one helper."""
-    wired = transfer_guard_callbacks(True)
-
-    assert wired == {
+    assert agent_guard_callbacks(True) == {
         "before_model_callback": [
-            end_turn_past_hidden_transfer_cap,
+            end_turn_past_cap,
             drop_foreign_context,
             strip_transfer_to_agent,
         ],
-        "after_model_callback": count_hidden_transfer_replies,
+        "after_model_callback": record_hidden_transfer_reply_text,
         "before_tool_callback": refuse_transfer_to_agent,
-        "after_tool_callback": reset_on_real_progress,
+        "after_tool_callback": mark_tool_outcome,
+        "on_tool_error_callback": mark_unknown_tool,
     }
-    assert transfer_guard_callbacks(False) == {}
+    assert agent_guard_callbacks(False) == {
+        "before_model_callback": [end_turn_past_cap],
+        "after_tool_callback": mark_tool_outcome,
+        "on_tool_error_callback": mark_unknown_tool,
+    }

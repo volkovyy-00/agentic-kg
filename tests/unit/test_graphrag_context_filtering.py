@@ -15,7 +15,7 @@ from google.genai import types
 from pydantic import Field
 
 from agentic_kg.common.adk_context import FOREIGN_CONTEXT_SENTINEL
-from agentic_kg.common.adk_transfer import transfer_guard_callbacks
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
     variants,
 )
@@ -58,7 +58,7 @@ def _build_agent(variant_name):
         tools=spec["tools"],
         # The same call graphrag_agent/agent.py makes, so these tests check
         # the wiring production uses.
-        **transfer_guard_callbacks(gated=variant_name == GATED_VARIANT),
+        **agent_guard_callbacks(gated=variant_name == GATED_VARIANT),
     )
 
 
