@@ -808,15 +808,15 @@ def test_construct_domain_graph_keeps_warnings_when_another_rule_fails(monkeypat
 
 
 @pytest.mark.parametrize(
-    "failing_labels, loaded_part",
+    "labels, failing_labels, status, has_loaded",
     [
-        (set(), None),  # everything loads
-        ({"Broken"}, "loaded: "),  # partial failure
-        ({"Person", "Broken"}, None),  # every node rule fails
+        (["Person"], set(), "success", False),  # everything loads
+        (["Person", "Broken"], {"Broken"}, "error", True),  # partial failure
+        (["Person", "Broken"], {"Person", "Broken"}, "error", False),  # all fail
     ],
 )
 def test_construct_domain_graph_without_warnings_has_no_warnings_key(
-    monkeypatch, failing_labels, loaded_part
+    monkeypatch, labels, failing_labels, status, has_loaded
 ):
     """No warnings means no key at all, not an empty list, on every branch."""
 
@@ -829,25 +829,15 @@ def test_construct_domain_graph_without_warnings_has_no_warnings_key(
         }
 
     monkeypatch.setattr(kg, "import_nodes", fake_import_nodes)
-    plan = {
-        "Person": {"construction_type": "node", "label": "Person"},
-        "Broken": {"construction_type": "node", "label": "Broken"},
-    }
-    if not failing_labels:
-        del plan["Broken"]
+    plan = {label: {"construction_type": "node", "label": label} for label in labels}
 
     result = kg.construct_domain_graph(plan)
 
     assert "warnings" not in result
-    if failing_labels:
-        assert result["status"] == "error"
-        assert "failed: " in result["error_message"]
-        if loaded_part:
-            assert loaded_part in result["error_message"]
-        else:
-            assert "loaded: " not in result["error_message"]
-    else:
-        assert result["status"] == "success"
+    assert result["status"] == status
+    message = result.get("error_message", "")
+    assert ("loaded: " in message) == has_loaded
+    assert ("failed: " in message) == (status == "error")
 
 
 # Header validation before any query is sent

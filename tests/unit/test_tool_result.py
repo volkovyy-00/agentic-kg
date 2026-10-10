@@ -314,15 +314,15 @@ def test_edge_cases():
     print("✓ Edge cases handled correctly")
 
 
-# The "warnings" list (regression guards: these pass before and after it was
-# declared, and pin what must not change)
+# The "warnings" list
 
 
-def test_reading_a_result_key_payload_ignores_warnings():
-    result = {"status": "success", "result": 10, "warnings": ["w"]}
+@pytest.mark.parametrize("key", ["result", "records"])
+def test_reading_the_payload_ignores_warnings(key):
+    result = tool_success(key, [1], warnings=["w"])
 
-    assert get_or_else(result, "default") == 10
-    assert get_or_raise(result) == 10
+    assert get_or_else(result, "default") == [1]
+    assert get_or_raise(result) == [1]
 
 
 def test_a_custom_key_success_with_another_extra_key_still_raises():
@@ -355,9 +355,6 @@ def test_map_error_drops_other_keys():
     }
 
 
-# The "warnings" list (these fail until it is declared)
-
-
 def test_tool_success_and_tool_error_carry_warnings():
     success = tool_success("records", [1], warnings=["w1", "w2"])
     error = tool_error("boom", warnings=["w1"])
@@ -370,13 +367,6 @@ def test_tool_success_and_tool_error_carry_warnings():
 def test_no_warnings_leave_no_key(warnings):
     assert "warnings" not in tool_success("records", [1], warnings=warnings)
     assert "warnings" not in tool_error("boom", warnings=warnings)
-
-
-def test_reading_a_custom_key_payload_ignores_warnings():
-    result = tool_success("records", [1], warnings=["w"])
-
-    assert get_or_else(result, "default") == [1]
-    assert get_or_raise(result) == [1]
 
 
 def test_warnings_is_never_a_payload_key():
