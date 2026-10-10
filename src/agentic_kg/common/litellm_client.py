@@ -5,11 +5,11 @@ google-adk 2.10 (75d84b1) drops a tool call whose arguments are not a JSON
 object -- broken JSON, JSON cut off at the output cap (`max_tokens` in
 llm_catalog.py; the proposal agent's plans are our largest arguments), `null`,
 or a list/string/number -- and ends the agent's step with an error event.
-2.9.2 dispatched such a call with empty arguments instead, so the tool reported
-its missing parameters and the model retried. Inside the schema refinement loop
-that difference is silent and harmful: AgentTool shows the error only when no
-event had content, the stop-check always emits content, so a dropped plan write
-let the loop return "valid" over an empty plan.
+2.9.2 dispatched a broken or cut-off call with empty arguments instead, so the
+tool reported its missing parameters and the model retried. Inside the schema
+refinement loop that difference is silent and harmful: AgentTool shows the
+error only when no event had content, the stop-check always emits content, so a
+dropped plan write let the loop return "valid" over an empty plan.
 
 This client restores 2.9.2: before ADK parses a non-streaming reply, a call
 whose arguments ADK's own parser cannot turn into a dict gets "{}". `null`
@@ -24,13 +24,14 @@ Limits, on purpose:
   already ended in an error event on 2.9.2. One streamed case does differ and
   is accepted: a tool call whose arguments are a bare `null`, streamed in one
   piece. 2.9.2 sent it on with no arguments; 2.10 drops it with an error event.
-  Only a top-level agent streams, so there the user sees the error and can
-  resend.
+  Only agents the user talks to directly stream (AgentTool runs nested agents
+  unary), so there the user sees the error and can resend.
 - Tool calls ADK reads out of the reply text (a model that writes the call
   as JSON instead of using tool_calls) are not repaired: if such a call's
   arguments do not parse, 2.10 drops it where 2.9.2 sent it on with empty
-  arguments. A reply cut off at the output cap never takes this path (the
-  whole text must parse as JSON), so this is rare.
+  arguments. A reply cut off at the output cap never takes this path (ADK
+  finds a call in text only when the call's whole JSON object is complete,
+  which a cut-off call never is), so this is rare.
 - Retries stay as unbounded as on 2.9.2: only ADK's default of 500 model calls
   (ADK_MAX_LLM_CALLS, unset here) stops a model that keeps sending a broken
   call. That is KG-43's ticket, not this client's.
@@ -74,8 +75,7 @@ def repair_tool_call_arguments(response: ModelResponse) -> None:
             arguments = function.arguments
             logger.warning(
                 "Tool call %r had arguments that are not a JSON object (%d chars);"
-                " sending it on with empty arguments so the tool reports what is"
-                " missing and the model can retry.",
+                " sending it on with empty arguments, as google-adk 2.9.2 did.",
                 function.name,
                 len(arguments) if isinstance(arguments, str) else 0,
             )

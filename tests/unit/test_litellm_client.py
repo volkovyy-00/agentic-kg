@@ -191,7 +191,7 @@ def test_null_arguments_to_a_no_argument_tool_run_it(transport):
 
 def test_a_list_as_arguments_becomes_a_retry_not_a_crash(transport):
     """2.9.2 raised a ValidationError and the turn crashed; sending {} instead
-    lets the model retry. The one deliberate difference from 2.9.2."""
+    lets the model retry. The one deliberate difference this client introduces."""
     stub = transport(_reply(arguments="[]"), DONE)
     ran: list = []
 
