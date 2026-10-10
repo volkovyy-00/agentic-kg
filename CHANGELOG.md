@@ -8,6 +8,11 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.10.4] - 2026-10-10
+
+### Changed
+- **Ran on google-adk 2.10.x (#85, KG-42)**
+
 ## [0.10.3] - 2026-10-09
 
 ### Fixed
