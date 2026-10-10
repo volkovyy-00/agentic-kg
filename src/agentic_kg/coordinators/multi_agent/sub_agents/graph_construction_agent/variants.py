@@ -32,8 +32,9 @@ from agentic_kg.tools.user_goal_tools import (
 # Agent and registered in the tree, and this project already runs two A/B
 # sub-agents on different generations (cypher_agent on v1, graphrag_agent on
 # v2). A duplicated name that went stale would break the handoff: find_agent
-# returns None for it, so ADK's transfer loop (Context._run_node_internal)
-# raises ValueError and the turn ends with only a one-line error in adk web.
+# returns None for it, so ADK's transfer loop (DynamicNodeScheduler.__call__,
+# workflow/_dynamic_node_scheduler.py) raises ValueError and the turn ends with
+# only a one-line error in adk web.
 # One definition, imported. This is the first sub-agent -> sub-agent import in the
 # tree; graphrag_agent/agent.py imports nothing that leads back here.
 from ..graphrag_agent.agent import AGENT_NAME as GRAPHRAG_AGENT_NAME

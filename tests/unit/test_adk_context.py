@@ -2,10 +2,12 @@
 """Unit tests for the graphrag foreign-context filter.
 
 The sentinel is ADK's own OTHER_AGENT_CONTEXT_PREAMBLE, imported, so its
-wording follows ADK and a move or rename fails at import. What an upgrade can
-still break is the structure: the canary drives ADK's own
-_present_other_agent_message and checks the preamble is still part 0 of every
-foreign event, which is where drop_foreign_context looks.
+wording follows ADK and a rename fails at import. A move need not: since
+google-adk 2.10 the imported path is a stub re-exporting
+flows/llm_flows/context/_fencing.py. What an upgrade can still break is the
+structure: the canary drives ADK's own _present_other_agent_message and checks
+the preamble is still part 0 of every foreign event, which is where
+drop_foreign_context looks.
 """
 
 import pytest

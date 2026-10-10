@@ -363,7 +363,7 @@ def test_the_declaration_lookup_sees_real_parameters():
 )
 def test_no_tool_exposes_the_profile_flag_to_a_model(tool_name):
     """A model-visible include_data_profile would put the choice in the
-    model's hands: google-adk 2.9 declares it optional with its default, but a
+    model's hands: google-adk 2.10 declares it optional with its default, but a
     model may still pass True and trigger a full scan per label on the
     latency-tuned construction agent."""
     import inspect

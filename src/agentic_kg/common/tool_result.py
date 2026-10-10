@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Mapping
 
 # A plain dict, not a TypedDict union: tool_success() stores the payload under a
 # caller-chosen key ("records", "files", ...), which no TypedDict can describe.
-# (google-adk 2.9 can declare a Union-of-TypedDicts return, so that is not the
+# (google-adk 2.10 can declare a Union-of-TypedDicts return, so that is not the
 # reason.)
 ToolResult = Dict[str, Any]
 

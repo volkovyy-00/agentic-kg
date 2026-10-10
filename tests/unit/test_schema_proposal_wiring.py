@@ -53,7 +53,7 @@ def test_the_proposal_agent_can_batch_type_hints():
 def test_every_tool_an_instruction_names_is_a_tool_that_agent_has(agent):
     """An instruction advertising a tool the agent was not given fails quietly:
     the model follows the advertised path, the name is not in tools_dict, and
-    google-adk 2.9 answers with its not-found reply, which invites a retry -- a
+    google-adk 2.10 answers with its not-found reply, which invites a retry -- a
     wasted model call every time the model follows the advertisement, not a
     loud error at startup. (That reply is build_tool_not_found_response; the
     refuse_transfer_to_agent docstring in common/adk_transfer.py describes it.)
@@ -391,7 +391,7 @@ def test_every_tool_the_coordinator_names_is_a_tool_the_coordinator_has():
     cannot reach -- it only scans the variants dict. So a rename that updates
     the instruction but forgets one of the two generated tool-result strings
     ships silently, and the coordinator then receives tool output naming a tool
-    that is not in tools_dict: google-adk 2.9 answers a call to it with a
+    that is not in tools_dict: google-adk 2.10 answers a call to it with a
     not-found error, a wasted model call each time the coordinator follows it.
 
     Two details are load-bearing, and getting either wrong makes this test pass

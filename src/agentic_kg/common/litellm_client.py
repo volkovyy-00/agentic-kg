@@ -26,6 +26,11 @@ Limits, on purpose:
   piece. 2.9.2 sent it on with no arguments; 2.10 drops it with an error event.
   Only a top-level agent streams, so there the user sees the error and can
   resend.
+- Tool calls ADK reads out of the reply text (a model that writes the call
+  as JSON instead of using tool_calls) are not repaired: if such a call's
+  arguments do not parse, 2.10 drops it where 2.9.2 sent it on with empty
+  arguments. A reply cut off at the output cap never takes this path (the
+  whole text must parse as JSON), so this is rare.
 - Retries stay as unbounded as on 2.9.2: only ADK's default of 500 model calls
   (ADK_MAX_LLM_CALLS, unset here) stops a model that keeps sending a broken
   call. That is KG-43's ticket, not this client's.

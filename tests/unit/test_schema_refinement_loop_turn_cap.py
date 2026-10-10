@@ -15,10 +15,11 @@ mechanism holds when it does.
 This harness runs root_agent (schema_proposal_agent_coordinator) directly as
 the Runner's top-level agent; in production it is instead reached by
 transfer from full_workflow_agent. That transfer path is not exercised
-here. On google-adk 2.9 a transfer runs the target once, inline (the
-transfer loop in Context._run_node_internal, agents/context.py), and a
-later message is routed to it by Runner._find_agent_to_run
-(agents/_agent_router.py) -- each is one run_async, so one callback firing.
+here. On google-adk 2.10 a transfer runs the target once, inline (the
+transfer loop in DynamicNodeScheduler.__call__,
+workflow/_dynamic_node_scheduler.py), and a later message is routed to it by
+Runner._find_agent_to_run (agents/_agent_router.py) -- each is one run_async,
+so one callback firing.
 That is read from ADK's source, not proven by this test.
 """
 

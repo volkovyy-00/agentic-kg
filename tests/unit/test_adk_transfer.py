@@ -137,7 +137,7 @@ def test_the_fixture_actually_contains_the_tool_negative_control():
 
 def test_strip_removes_the_tool_from_the_dispatch_table():
     """tools_dict is what ADK looks the call up in (_get_tool in
-    flows/llm_flows/_tool_caller.py). Leaving it here means ADK will happily
+    flows/llm_flows/tools/_caller.py). Leaving it here means ADK will happily
     run a call the model made from memory."""
     request = asyncio.run(_request_as_adk_builds_it())
     strip_transfer_to_agent(None, request)
@@ -318,9 +318,9 @@ def test_strip_is_a_no_op_when_the_tool_was_never_injected():
 
 def test_the_parameter_names_are_the_ones_adk_passes():
     """ADK invokes before_model_callback purely by keyword
-    (_handle_before_model_callback in base_llm_flow.py), so a rename fails at
-    request time with a TypeError rather than at import. Same guard
-    adk_context.py carries."""
+    (handle_before_model_callback in flows/llm_flows/core/_finalizer.py), so a
+    rename fails at request time with a TypeError rather than at import. Same
+    guard adk_context.py carries."""
     import inspect
 
     parameters = list(inspect.signature(strip_transfer_to_agent).parameters)
@@ -582,8 +582,9 @@ def test_the_count_lives_in_invocation_scoped_state():
 def test_callback_parameter_names_are_the_ones_adk_passes():
     """ADK invokes every callback purely by keyword: tool=, args= and
     tool_context= for before-tool, plus tool_response= for after-tool
-    (_tool_caller.py _execute_single_prepared_call), callback_context= plus
-    llm_request= or llm_response= for the model callbacks (base_llm_flow.py)."""
+    (flows/llm_flows/tools/_caller.py _execute_single_prepared_call),
+    callback_context= plus llm_request= or llm_response= for the model callbacks
+    (flows/llm_flows/core/_finalizer.py)."""
     import inspect
 
     def names(callback):
