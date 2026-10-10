@@ -306,13 +306,12 @@ def reset_neo4j_data() -> Dict[str, Any]:
     # so a failed listing used to fall through into a TypeError on ["records"].
 
     # remove all constraints
-    list_constraints = graphdb.send_query("""SHOW CONSTRAINTS YIELD name""")
-    if is_error(list_constraints):
-        return list_constraints
-    constraint_names = [row["name"] for row in list_constraints["records"]]
-    for constraint_name in constraint_names:
+    constraint_rows, error = _rows("""SHOW CONSTRAINTS YIELD name""")
+    if error is not None:
+        return error
+    for row in constraint_rows:
         dropped_constraint = graphdb.send_query(
-            f"""DROP CONSTRAINT {quote(constraint_name)}"""
+            f"""DROP CONSTRAINT {quote(row["name"])}"""
         )
         if is_error(dropped_constraint):
             return dropped_constraint

@@ -1,10 +1,11 @@
 import json
-from typing import Any, Optional, Protocol
+from typing import Any, Optional
 
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier
 from agentic_kg.common.neo4j_for_adk import get_graphdb
+from agentic_kg.common.session_state import SessionStateReader
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import ALLOWED_TYPES
 
@@ -982,19 +983,8 @@ def format_problem_bullets(problems: list[str]) -> str:
     return "\n".join(f"- {problem}" for problem in problems)
 
 
-class StateLike(Protocol):
-    """Anything the plan checks can read session state from.
-
-    ADK's State is a plain class exposing .get(key, default=None) -- not a
-    Mapping -- while the refinement loop's stop-check holds a plain dict. The
-    parameters are positional-only (`, /`) so that dict's own overloaded .get
-    satisfies this protocol: without the slash, pyright rejects
-    dict[str, Any] with "No overloaded function matches type
-    (key: str, default: Any = None) -> Any" and the CI gate fails at the
-    stop-check's call site.
-    """
-
-    def get(self, key: str, default: Any = None, /) -> Any: ...
+# Anything the plan checks can read session state from; see common/session_state.py.
+StateLike = SessionStateReader
 
 
 def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
@@ -1135,6 +1125,7 @@ def get_proposed_construction_plan_with_approval_check(
         return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
     notes = _format_unverified_notes(unverified)
+    revision = {"revision": REVISION_NOTE} if _revision_pending(tool_context) else {}
 
     if problems:
         refused = tool_error(
@@ -1160,42 +1151,41 @@ def get_proposed_construction_plan_with_approval_check(
             "has you presenting it, but do not present it for approval until "
             "this tool reports success." + notes
         )
-        if _revision_pending(tool_context):
-            refused["revision"] = REVISION_NOTE
-        return refused
+        return refused | revision
 
-    payload = {
-        "proposed_construction_plan": construction_plan,
-        "not_verified": unverified,
-        "message": (
-            # Does NOT claim the critic's remaining objections are advisory
-            # or that no schema change will clear them: this tool cannot see
-            # which branch the coordinator is in, and on a first 'retry' the
-            # instruction mandates another schema_refinement_loop pass on an
-            # objection these checks have no way to observe (they only know
-            # joins, endpoint labels, typed join columns, multi-valued joined
-            # properties, and reference-column reachability). An
-            # unconditional claim here would be true on 'stopped:' and the
-            # second 'retry' but false on the first, contradicting the
-            # instruction on exactly the branch where refinement is still
-            # required.
-            "This plan can be approved right now: "
-            "'approve_proposed_construction_plan' will accept it as it stands. "
-            "That is all this tool knows: it checks joins, endpoint labels, "
-            "typed columns, relationships whose two ends are the same node, "
-            "whether each joined node property holds one value "
-            "per node, and whether every approved file's reference "
-            "columns can still be reached, not whether the plan is the right "
-            "one. When your instruction has you presenting this plan, show it "
-            "to the user together with any outstanding critic objections, ask "
-            "them to approve it as it stands or ask for a change, and leave "
-            "that decision to them -- when you present it, do not tell them "
-            "the plan is not ready for approval."
-        ),
-    }
-    if _revision_pending(tool_context):
-        payload["revision"] = REVISION_NOTE
-    return tool_success("result", payload)
+    return tool_success(
+        "result",
+        {
+            "proposed_construction_plan": construction_plan,
+            "not_verified": unverified,
+            "message": (
+                # Does NOT claim the critic's remaining objections are advisory
+                # or that no schema change will clear them: this tool cannot see
+                # which branch the coordinator is in, and on a first 'retry' the
+                # instruction mandates another schema_refinement_loop pass on an
+                # objection these checks have no way to observe (they only know
+                # joins, endpoint labels, typed join columns, multi-valued joined
+                # properties, and reference-column reachability). An
+                # unconditional claim here would be true on 'stopped:' and the
+                # second 'retry' but false on the first, contradicting the
+                # instruction on exactly the branch where refinement is still
+                # required.
+                "This plan can be approved right now: "
+                "'approve_proposed_construction_plan' will accept it as it stands. "
+                "That is all this tool knows: it checks joins, endpoint labels, "
+                "typed columns, relationships whose two ends are the same node, "
+                "whether each joined node property holds one value "
+                "per node, and whether every approved file's reference "
+                "columns can still be reached, not whether the plan is the right "
+                "one. When your instruction has you presenting this plan, show it "
+                "to the user together with any outstanding critic objections, ask "
+                "them to approve it as it stands or ask for a change, and leave "
+                "that decision to them -- when you present it, do not tell them "
+                "the plan is not ready for approval."
+            ),
+        }
+        | revision,
+    )
 
 
 # Tool: Get Proposed construction Plan
