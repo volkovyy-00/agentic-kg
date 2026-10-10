@@ -24,7 +24,7 @@ from agentic_kg.common.cypher_identifiers import checked as _checked
 from agentic_kg.common.file_source import SourceEncodingError
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.session_state import SessionState
-from agentic_kg.common.tool_result import tool_error, tool_success
+from agentic_kg.common.tool_result import is_success, tool_error, tool_success
 from agentic_kg.common.value_types import (
     BLANK,
     CONVERTED,
@@ -34,6 +34,11 @@ from agentic_kg.common.value_types import (
     is_blank,
 )
 from agentic_kg.tools.cypher_tools import create_uniqueness_constraint
+from agentic_kg.tools.plan_revision_record import (
+    clear_revision,
+    revision,
+    revision_refusal,
+)
 from agentic_kg.tools.relationship_endpoints import describe_end, relationship_endpoints
 
 logger = logging.getLogger(__name__)
@@ -941,8 +946,17 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
 
 def build_graph_from_construction_rules(tool_context: ToolContext) -> Dict[str, Any]:
     """Build a graph from the approved construction rules."""
-    plan = approved_plan(tool_context.state)
+    state = tool_context.state
+    plan = approved_plan(state)
     if plan is None:
         return tool_error(NOT_APPROVED_MESSAGE)
+    refusal = revision_refusal(state)
+    if refusal is not None:
+        return tool_error(refusal)
 
-    return construct_domain_graph(plan)
+    result = construct_domain_graph(plan)
+    # A successful rebuild uses the revision up; a failed one keeps the user's
+    # answer so a retry neither asks nor erases again (plan_revision_record).
+    if is_success(result) and revision(state) is not None:
+        clear_revision(state)
+    return result
