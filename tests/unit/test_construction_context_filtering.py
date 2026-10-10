@@ -276,10 +276,10 @@ def test_the_instruction_covers_the_no_warnings_case():
     said nothing about when it does not. Silence, plus a word the schema critic
     also uses, is what let a 'Construction warnings' section be assembled from
     the critic's feedback. Wiring alone cannot fix that -- the instruction has
-    to name the empty case, and also name the partial-failure case: the loader
-    can carry real warnings inside its error message with no top-level
-    'warnings' key, and the instruction must not read that key's absence as
-    license to suppress them.
+    to name the empty case, and also name the partial-failure case: a partially
+    failed build carries its warnings in the same 'warnings' list as a
+    successful one, and the instruction must say so, so the model neither looks
+    for them elsewhere nor reads a failed build as having none.
 
     It also has to scope the warnings by which build produced them. This agent's
     own earlier tool results stay in its context -- drop_foreign_context removes
@@ -295,10 +295,14 @@ def test_the_instruction_covers_the_no_warnings_case():
     )
 
     instruction = construction_variants["graph_construction_agent_v1"]["instruction"]
+    flat = " ".join(instruction.split())
     assert "the most recent 'build_graph_from_construction_rules'" in instruction
-    assert "inside its error message on a partial failure" in instruction
+    assert "whether that build succeeded or partially failed" in instruction
     assert "or an earlier build" in instruction
     assert "no warnings section" in instruction
+    # Checked on the flattened text, so a leftover wrapped across a line break
+    # is still caught.
+    assert "inside its error message" not in flat
 
 
 def test_step_six_gloss_covers_over_matching_too():

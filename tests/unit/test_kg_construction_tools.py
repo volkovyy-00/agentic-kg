@@ -763,7 +763,8 @@ def test_construct_domain_graph_surfaces_warnings_on_success(monkeypatch):
 def test_construct_domain_graph_keeps_warnings_when_another_rule_fails(monkeypatch):
     """A failure elsewhere in the plan must not swallow the warnings from the
     rules that did load. They arrive as a list on the error result, the same
-    shape the success path uses, so the agent reads them the same way."""
+    shape the success path uses, and only there, so the agent reads them the
+    same way."""
 
     def fake_import_nodes(rule):
         if rule["label"] == "Broken":
@@ -798,10 +799,45 @@ def test_construct_domain_graph_keeps_warnings_when_another_rule_fails(monkeypat
         "KNOWS matched 40 pairs from 10 rows",
         "OWNS matched 40 pairs from 10 rows",
     ]
-    # The existing text path is unchanged -- step 6 of the construction agent's
-    # instruction still reads warnings out of the error message.
-    assert "warnings: KNOWS matched 40 pairs" in result["error_message"]
+    # Warnings go in the top-level list and are not repeated in the message,
+    # which names only what loaded and what failed.
+    assert "warnings:" not in result["error_message"]
+    assert "matched 40 pairs" not in result["error_message"]
+    assert "loaded: " in result["error_message"]
     assert "failed: Broken: boom" in result["error_message"]
+
+
+@pytest.mark.parametrize(
+    "labels, failing_labels, status, has_loaded",
+    [
+        (["Person"], set(), "success", False),  # everything loads
+        (["Person", "Broken"], {"Broken"}, "error", True),  # partial failure
+        (["Person", "Broken"], {"Person", "Broken"}, "error", False),  # all fail
+    ],
+)
+def test_construct_domain_graph_without_warnings_has_no_warnings_key(
+    monkeypatch, labels, failing_labels, status, has_loaded
+):
+    """No warnings means no key at all, not an empty list, on every branch."""
+
+    def fake_import_nodes(rule):
+        if rule["label"] in failing_labels:
+            return {"status": "error", "error_message": "boom"}
+        return {
+            "status": "success",
+            "rows_loaded": {"source_file": "people.csv", "rows": 3},
+        }
+
+    monkeypatch.setattr(kg, "import_nodes", fake_import_nodes)
+    plan = {label: {"construction_type": "node", "label": label} for label in labels}
+
+    result = kg.construct_domain_graph(plan)
+
+    assert "warnings" not in result
+    assert result["status"] == status
+    message = result.get("error_message", "")
+    assert ("loaded: " in message) == has_loaded
+    assert ("failed: " in message) == (status == "error")
 
 
 # Header validation before any query is sent
