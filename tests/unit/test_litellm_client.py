@@ -9,6 +9,7 @@ call together, never a patched callback input.
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from google.adk.agents import LlmAgent
@@ -27,15 +28,22 @@ LOOKUP = "lookup"
 GET_GOAL = "get_goal"
 
 
-def _reply(*, arguments=None, tool=LOOKUP, text=None, finish_reason="tool_calls"):
+def _reply(
+    *, arguments=None, tool=LOOKUP, calls=None, text=None, finish_reason="tool_calls"
+):
+    """A provider reply. `calls` is [(tool, arguments), ...]; `arguments` alone
+    is shorthand for one call to `tool`."""
+    if calls is None and arguments is not None:
+        calls = [(tool, arguments)]
     message: dict = {"role": "assistant", "content": text}
-    if arguments is not None:
+    if calls:
         message["tool_calls"] = [
             {
-                "id": "call-1",
+                "id": f"call-{index}",
                 "type": "function",
-                "function": {"name": tool, "arguments": arguments},
+                "function": {"name": name, "arguments": args},
             }
+            for index, (name, args) in enumerate(calls, start=1)
         ]
     return ModelResponse(
         choices=[{"index": 0, "finish_reason": finish_reason, "message": message}]
@@ -45,27 +53,18 @@ def _reply(*, arguments=None, tool=LOOKUP, text=None, finish_reason="tool_calls"
 DONE = _reply(text="done", finish_reason="stop")
 
 
-class Transport:
-    """Stands in for the provider: returns the scripted replies in order, then
-    repeats the last one, and counts the calls."""
-
-    def __init__(self, replies):
-        self.replies = replies
-        self.calls = 0
-
-    async def acompletion(self, client, model, messages, tools, **kwargs):
-        reply = self.replies[min(self.calls, len(self.replies) - 1)]
-        self.calls += 1
-        return reply
-
-
 @pytest.fixture
 def transport(monkeypatch):
+    """Stands in for the provider: returns the scripted replies in order, then
+    repeats the last one, and counts the calls in `.calls`."""
+
     def install(*replies):
-        stub = Transport(list(replies))
+        stub = SimpleNamespace(calls=0)
 
         async def acompletion(client, model, messages, tools, **kwargs):
-            return await stub.acompletion(client, model, messages, tools, **kwargs)
+            reply = replies[min(stub.calls, len(replies) - 1)]
+            stub.calls += 1
+            return reply
 
         monkeypatch.setattr(LiteLLMClient, "acompletion", acompletion)
         return stub
@@ -252,30 +251,7 @@ def test_a_streamed_reply_passes_through_untouched(monkeypatch):
 def test_only_the_broken_call_of_several_is_repaired():
     """Models send parallel calls; one broken call must not blank the others."""
     good = json.dumps({"q": "abc"})
-    reply = ModelResponse(
-        choices=[
-            {
-                "index": 0,
-                "finish_reason": "tool_calls",
-                "message": {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call-1",
-                            "type": "function",
-                            "function": {"name": LOOKUP, "arguments": good},
-                        },
-                        {
-                            "id": "call-2",
-                            "type": "function",
-                            "function": {"name": LOOKUP, "arguments": '{"q": "ab'},
-                        },
-                    ],
-                },
-            }
-        ]
-    )
+    reply = _reply(calls=[(LOOKUP, good), (LOOKUP, '{"q": "ab')])
 
     repair_tool_call_arguments(reply)
 
