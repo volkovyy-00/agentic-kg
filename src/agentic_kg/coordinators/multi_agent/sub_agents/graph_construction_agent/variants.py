@@ -8,22 +8,36 @@ from typing import Any, Dict
 
 from google.adk.tools import ToolContext
 
+from agentic_kg.common.agent_names import SCHEMA_PROPOSAL_COORDINATOR
 from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_handoff_tools import (
     HANDOFF_CONFIRMED,
+    PLAN_REVISION_CONFIRMED,
     confirm_construction_handoff,
+    confirm_plan_revision,
 )
 from agentic_kg.tools.construction_plan_tools import (
     get_approved_construction_plan,
 )
 from agentic_kg.tools.cypher_tools import (
-    create_uniqueness_constraint,
+    create_uniqueness_constraint as _shared_create_uniqueness_constraint,
+)
+from agentic_kg.tools.cypher_tools import (
     get_physical_schema,
     read_neo4j_cypher,
 )
 from agentic_kg.tools.file_tools import get_approved_files
-from agentic_kg.tools.kg_construction_tools import build_graph_from_construction_rules
+from agentic_kg.tools.kg_construction_tools import (
+    build_graph_from_construction_rules,
+    withdraw_approval,
+)
+from agentic_kg.tools.plan_revision_record import mark_pending, revision_refusal
+from agentic_kg.tools.plan_revision_tools import (
+    check_database_before_rebuild,
+    clear_database_for_rebuild,
+    keep_database_for_rebuild,
+)
 from agentic_kg.tools.user_goal_tools import (
     get_approved_user_goal,
 )
@@ -66,11 +80,67 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
     return _transfer_to_retrieval(tool_context)
 
 
+# The way back. The schema stage is a peer, so make_finished may target it
+# (handoff-gates.md); the target name comes from common/agent_names.py.
+_transfer_to_plan = make_finished(SCHEMA_PROPOSAL_COORDINATOR)
+
+
+def return_to_plan(tool_context: ToolContext) -> Dict[str, Any]:
+    """Hand the user back to the plan step so they can change the construction plan.
+
+    Use only when the user asked, in their own words this turn, to change the
+    plan, before or after a build. Refuses unless 'confirm_plan_revision'
+    recorded that request in this same turn, and then changes nothing. On
+    success the plan's approval is withdrawn: it must be approved again at the
+    plan step before anything is built.
+    """
+    if not PLAN_REVISION_CONFIRMED.is_set(tool_context.state):
+        return tool_error(
+            "no request to change the plan was recorded this turn -- if you called "
+            "'confirm_plan_revision' later in this same reply, it has been recorded "
+            "now: call 'return_to_plan' once more and it will succeed. Otherwise "
+            "nothing was changed and the plan is still approved: ask the user whether "
+            "they want to change the plan, then call 'confirm_plan_revision' and "
+            "'return_to_plan' in the same reply, confirming first."
+        )
+    withdraw_approval(tool_context.state)
+    mark_pending(tool_context.state)
+    return _transfer_to_plan(tool_context)
+
+
+def create_uniqueness_constraint(
+    label: str, unique_property_key: str, tool_context: ToolContext
+) -> Dict[str, Any]:
+    # Not functools.wraps: that sets __wrapped__, inspect.signature then reports
+    # the shared tool's parameters, and ADK would not pass tool_context. Same
+    # name, same parameters plus tool_context, same docstring (copied below), so
+    # the model sees the same tool. Refuses while the clear question is
+    # unsettled, or step-2 constraints would show as previous contents and be
+    # erased on "clear".
+    refusal = revision_refusal(tool_context.state)
+    if refusal is not None:
+        return tool_error(refusal)
+    return _shared_create_uniqueness_constraint(label, unique_property_key)
+
+
+create_uniqueness_constraint.__doc__ = _shared_create_uniqueness_constraint.__doc__
+
+
 variants = {
     "graph_construction_agent_v1": {
         "instruction": """
         You are an expert at knowledge graph construction. Construct a graph using
         the available tools, according to the approved schema and construction rules.
+
+        At the start of every turn, before anything else, call 'check_database_before_rebuild' and follow its
+        result. It is the only way you learn that the user came back from the plan step: you do not see
+        that step's messages. When it reports that a revised plan is approved and not yet built, steps 1 to 6
+        run again against the new plan, and the earlier build in this conversation is the previous version.
+        When it reports that no rebuild is pending, carry on with whatever the user asked.
+        If 'get_approved_construction_plan' returns an error, the plan is not approved: tell the user so and
+        offer to take them back to the plan step.
+        Never say that a plan change, an approval, or an answer was recorded unless a tool result says it
+        was stored.
 
         Before beginning construction, make sure you know the user goal, 
         approved files, approved schema and construction rules.
@@ -118,8 +188,20 @@ variants = {
            just call 'finished' again. If you did not, do not argue with it and do not repeat the call: ask
            the user to confirm once more, then call both tools together, confirming first.
 
+        Changing the plan: if the user asks, in their own words, to change the construction plan -- before or after a build --
+           call 'confirm_plan_revision' and then 'return_to_plan', both in the same reply. Only changes to the
+           plan go this way: the goal and the files cannot be changed after a build, so say so instead. In that
+           reply tell the user the plan's approval is withdrawn and that they will see the current plan at the
+           plan step. Never offer the way back while the approval is intact; offer it only after
+           'get_approved_construction_plan' returned an error. A request to move on to the retrieval agent is
+           step 9, never this; a request to change the plan is never step 9. If 'return_to_plan' refuses, follow
+           its message.
+
         """,
         "tools": [
+            check_database_before_rebuild,
+            clear_database_for_rebuild,
+            keep_database_for_rebuild,
             get_approved_user_goal,
             get_approved_files,
             get_approved_construction_plan,
@@ -129,6 +211,8 @@ variants = {
             read_neo4j_cypher,
             confirm_construction_handoff,
             finished,
+            confirm_plan_revision,
+            return_to_plan,
         ],
     },
 }

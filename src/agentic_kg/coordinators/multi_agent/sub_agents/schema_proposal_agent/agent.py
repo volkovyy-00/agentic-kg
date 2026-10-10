@@ -10,7 +10,10 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import agent_tool
 from google.genai import types
 
-from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.common.agent_names import (
+    MULTI_AGENT_COORDINATOR,
+    SCHEMA_PROPOSAL_COORDINATOR,
+)
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_plan_tools import (
@@ -401,7 +404,7 @@ refinement_loop = LoopAgent(
 )
 
 root_agent = LlmAgent(
-    name="schema_proposal_agent_coordinator",
+    name=SCHEMA_PROPOSAL_COORDINATOR,
     model=get_llm(LlmKind.reasoning),
     before_agent_callback=reset_schema_refinement_turn_budget,
     instruction="""

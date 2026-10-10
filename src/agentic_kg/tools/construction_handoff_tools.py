@@ -31,3 +31,21 @@ def confirm_construction_handoff(tool_context: ToolContext) -> ToolResult:
     """
     HANDOFF_CONFIRMED.set(tool_context.state)
     return tool_success(HANDOFF_CONFIRMED_KEY, True)
+
+
+# The way back to the plan step: a second gate on the same agent, with its own
+# flag, so confirming one exit never opens the other.
+PLAN_REVISION_CONFIRMED_KEY = "plan_revision_confirmed"
+PLAN_REVISION_CONFIRMED = TurnFlag(PLAN_REVISION_CONFIRMED_KEY)
+
+
+def confirm_plan_revision(tool_context: ToolContext) -> ToolResult:
+    """Record that the user has explicitly asked to change the construction plan.
+
+    Call this only when the user has said so in their own words in this turn --
+    a change to the plan's labels, relationships, keys or properties, never to
+    the goal or the files, and never on an inference that they might want one.
+    Call 'return_to_plan' in the same reply.
+    """
+    PLAN_REVISION_CONFIRMED.set(tool_context.state)
+    return tool_success(PLAN_REVISION_CONFIRMED_KEY, True)

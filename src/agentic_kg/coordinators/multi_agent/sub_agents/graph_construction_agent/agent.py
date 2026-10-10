@@ -2,8 +2,12 @@ from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 
 from agentic_kg.common.adk_transfer import transfer_guard_callbacks
+from agentic_kg.common.agent_names import GRAPH_CONSTRUCTION_AGENT
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
-from agentic_kg.tools.construction_handoff_tools import HANDOFF_CONFIRMED
+from agentic_kg.tools.construction_handoff_tools import (
+    HANDOFF_CONFIRMED,
+    PLAN_REVISION_CONFIRMED,
+)
 
 # variants are pairs of instructions with tools
 from .variants import variants
@@ -29,14 +33,28 @@ def reset_construction_handoff_confirmation(callback_context: CallbackContext) -
     HANDOFF_CONFIRMED.reset(callback_context.state)
 
 
-AGENT_NAME = "graph_construction_agent_v1"
+def reset_plan_revision_confirmation(callback_context: CallbackContext) -> None:
+    """Clear the way-back confirmation at the start of every turn this agent runs.
+
+    Same lifecycle as reset_construction_handoff_confirmation above, and in the
+    same before_agent_callback list: a request to change the plan made in an
+    earlier turn must not let 'return_to_plan' withdraw the approval later.
+    The parameter name is load-bearing (ADK passes callback_context=).
+    """
+    PLAN_REVISION_CONFIRMED.reset(callback_context.state)
+
+
+AGENT_NAME = GRAPH_CONSTRUCTION_AGENT
 graph_construction_agent = Agent(
     name=AGENT_NAME,
     model=get_llm(LlmKind.reasoning),
     description="Knowledge graph construction based on approved construction rules.",
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
-    before_agent_callback=reset_construction_handoff_confirmation,
+    before_agent_callback=[
+        reset_construction_handoff_confirmation,
+        reset_plan_revision_confirmation,
+    ],
     # ADK gives this agent its own 'transfer_to_agent', which does not consult
     # the handoff gate above. transfer_guard_callbacks removes it, removes the
     # worked example of it that the coordinator's own delegating call leaves
