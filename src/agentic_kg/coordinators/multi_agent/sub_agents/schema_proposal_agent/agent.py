@@ -100,11 +100,15 @@ class VerdictKind(StrEnum):
       decision clears it, since approval refuses the plan regardless.
     - CRITIC: no mechanical problem; the critic's own, non-empty verdict.
     - NONE: no mechanical problem and no critic text.
+    - STUCK: the rejected-call cap stopped the proposal or review step, so
+      no review happened; the slot is empty. Kept apart from NONE so a second
+      call this turn still tells the user the plan step got stuck.
     """
 
     MECHANICAL = "mechanical"
     CRITIC = "critic"
     NONE = "none"
+    STUCK = "stuck"
 
 
 # A sibling of 'feedback' rather than a structured value replacing it: the
@@ -190,6 +194,14 @@ def _stopped_message(kind: str, feedback: str) -> str:
         return (
             f"{head} Its last verdict is the critic's opinion:\n{feedback}\n"
             f"{read} together with that verdict, and let the user decide."
+        )
+    if kind == VerdictKind.STUCK:
+        return (
+            f"{head} Its last run got stuck: the plan step stopped after repeated "
+            f"tool calls that could not run, so the plan may be incomplete and has "
+            f"not been reviewed. {read}, tell the user plainly that the plan step "
+            f"got stuck and the plan has not been reviewed, and ask how they want "
+            f"to continue."
         )
     return f"{head} It recorded no verdict. {read}, and let the user decide."
 
@@ -374,7 +386,8 @@ class CheckStatusAndEscalate(BaseAgent):
             # critic said, a stopped step means this is not a review. End the
             # loop -- the stuck agent's in-a-row count carries over within
             # this run, so another iteration would stop again at once -- and
-            # leave no verdict, so a second call this turn reports none.
+            # leave no verdict but the STUCK kind, so a second call this turn
+            # is refused with the stuck fact, not as a plan with no verdict.
             yield Event(
                 author=self.name,
                 content=types.Content(
@@ -384,7 +397,7 @@ class CheckStatusAndEscalate(BaseAgent):
                     escalate=True,
                     state_delta={
                         "feedback": "",
-                        FEEDBACK_KIND_KEY: VerdictKind.NONE.value,
+                        FEEDBACK_KIND_KEY: VerdictKind.STUCK.value,
                     },
                 ),
             )
@@ -527,7 +540,9 @@ root_agent = LlmAgent(
         schema, because they are properties of the data. Show the plan together with those objections,
         and let the user decide whether to approve it as it stands.
     - If the verdict the loop returns begins with 'stopped:', 'schema_refinement_loop' has already run once
-      this turn and refused to run again -- do not call it again this turn no matter what. Call
+      this turn and refused to run again -- do not call it again this turn no matter what.
+      If the 'stopped:' message says the plan step got stuck, follow the rule for 'stuck:' below instead.
+      Otherwise call
       'get_proposed_construction_plan_with_approval_check'. If it returns an error saying there is no
       proposed construction plan, tell the user nothing has been proposed yet. If the 'stopped:' message
       calls its verdict a mechanical check finding, or the call returns any other error, show the plan with

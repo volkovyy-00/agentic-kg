@@ -157,7 +157,7 @@ def test_a_stuck_proposer_makes_the_loop_report_stuck(monkeypatch, one_approved_
     assert _loop_results(events) == [STUCK_LOOP_RESULT]
     assert models["critic"].call_count == 1  # one iteration, not two
     assert final.state["feedback"] == ""
-    assert final.state[FEEDBACK_KIND_KEY] == VerdictKind.NONE.value
+    assert final.state[FEEDBACK_KIND_KEY] == VerdictKind.STUCK.value
     assert _final_text(events) == "coordinator speaking"
     assert not any(key.startswith("temp:") for key in final.state)
 
@@ -236,3 +236,34 @@ def test_the_coordinator_is_told_what_stuck_means():
     instruction = root_agent.instruction
     assert "'stuck:' when its proposal or review step got stuck" in instruction
     assert "If the verdict the loop returns begins with 'stuck:'" in instruction
+
+
+def test_a_second_call_after_a_stuck_run_still_says_the_step_got_stuck(
+    monkeypatch, one_approved_file
+):
+    """A coordinator that calls the loop again in the same turn is refused by
+    the turn budget; the refusal must keep the stuck fact, not read as an
+    ordinary plan with no verdict for the user to approve."""
+    _script(
+        monkeypatch,
+        proposer=[_UNKNOWN] * 3 + [_text("never reached")],
+        critic=[_text("valid")],
+        coordinator=[_LOOP, _LOOP, _text("coordinator speaking")],
+    )
+
+    events, final = _run("stuck_then_called_again", one_approved_file)
+
+    first, second = _loop_results(events)
+    assert first == STUCK_LOOP_RESULT
+    assert second.startswith("stopped:")
+    assert "got stuck" in second
+    assert "has not been reviewed" in second
+    assert final.state[FEEDBACK_KIND_KEY] == VerdictKind.STUCK.value
+
+
+def test_the_coordinator_routes_a_stuck_refusal_to_the_stuck_rule():
+    instruction = root_agent.instruction
+    assert (
+        "If the 'stopped:' message says the plan step got stuck, follow the rule for "
+        "'stuck:' below instead." in instruction
+    )
