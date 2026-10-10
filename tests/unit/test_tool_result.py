@@ -373,8 +373,10 @@ def test_warnings_is_never_a_payload_key():
     """The name is reserved for the list. A tool that stores its payload there
     gets the generic ambiguous-payload error when the result is read; there is
     no separate check in tool_success."""
+    result = tool_success("warnings", "value")
+
     with pytest.raises(ValueError, match="Ambiguous or missing payload key"):
-        get_or_raise(tool_success("warnings", "value"))
+        get_or_raise(result)
 
 
 def test_map_result_keeps_warnings_and_drops_other_keys():
