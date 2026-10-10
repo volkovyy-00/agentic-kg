@@ -106,8 +106,9 @@ def is_adk_rejection(tool_response: Any) -> bool:
 
     ADK's shape is exactly one key, "error", holding a string. A tool's own
     result never has it: tools return tool_error (status plus error_message),
-    and a value the model chose -- a plan keyed by label, where "error" is a
-    valid label -- holds a rule dict there, never a string.
+    tests/unit/test_no_bare_error_results.py keeps literal "error" keys out of
+    the package, and a value the model chose -- a plan keyed by label, where
+    "error" is a valid label -- holds a rule dict there, never a string.
     """
     return (
         isinstance(tool_response, Mapping)
