@@ -22,7 +22,7 @@ from .kg_construction_tools import (
     required_relationship_name_problem,
 )
 from .node_key_check import node_key_refusal, summarize_node_key
-from .plan_revision_record import PENDING
+from .plan_revision_record import PENDING, mark_pending
 from .plan_revision_record import revision as _revision
 from .reference_reachability import (
     check_reference_columns_are_reachable,
@@ -37,8 +37,8 @@ PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
 # came back from construction. Absent otherwise, so a first approval is unchanged.
 REVISION_NOTE = (
     "The user came back from the construction step to change this plan, and its "
-    "approval was withdrawn. Show them this plan, apply the change they asked for, "
-    "and ask them to approve it again."
+    "approval was withdrawn. Show them this plan, apply any change they asked for "
+    "that it does not include yet, and ask them to approve it again."
 )
 
 
@@ -1101,6 +1101,12 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
         )
 
     tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
+    # A record left asked (the user moved on without answering) or answered (a
+    # failed rebuild) belongs to the plan approved before this one. Reopened, it
+    # makes construction ask afresh, and only a later turn's answer counts, so the
+    # approval's own "yes" is never taken for "yes, clear the database".
+    if _revision(tool_context.state) is not None:
+        mark_pending(tool_context.state)
     return tool_success(
         "result",
         {"approved_construction_plan": construction_plan, "not_verified": unverified},

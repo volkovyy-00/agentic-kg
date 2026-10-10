@@ -63,7 +63,7 @@ def _question(contents: dict, asked_earlier: bool) -> str:
             "The question whether to clear the database was put to the user in an "
             "earlier turn. If the user's latest message answers it, call "
             "'clear_database_for_rebuild' for yes or 'keep_database_for_rebuild' "
-            "for no. " + OTHER_REQUEST + " If it does not answer, otherwise ask again: "
+            "for no. " + OTHER_REQUEST + " If it does neither, ask again: "
             "list what the database holds:\n"
             + listing
             + "\nSay that clearing erases the whole database, including anything this "

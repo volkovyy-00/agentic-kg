@@ -140,7 +140,7 @@ def test_asked_in_an_earlier_turn_says_answer_or_ask_again(contents):
     state = _state(record.ASKED, asked_in="inv-1", contents=_FULL)
     result = tools.check_database_before_rebuild(FakeToolContext(state, "inv-2"))
     assert "earlier turn" in result["question"]
-    assert "otherwise ask again" in result["question"]
+    assert "If it does neither, ask again" in result["question"]
     assert "whole database" in result["question"]
     assert "end your reply with the question" in result["question"]
     assert "including anything this program did not build" in result["question"]
@@ -157,7 +157,7 @@ def test_asked_in_an_earlier_turn_lets_a_different_request_win(contents):
     text = " ".join(result["question"].split())
     assert _OTHER_REQUEST in text
     assert "such as changing the plan again, do that instead" in text
-    assert "If it does not answer, otherwise ask again: list" in text
+    assert "If it does neither, ask again: list" in text
 
 
 def test_answered_lets_a_different_request_win():

@@ -369,3 +369,36 @@ def test_the_answer_comes_next_turn_then_the_rebuild_uses_the_record_up(monkeypa
     assert erased == [True]
     assert state[record.PLAN_REVISION_KEY] is None
     assert {e.author for e in second if e.content} <= {GRAPH_CONSTRUCTION_AGENT, "user"}
+
+
+@pytest.mark.parametrize(
+    "stale",
+    [
+        {"status": record.ASKED, "asked_in": "inv-old", "contents": _FULL},
+        {"status": record.ANSWERED, "cleared": False},
+    ],
+)
+def test_a_fresh_approval_reopens_a_stale_record(monkeypatch, stale):
+    """A plan approved again while an old clear question is still open (or after
+    a failed rebuild) is a new revision: construction must ask afresh, so the
+    approval's own "yes" cannot be read as "yes, clear the database"."""
+    monkeypatch.setattr(cpt, "find_plan_problems", lambda state: ([], []))
+    state = {cpt.PROPOSED_CONSTRUCTION_PLAN: _PLAN, record.PLAN_REVISION_KEY: stale}
+    result = cpt.approve_proposed_construction_plan(FakeToolContext(state))
+    assert result["status"] == "success"
+    assert state[record.PLAN_REVISION_KEY] == {"status": record.PENDING}
+
+
+def test_a_first_approval_writes_no_record(monkeypatch):
+    monkeypatch.setattr(cpt, "find_plan_problems", lambda state: ([], []))
+    state = {cpt.PROPOSED_CONSTRUCTION_PLAN: _PLAN}
+    cpt.approve_proposed_construction_plan(FakeToolContext(state))
+    assert record.PLAN_REVISION_KEY not in state
+
+
+def test_the_revision_note_does_not_assume_the_change_is_still_outstanding():
+    """The note is shown on every turn until approval, including after the
+    requested change was already applied."""
+    note = " ".join(cpt.REVISION_NOTE.split())
+    assert "apply the change they asked for," not in note
+    assert "that it does not include yet" in note
