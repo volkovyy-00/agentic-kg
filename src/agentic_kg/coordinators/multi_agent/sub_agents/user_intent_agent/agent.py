@@ -1,6 +1,6 @@
 from google.adk.agents import Agent
 
-from agentic_kg.common.adk_transfer import transfer_guard_callbacks
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 
 # variants are pairs of instructions with tools
@@ -25,7 +25,7 @@ user_intent_agent = Agent(
     # in the reported session (docs/backlog/user-goal-approval-never-recorded.md):
     # it asked its clarifying questions and transferred in the same reply, so
     # the user's agreement was heard by the coordinator, which has no approval
-    # tool. transfer_guard_callbacks removes the tool and the worked example of
+    # tool. agent_guard_callbacks removes the tool and the worked example of
     # it in this agent's history, which matters most here: the interview is
     # the stickiest phase. The mechanism, and why disallow_transfer_to_parent
     # is NOT used, are in common/adk_transfer.py, once. Here it
@@ -34,7 +34,7 @@ user_intent_agent = Agent(
     # Deliberately NO before_agent_callback: graphrag_agent/agent.py carries
     # one because it gates on a per-turn boolean that must be reset; this gate
     # compares two durable state keys and has no flag to reset.
-    **transfer_guard_callbacks(gated=IS_GATED_VARIANT),
+    **agent_guard_callbacks(gated=IS_GATED_VARIANT),
 )
 
 root_agent = user_intent_agent

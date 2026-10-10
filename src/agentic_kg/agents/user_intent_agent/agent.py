@@ -1,5 +1,6 @@
 from google.adk.agents import Agent
 
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 
 # variants are pairs of instructions with tools
@@ -17,6 +18,7 @@ def build_user_intent_agent() -> Agent:
         description="Knowledge graph use case ideation.",
         instruction=variants[AGENT_NAME]["instruction"],
         tools=variants[AGENT_NAME]["tools"],
+        **agent_guard_callbacks(gated=False),
     )
 
 

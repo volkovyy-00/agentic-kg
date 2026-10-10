@@ -1,5 +1,6 @@
 from google.adk.agents import LlmAgent
 
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.config import validate_env
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
@@ -51,6 +52,7 @@ full_workflow_agent = LlmAgent(
         graphrag_agent,
     ],
     tools=[get_physical_schema, get_source_location, neo4j_is_ready],
+    **agent_guard_callbacks(gated=False),
 )
 
 root_agent = full_workflow_agent

@@ -43,28 +43,17 @@ import re
 from typing import Any, Optional
 
 from google.adk.models.llm_response import LlmResponse
-from google.genai import types
 
-from agentic_kg.common.adk_context import drop_foreign_context
-from agentic_kg.common.tool_result import ToolResult, is_error, tool_error
+from agentic_kg.common.rejected_call_cap import StuckKind, mark_stuck
+from agentic_kg.common.tool_result import ToolResult, tool_error
 
 logger = logging.getLogger(__name__)
 
 TRANSFER_TOOL_NAME = "transfer_to_agent"
 
-# The turn ends, without another model call, after this many replies that
-# call the hidden tool with no other tool succeeding in between...
-MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES = 3
-# ...or after this many in the turn, whatever succeeded in between: a model
-# that pairs every retry with a tool that always succeeds is still stuck.
-MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN = 6
-
-# What the callbacks keep per agent, in temp: state. It lives only for the
-# current invocation (one per user message) and is never persisted, so each
-# turn starts at zero without a reset callback.
-_CONSECUTIVE = "consecutive"  # replies since another tool last succeeded
-_TOTAL = "total"  # replies this turn
-_ASKED = "asked"  # whether the latest such reply also spoke to the user
+# Kept per agent in temp: state: whether the latest complete reply that called
+# the hidden tool also spoke to the user. Lives one invocation, never persisted.
+_ASKED = "asked"
 
 
 def _state_key(item: str, agent_name: str) -> str:
@@ -79,15 +68,6 @@ HIDDEN_TRANSFER_REFUSAL = (
     "{agent} cannot use transfer_to_agent. {agent} hands the user on only "
     "through `finished`, which says what is still missing when it cannot hand "
     "over yet."
-)
-
-# What the user reads when the cap ends a turn. Written for the user, not the
-# model: it is the turn's last word. Direction-neutral, because a model calls
-# the hidden tool to go back as well as forward, and the retrieval agent has
-# no next step at all.
-HIDDEN_TRANSFER_TURN_END = (
-    "I couldn't hand you over to another step from here, so I stopped. "
-    "Please tell me how you would like to continue."
 )
 
 
@@ -173,13 +153,15 @@ def strip_transfer_to_agent(
     All three surfaces matter. tools_dict is ADK's dispatch table, so removing
     it turns a call the model remembers from an earlier turn into a tool error
     rather than a working exit, and the agent keeps the turn. Wire it with
-    transfer_guard_callbacks, which pairs it with refuse_transfer_to_agent:
-    that answers such a call before ADK's generic not-found reply and caps it
-    per turn.
+    agent_guard_callbacks (agent_guards.py), which pairs it with
+    refuse_transfer_to_agent: that answers such a call before ADK's generic
+    not-found reply, and the rejected-call cap stops a model that keeps making
+    it.
     config.tools is the schema the provider actually receives, so leaving it
     would keep offering the model the tool. system_instruction is where ADK
     tells the model the tool exists at all.
     """
+    del callback_context  # Part of ADK's keyword contract; the strip does not read it.
     was_injected = llm_request.tools_dict.pop(TRANSFER_TOOL_NAME, None) is not None
 
     config = getattr(llm_request, "config", None)
@@ -221,8 +203,9 @@ def refuse_transfer_to_agent(
     model that keeps retrying. ADK runs before-tool callbacks ahead of that
     reply (flows/llm_flows/tools/_caller.py _execute_single_prepared_call), so
     this one answers first, naming this agent's real exit. Every call gets an
-    answer, so the history never holds an unanswered call; the retry cap lives
-    in the callbacks below.
+    answer, so the history never holds an unanswered call. It marks the
+    reply for the rejected-call cap (rejected_call_cap.py), which stops a
+    model that keeps retrying.
 
     If the reply that made the call also spoke to the user -- typically a
     question, then the call, which is how the intent agent left its phase in
@@ -236,7 +219,7 @@ def refuse_transfer_to_agent(
     Always answer, never raise: a raise ends the turn with an error, and the
     model never sees the refusal (google-adk 2.10 drops the unanswered call
     from later requests). The same holds for ending the turn, which
-    end_turn_past_hidden_transfer_cap does with a text reply.
+    end_turn_past_cap does with a text reply.
 
     Returns None for every other tool, so ADK runs it as usual. The parameter
     NAMES are load-bearing: ADK passes tool=, args= and tool_context= by
@@ -245,29 +228,24 @@ def refuse_transfer_to_agent(
     del args  # Part of ADK's keyword contract; the refusal does not read it.
     if tool.name != TRANSFER_TOOL_NAME:
         return None
+    mark_stuck(tool_context, StuckKind.HIDDEN_TRANSFER)
     if tool_context.state.get(_state_key(_ASKED, tool_context.agent_name)):
         tool_context.actions.skip_summarization = True
     return tool_error(HIDDEN_TRANSFER_REFUSAL.format(agent=tool_context.agent_name))
 
 
-def count_hidden_transfer_replies(
+def record_hidden_transfer_reply_text(
     callback_context: Any, llm_response: LlmResponse
 ) -> None:
-    """after_model_callback: count a reply that calls the hidden tool.
+    """after_model_callback: record whether a reply that calls the hidden tool
+    also spoke to the user (non-thought text), for refuse_transfer_to_agent.
 
-    Keeps two counts. The consecutive one is set back to zero by
-    reset_on_real_progress, so it counts replies since another tool last
-    succeeded; nothing resets the per-turn one. A reply that also calls a
-    refused `finished` still counts, since retrying both exits together is
-    the same loop. A text-only reply leaves both alone: that reply ends the
-    turn anyway, and a streamed reply can arrive as a text-only response
-    followed by the call-only one. Also records whether the reply spoke to
-    the user (non-thought text), for refuse_transfer_to_agent.
-
-    Counts replies, not calls, so parallel calls in one reply are one attempt.
-    Skips partial (streaming) chunks, which ADK also passes here and which are
-    followed by the full reply. Per agent, since one turn can run two gated
-    agents (a confirmed construction handoff runs retrieval inline).
+    Overwrites the value, True or False, on every such reply, so a question
+    asked in an earlier reply cannot end the turn on a later one with no text.
+    Skips partial (streaming) chunks, which ADK also passes here and which the
+    complete reply follows, and replies that do not call the hidden tool: the
+    refusal answers only those. Counting is the rejected-call cap's
+    (rejected_call_cap.py).
     """
     if llm_response.partial or llm_response.content is None:
         return None
@@ -277,96 +255,10 @@ def count_hidden_transfer_replies(
         for part in parts
     ):
         return None
-    state, agent = callback_context.state, callback_context.agent_name
-    for item in (_CONSECUTIVE, _TOTAL):
-        state[_state_key(item, agent)] = state.get(_state_key(item, agent), 0) + 1
-    state[_state_key(_ASKED, agent)] = any(
+    callback_context.state[_state_key(_ASKED, callback_context.agent_name)] = any(
         part.text and not part.thought for part in parts
     )
     return None
-
-
-def reset_on_real_progress(
-    tool: Any, args: dict[str, Any], tool_context: Any, tool_response: Any
-) -> None:
-    """after_tool_callback: a tool other than the hidden one succeeded, so the
-    model is doing real work; set the consecutive count back to zero.
-
-    A model that takes each refusal and goes back to work keeps its turn,
-    however long the turn is. And a reply that calls the hidden tool beside a
-    tool that succeeds is not counted, so the turn never ends on a real result
-    the model has not reported. ADK also runs this on the refusal itself
-    (after-tool callbacks run on a before-tool callback's answer), hence the
-    name check. Only reset, never answer: returns None, so the tool's own
-    response stands.
-    """
-    del args  # Part of ADK's keyword contract.
-    if tool.name == TRANSFER_TOOL_NAME or is_error(tool_response):
-        return None
-    key = _state_key(_CONSECUTIVE, tool_context.agent_name)
-    if tool_context.state.get(key):
-        tool_context.state[key] = 0
-    return None
-
-
-def end_turn_past_hidden_transfer_cap(
-    callback_context: Any, llm_request: Any
-) -> Optional[LlmResponse]:
-    """before_model_callback: at the cap, reply to the user instead of the model.
-
-    Runs before the model call that would follow the refusals, and first in the
-    list: it does not read the request, and when it answers, ADK skips the
-    callbacks after it, so nothing rewrites a request that is never sent.
-    Returning a text response skips that call, and a reply with no function
-    calls ends the turn, so the user gets an answer and every call in history
-    already has its refusal. The next turn starts at zero.
-    """
-    del llm_request  # Part of ADK's keyword contract.
-    state, agent = callback_context.state, callback_context.agent_name
-    consecutive = state.get(_state_key(_CONSECUTIVE, agent), 0)
-    total = state.get(_state_key(_TOTAL, agent), 0)
-    if (
-        consecutive < MAX_CONSECUTIVE_HIDDEN_TRANSFER_REPLIES
-        and total < MAX_HIDDEN_TRANSFER_REPLIES_PER_TURN
-    ):
-        return None
-    logger.warning(
-        "%s called %s in %d replies this turn (%d since another tool "
-        "succeeded); ending the turn",
-        agent,
-        TRANSFER_TOOL_NAME,
-        total,
-        consecutive,
-    )
-    return LlmResponse(
-        content=types.Content(
-            role="model", parts=[types.Part(text=HIDDEN_TRANSFER_TURN_END)]
-        )
-    )
-
-
-def transfer_guard_callbacks(gated: bool) -> dict[str, Any]:
-    """The callbacks a gated phase agent needs, as Agent(...) keyword args.
-
-    They only work as a set: the strip removes the injected transfer tool,
-    drop_foreign_context removes the worked example of it from history,
-    refuse_transfer_to_agent answers a call made anyway, and the counter, its
-    reset and the turn end stop a model that keeps making one. Spread into the
-    constructor (`**transfer_guard_callbacks(...)`) so no agent gets one
-    without the others. An ungated agent gets none.
-    """
-    if not gated:
-        return {}
-    return {
-        "before_model_callback": [
-            end_turn_past_hidden_transfer_cap,
-            drop_foreign_context,
-            strip_transfer_to_agent,
-        ],
-        "after_model_callback": count_hidden_transfer_replies,
-        "before_tool_callback": refuse_transfer_to_agent,
-        "after_tool_callback": reset_on_real_progress,
-    }
 
 
 def _extend_past_trailing_paragraphs(instruction: str, end: int) -> int:

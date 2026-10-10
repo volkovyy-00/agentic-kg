@@ -10,12 +10,14 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import ToolContext, agent_tool
 from google.genai import types
 
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.agent_names import (
     GRAPH_CONSTRUCTION_AGENT,
     MULTI_AGENT_COORDINATOR,
     SCHEMA_PROPOSAL_COORDINATOR,
 )
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
+from agentic_kg.common.rejected_call_cap import was_stopped
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_plan_tools import (
     StateLike,
@@ -71,6 +73,21 @@ EMPTY_VERDICT_SUMMARY = (
     "plan yourself rather than running the loop again on no feedback."
 )
 
+# The loop's result when the rejected-call cap stopped its proposal or review
+# step (rejected_call_cap.py). A stopped step's text is the cap's message, not
+# a proposal or a verdict, so this is never 'retry' (the coordinator re-runs
+# the loop on that), never 'valid', and never 'stopped:' (already ran this
+# turn). It covers both steps: the user only needs to know the plan was not
+# properly produced or reviewed.
+STUCK_LOOP_RESULT = (
+    "stuck: the plan step stopped after repeated tool calls that could not "
+    "run, so the plan may be incomplete or unreviewed. Do not call "
+    "schema_refinement_loop again this turn. Call "
+    "get_proposed_construction_plan_with_approval_check, show the user what "
+    "it returns, tell them the plan step got stuck, and ask how they want to "
+    "continue."
+)
+
 
 class VerdictKind(StrEnum):
     """Which kind of claim the 'feedback' slot holds (KG-30).
@@ -83,11 +100,15 @@ class VerdictKind(StrEnum):
       decision clears it, since approval refuses the plan regardless.
     - CRITIC: no mechanical problem; the critic's own, non-empty verdict.
     - NONE: no mechanical problem and no critic text.
+    - STUCK: the rejected-call cap stopped the proposal or review step, so
+      no review happened; the slot is empty. Kept apart from NONE so a second
+      call this turn still tells the user the plan step got stuck.
     """
 
     MECHANICAL = "mechanical"
     CRITIC = "critic"
     NONE = "none"
+    STUCK = "stuck"
 
 
 # A sibling of 'feedback' rather than a structured value replacing it: the
@@ -173,6 +194,14 @@ def _stopped_message(kind: str, feedback: str) -> str:
         return (
             f"{head} Its last verdict is the critic's opinion:\n{feedback}\n"
             f"{read} together with that verdict, and let the user decide."
+        )
+    if kind == VerdictKind.STUCK:
+        return (
+            f"{head} Its last run got stuck: the plan step stopped after repeated "
+            f"tool calls that could not run, so the plan may be incomplete and has "
+            f"not been reviewed. {read}, tell the user plainly that the plan step "
+            f"got stuck and the plan has not been reviewed, and ask how they want "
+            f"to continue."
         )
     return f"{head} It recorded no verdict. {read}, and let the user decide."
 
@@ -260,6 +289,8 @@ def record_critic_verdict(
     Returns None: a truthy return would replace the model's reply. Plugin
     after-model callbacks run before this one, and a truthy return from one
     would skip it; the project registers none.
+    The rejected-call cap's stop answers before the model call, so ADK skips
+    this callback for it and a stop text never becomes the verdict.
     """
     if llm_response.partial:
         return None
@@ -293,6 +324,7 @@ schema_proposal_agent = LlmAgent(
     model=get_llm(LlmKind.reasoning),
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],
+    **agent_guard_callbacks(gated=False),
 )
 
 CRITIC_NAME = "schema_critic_agent_v1"
@@ -304,6 +336,7 @@ schema_critic_agent = LlmAgent(
     tools=variants[CRITIC_NAME]["tools"],
     before_agent_callback=clear_verdict_before_critic,
     after_model_callback=record_critic_verdict,
+    **agent_guard_callbacks(gated=False),
 )
 
 
@@ -339,12 +372,36 @@ class CheckStatusAndEscalate(BaseAgent):
     PLAN_PROBLEM_HEADER's "retry:") and FEEDBACK_KIND_KEY through the event's
     state_delta, never by mutating ctx.session.state: the loop runs inside an
     AgentTool, and AgentTool copies only state_delta out of the child session.
+
+    If the rejected-call cap stopped the proposal or review step this run, it
+    yields STUCK_LOOP_RESULT and ends the loop, before reading any verdict.
     """
 
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
+        if was_stopped(state, AGENT_NAME) or was_stopped(state, CRITIC_NAME):
+            # Checked before the verdict and the plan checks: whatever the
+            # critic said, a stopped step means this is not a review. End the
+            # loop -- the stuck agent's in-a-row count carries over within
+            # this run, so another iteration would stop again at once -- and
+            # leave no verdict but the STUCK kind, so a second call this turn
+            # is refused with the stuck fact, not as a plan with no verdict.
+            yield Event(
+                author=self.name,
+                content=types.Content(
+                    role="model", parts=[types.Part(text=STUCK_LOOP_RESULT)]
+                ),
+                actions=EventActions(
+                    escalate=True,
+                    state_delta={
+                        "feedback": "",
+                        FEEDBACK_KIND_KEY: VerdictKind.STUCK.value,
+                    },
+                ),
+            )
+            return
         # This iteration's own critic text, or "" if the critic was silent:
         # clear_verdict_before_critic emptied the slot before it ran, so
         # nothing from an earlier iteration can be read here as this one's.
@@ -460,7 +517,8 @@ root_agent = LlmAgent(
       description and the tool result differ on any field, the tool result is correct and yours is wrong.
     - After calling 'schema_refinement_loop', do not assume the requested change was made, and do not
       report it as made. The loop returns only its final verdict ('valid' or 'retry' plus feedback, from
-      the critic or from the plan checks, or 'no verdict:' when the critic said nothing), never the plan
+      the critic or from the plan checks; 'no verdict:' when the critic said nothing; 'stopped:' when it
+      already ran this turn; 'stuck:' when its proposal or review step got stuck), never the plan
       itself and never raw tool output such as column statistics — a verdict
       is not evidence of what the plan says. Call 'get_proposed_construction_plan_with_approval_check'
       and compare the result against what the user asked for. If the change is missing, or if something
@@ -482,7 +540,9 @@ root_agent = LlmAgent(
         schema, because they are properties of the data. Show the plan together with those objections,
         and let the user decide whether to approve it as it stands.
     - If the verdict the loop returns begins with 'stopped:', 'schema_refinement_loop' has already run once
-      this turn and refused to run again -- do not call it again this turn no matter what. Call
+      this turn and refused to run again -- do not call it again this turn no matter what.
+      If the 'stopped:' message says the plan step got stuck, follow the rule for 'stuck:' below instead.
+      Otherwise call
       'get_proposed_construction_plan_with_approval_check'. If it returns an error saying there is no
       proposed construction plan, tell the user nothing has been proposed yet. If the 'stopped:' message
       calls its verdict a mechanical check finding, or the call returns any other error, show the plan with
@@ -490,6 +550,13 @@ root_agent = LlmAgent(
       which will run in a fresh turn with a new budget. Otherwise present that plan together with the
       verdict quoted in the 'stopped:' message, and let the user decide whether to approve it or ask for
       another change, which will run in a fresh turn with a new budget.
+    - If the verdict the loop returns begins with 'stuck:', the plan step stopped after repeated tool calls
+      that could not run, so the plan may be incomplete or unreviewed -- do not call 'schema_refinement_loop'
+      again this turn. Call 'get_proposed_construction_plan_with_approval_check'. If it returns an error
+      saying there is no proposed construction plan, tell the user nothing has been proposed yet. Otherwise
+      show the plan as returned, with any problems it lists, tell the user plainly that the plan step got
+      stuck and the plan has not been reviewed, and ask how they want to continue, which will run in a
+      fresh turn with a new budget.
 
     Guidance for tool use:
     - Use the 'schema_refinement_loop' tool to produce or update a construction plan.
@@ -512,4 +579,5 @@ root_agent = LlmAgent(
         approve_proposed_construction_plan,
         finished,
     ],
+    **agent_guard_callbacks(gated=False),
 )

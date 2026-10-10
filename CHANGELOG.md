@@ -8,6 +8,18 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.12.0] - 2026-10-10
+
+### Fixed
+- **An agent stuck on tool calls that cannot run now stops within a few replies (#89, KG-43)**: a model that
+  kept calling a tool its agent does not have, or kept leaving out a required value, was told to retry each
+  time, and only ADK's 500-call limit stopped it. Every agent, in both coordinators and the standalone intent
+  agent, now ends its turn after 3 such replies in a row or 6 in one turn, and tells the user it stopped; a
+  single slip followed by real work keeps the turn. Inside the plan step's refinement loop, a stuck proposal or
+  review step ends the loop with a `stuck:` result, and the plan step tells the user instead of presenting the
+  plan as reviewed. This extends the earlier cap on the hidden hand-over tool to every agent and every kind of
+  rejected call.
+
 ## [0.11.0] - 2026-10-10
 
 ### Added

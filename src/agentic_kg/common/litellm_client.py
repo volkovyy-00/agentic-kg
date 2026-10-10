@@ -32,9 +32,9 @@ Limits, on purpose:
   arguments. A reply cut off at the output cap never takes this path (ADK
   finds a call in text only when the call's whole JSON object is complete,
   which a cut-off call never is), so this is rare.
-- Retries stay as unbounded as on 2.9.2: only ADK's default of 500 model calls
-  (ADK_MAX_LLM_CALLS, unset here) stops a model that keeps sending a broken
-  call. That is KG-43's ticket, not this client's.
+- This client does not bound retries: the rejected-call cap
+  (rejected_call_cap.py) counts the missing-parameters reply a repaired call
+  gets, and stops the agent after 3 in a row or 6 in a turn.
 
 Remove this client when the canary in tests/unit/test_litellm_client.py fails:
 it means ADK no longer drops these calls, and the reason for the client is

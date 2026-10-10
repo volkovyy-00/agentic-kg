@@ -1,5 +1,6 @@
 from google.adk.agents import Agent
 
+from agentic_kg.common.agent_guards import agent_guard_callbacks
 from agentic_kg.common.agent_names import SINGLE_AGENT_COORDINATOR
 from agentic_kg.common.config import validate_env
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
@@ -26,6 +27,7 @@ single_agent_agent = Agent(
     instruction=variants[AGENT_NAME]["instruction"],
     tools=variants[AGENT_NAME]["tools"],  # Make the tool available to this agent
     sub_agents=[cypher_agent],
+    **agent_guard_callbacks(gated=False),
 )
 
 root_agent = single_agent_agent

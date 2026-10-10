@@ -8,18 +8,18 @@ when it never reads that paragraph or compacts it away (KG-55).
   so a value code parses must be written by a callback instead, as
   record_critic_verdict does for the schema critic. There is no allowlist: a
   display-only use would be a deliberate edit here.
-- The transfer-guard callbacks come as a set. transfer_guard_callbacks(gated=True)
-  is the source of truth: an agent carries every one of them, each in its own
-  slot and in the helper's order, once, or none. Order matters because
-  end_turn_past_hidden_transfer_cap must run first among the model callbacks:
-  when it answers, ADK skips the ones after it. Callbacks that are not guards
-  are ignored, so a helper extended with an agent's own callback still passes.
-- Each known gated agent carries the set exactly while its gated variant is
-  selected, as its module's IS_GATED_VARIANT says, and every other agent
-  carries none. Above all the coordinator: its transfer_to_agent is how the
-  workflow advances, so stripping it would stop the workflow. A fourth gated
-  agent therefore fails here until it is added to _gated_cases -- the
-  deliberate edit that wiring a new gate should be.
+- Every agent carries the rejected-call cap, from agent_guard_callbacks:
+  end_turn_past_cap FIRST among its before-model callbacks (when it answers,
+  ADK skips the rest, which keeps a capped critic's stop text out of
+  record_critic_verdict), mark_tool_outcome as an after-tool callback and
+  mark_unknown_tool as an on-tool-error callback, each exactly once.
+- The transfer guard -- what agent_guard_callbacks(gated=True) adds over
+  gated=False -- comes as a set, in the helper's order, on each known gated
+  agent exactly while its gated variant is selected, and on no other agent.
+  Above all not on the coordinator: its transfer_to_agent is how the workflow
+  advances. A fourth gated agent fails here until it is added to
+  _gated_cases -- the deliberate edit that wiring a new gate should be.
+- The critic keeps its own after-model callback, record_critic_verdict.
 """
 
 from dataclasses import dataclass
@@ -27,15 +27,21 @@ from typing import Any
 
 from agent_tree import all_llm_agents
 
-from agentic_kg.common.adk_transfer import (
-    end_turn_past_hidden_transfer_cap,
-    transfer_guard_callbacks,
+from agentic_kg.common.agent_guards import agent_guard_callbacks
+from agentic_kg.common.rejected_call_cap import (
+    end_turn_past_cap,
+    mark_tool_outcome,
+    mark_unknown_tool,
 )
 from agentic_kg.coordinators.multi_agent.sub_agents.graph_construction_agent import (
     agent as construction,
 )
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent import (
     agent as graphrag,
+)
+from agentic_kg.coordinators.multi_agent.sub_agents.schema_proposal_agent.agent import (
+    record_critic_verdict,
+    schema_critic_agent,
 )
 from agentic_kg.coordinators.multi_agent.sub_agents.user_intent_agent import (
     agent as user_intent,
@@ -46,6 +52,7 @@ _SLOTS = (
     "after_model_callback",
     "before_tool_callback",
     "after_tool_callback",
+    "on_tool_error_callback",
 )
 
 
@@ -79,11 +86,30 @@ class _GuardReport:
         return self.carries_any and not self.wrong_slots
 
 
-def _guard_report(agent: Any) -> _GuardReport:
-    expected = {
-        slot: _as_list(callbacks)
-        for slot, callbacks in transfer_guard_callbacks(gated=True).items()
+_CAP = {
+    "before_model_callback": end_turn_past_cap,
+    "after_tool_callback": mark_tool_outcome,
+    "on_tool_error_callback": mark_unknown_tool,
+}
+_CAP_IDS = {id(callback) for callback in _CAP.values()}
+
+_WIRING_FIX = (
+    "Fix: spread **agent_guard_callbacks(gated=...) into the Agent(...) call "
+    "and wire none of its callbacks by hand; see this module's docstring, "
+    ".claude/rules/rejected-call-cap.md and .claude/rules/handoff-gates.md."
+)
+
+
+def _transfer_guard() -> dict[str, list[Any]]:
+    """What the gated helper adds over the cap, per slot."""
+    return {
+        slot: [cb for cb in _as_list(callbacks) if id(cb) not in _CAP_IDS]
+        for slot, callbacks in agent_guard_callbacks(gated=True).items()
     }
+
+
+def _guard_report(agent: Any) -> _GuardReport:
+    expected = _transfer_guard()
     guard_ids = set(_ids([cb for callbacks in expected.values() for cb in callbacks]))
     present = {
         slot: [cb for cb in _as_list(getattr(agent, slot)) if id(cb) in guard_ids]
@@ -97,27 +123,34 @@ def _guard_report(agent: Any) -> _GuardReport:
     return _GuardReport(carries_any=any(present.values()), wrong_slots=wrong)
 
 
-_WIRING_FIX = (
-    "Fix: spread **transfer_guard_callbacks(gated=...) into the Agent(...) call "
-    "and wire none of its callbacks by hand; see this module's docstring and "
-    ".claude/rules/handoff-gates.md."
-)
+def _cap_problems(agent: Any) -> list[str]:
+    problems = []
+    before_model = _as_list(agent.before_model_callback)
+    if not before_model or before_model[0] is not end_turn_past_cap:
+        problems.append(
+            f"before_model_callback starts {_names(before_model[:1])}, expected end_turn_past_cap"
+        )
+    for slot in _SLOTS:
+        present = [cb for cb in _as_list(getattr(agent, slot)) if id(cb) in _CAP_IDS]
+        expected = [_CAP[slot]] if slot in _CAP else []
+        if _ids(present) != _ids(expected):
+            problems.append(
+                f"{slot} has {_names(present)} of the cap, expected {_names(expected)}"
+            )
+    return problems
 
 
 def test_the_helper_fills_only_slots_this_file_inspects():
-    """Guards _guard_report: a fifth slot would go unchecked."""
-    assert set(transfer_guard_callbacks(gated=True)) <= set(_SLOTS)
+    for gated in (False, True):
+        assert set(agent_guard_callbacks(gated=gated)) <= set(_SLOTS)
 
 
-def test_the_turn_end_runs_first_among_the_model_callbacks():
-    """The agents are compared against the helper, so the helper's own order
-    is pinned here: end_turn_past_hidden_transfer_cap answers in place of the
-    model call, and ADK then skips the callbacks after it."""
-    first = transfer_guard_callbacks(gated=True)["before_model_callback"][0]
-    assert first is end_turn_past_hidden_transfer_cap, (
-        "end_turn_past_hidden_transfer_cap must stay first in the helper's "
-        "before_model_callback list; see its docstring."
-    )
+def test_the_helper_gives_the_cap_first_with_or_without_the_transfer_guard():
+    for gated in (False, True):
+        wired = agent_guard_callbacks(gated=gated)
+        assert wired["before_model_callback"][0] is end_turn_past_cap
+        assert _as_list(wired["after_tool_callback"]) == [mark_tool_outcome]
+        assert _as_list(wired["on_tool_error_callback"]) == [mark_unknown_tool]
 
 
 def test_no_agent_sets_output_key():
@@ -136,7 +169,16 @@ def test_no_agent_sets_output_key():
     )
 
 
-def test_every_agent_carries_the_whole_guard_set_or_none_of_it():
+def test_every_agent_carries_the_cap():
+    wrong = [
+        f"{agent.name}: " + "; ".join(problems)
+        for agent in all_llm_agents()
+        if (problems := _cap_problems(agent))
+    ]
+    assert not wrong, "\n".join([*wrong, _WIRING_FIX])
+
+
+def test_every_agent_carries_the_whole_transfer_guard_or_none_of_it():
     partial = [
         f"{agent.name}: " + "; ".join(report.wrong_slots)
         for agent in all_llm_agents()
@@ -147,7 +189,7 @@ def test_every_agent_carries_the_whole_guard_set_or_none_of_it():
             *partial,
             _WIRING_FIX,
             "drop_foreign_context belongs to the set; an agent that needs it alone "
-            "needs a deliberate new option in transfer_guard_callbacks.",
+            "needs a deliberate new option in agent_guard_callbacks.",
         ]
     )
 
@@ -171,14 +213,16 @@ def test_each_gated_agent_is_guarded_exactly_while_its_gated_variant_is_selected
         if gated and not report.full:
             wrong.append(f"{agent.name}: gated variant selected but not fully guarded")
         if not gated and report.carries_any:
-            wrong.append(f"{agent.name}: ungated variant selected but carries guards")
+            wrong.append(
+                f"{agent.name}: ungated variant selected but carries the transfer guard"
+            )
     assert not wrong, "\n".join([*wrong, _WIRING_FIX])
 
 
-def test_every_agent_not_listed_as_gated_carries_no_guard():
+def test_every_agent_not_listed_as_gated_carries_no_transfer_guard():
     gated = {id(agent) for agent, is_gated in _gated_cases() if is_gated}
     wrong = [
-        f"{agent.name}: carries guard callbacks"
+        f"{agent.name}: carries the transfer guard"
         for agent in all_llm_agents()
         if id(agent) not in gated and _guard_report(agent).carries_any
     ]
@@ -187,6 +231,12 @@ def test_every_agent_not_listed_as_gated_carries_no_guard():
             *wrong,
             "Fix: a new gated agent goes into _gated_cases() above (read "
             ".claude/rules/handoff-gates.md first); the coordinator never takes "
-            "the set, because its transfer_to_agent is how the workflow advances.",
+            "the transfer guard, because its transfer_to_agent is how the workflow "
+            "advances.",
         ]
     )
+
+
+def test_the_critic_keeps_its_own_verdict_recorder():
+    assert id(schema_critic_agent) in {id(agent) for agent in all_llm_agents()}
+    assert record_critic_verdict in _as_list(schema_critic_agent.after_model_callback)
