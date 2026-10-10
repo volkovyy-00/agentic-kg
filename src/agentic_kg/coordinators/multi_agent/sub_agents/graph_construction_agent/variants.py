@@ -165,9 +165,10 @@ variants = {
            warning to the user verbatim: a relationship whose endpoint-match count sits far below the rows read, or above it at all, is a
            sign that its join columns do not line up, even though construction reported success.
            Report only warnings that appear in the most recent 'build_graph_from_construction_rules'
-           result -- in its 'warnings' list, or inside its error message on a partial failure. If that
-           result reports no warnings, write no warnings section at all: no heading, no bullets, and
-           no line saying there were none. Anything else in this conversation that calls itself a
+           result's 'warnings' list, whether that build succeeded or partially failed: that list is the
+           only place this build's warnings come from. If that result has no 'warnings' list, write
+           no warnings section at all: no heading, no bullets, and no line saying there were none.
+           Anything else in this conversation that calls itself a
            warning came from another tool, another agent, or an earlier build, and is not this build's
            output -- do not repeat it here and do not relabel it.
            When reporting counts, never call 'rows' or 'rows_matched' a number of nodes or relationships.
