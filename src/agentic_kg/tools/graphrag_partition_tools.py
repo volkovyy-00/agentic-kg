@@ -10,11 +10,9 @@ prose: 'declare_partition_interpretation' is the only way to set the flag
 that 'sub_agents/graphrag_agent/variants.py's gated read tool checks before
 it will run an aggregating query over a graph that has such a property.
 
-Deliberately not shared with 'graphrag_handoff_tools.py' despite the
-identical flag/reset/gate shape -- this is the third instance of that
-pattern, and per the construction-handoff design's own Rule-of-Three
-reasoning, extraction is the copy-#3 decision, made when a fourth instance
-is needed, not before.
+Its tool and refusal text stay its own; the flag's key and set/read/reset
+plumbing are shared with the other turn-scoped gates through `TurnFlag`
+(common/turn_flags.py).
 """
 
 from google.adk.tools import ToolContext
@@ -24,8 +22,10 @@ from agentic_kg.common.graph_profile import (
     peek_cached_profile,
 )
 from agentic_kg.common.tool_result import ToolResult, tool_error, tool_success
+from agentic_kg.common.turn_flags import TurnFlag
 
 PARTITION_INTERPRETATION_DECLARED_KEY = "partition_interpretation_declared"
+PARTITION_INTERPRETATION_DECLARED = TurnFlag(PARTITION_INTERPRETATION_DECLARED_KEY)
 
 # The escape hatch for the gate's coarse trigger: it fires on any aggregating
 # query while ANY numeric-flagged property exists anywhere in the graph, not
@@ -67,5 +67,5 @@ def declare_partition_interpretation(
             "'reading' must state how the property's values are being read "
             "-- an empty string records no interpretation at all."
         )
-    tool_context.state[PARTITION_INTERPRETATION_DECLARED_KEY] = True
+    PARTITION_INTERPRETATION_DECLARED.set(tool_context.state)
     return tool_success(PARTITION_INTERPRETATION_DECLARED_KEY, True)

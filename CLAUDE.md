@@ -74,7 +74,8 @@ uv run pyright                                   # src only; must report 0 error
   2. `file_suggestion_agent` — needs an approved user goal; suggests input files
   3. `schema_proposal_agent` — needs approved files; proposes a construction plan
   4. `graph_construction_agent` — needs an approved plan; builds the graph, then on the user's
-     confirmation hands them straight to `graphrag_agent_v2`, not back through the coordinator
+     confirmation hands them straight to `graphrag_agent_v2`, not back through the coordinator;
+     on the user's request it sends them back to the plan step to revise and rebuild
   5. `graphrag_agent` — answers questions over the built graph
 
 **Two sets of similarly named agents.** `src/agentic_kg/agents/` (standalone; its `cypher_agent` is the

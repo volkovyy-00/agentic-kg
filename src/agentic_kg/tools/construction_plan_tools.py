@@ -1,10 +1,11 @@
 import json
-from typing import Any, Optional, Protocol
+from typing import Any, Optional
 
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier
 from agentic_kg.common.neo4j_for_adk import get_graphdb
+from agentic_kg.common.session_state import SessionStateReader
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import ALLOWED_TYPES
 
@@ -13,11 +14,16 @@ graphdb = get_graphdb()
 from .file_tools import APPROVED_FILES, check_columns_in_header
 from .join_property_check import check_joined_properties_hold_one_value
 from .kg_construction_tools import (
+    APPROVED_CONSTRUCTION_PLAN,
+    NOT_APPROVED_MESSAGE,
+    approved_plan,
     matched_property_name_problem,
     node_rule_name_problem,
     required_relationship_name_problem,
 )
 from .node_key_check import node_key_refusal, summarize_node_key
+from .plan_revision_record import PENDING, mark_pending
+from .plan_revision_record import revision as _revision
 from .reference_reachability import (
     check_reference_columns_are_reachable,
     declared_properties,
@@ -25,7 +31,25 @@ from .reference_reachability import (
 from .relationship_endpoints import is_omitted, relationship_endpoints
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
-APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
+
+# Added to the approval check's result only while a revision is pending, so the
+# schema stage learns from a tool -- not from the conversation -- that the user
+# came back from construction. Absent otherwise, so a first approval is unchanged.
+REVISION_NOTE = (
+    "The user came back from the construction step to change this plan, and its "
+    "approval was withdrawn. Show them this plan, apply any change they asked for "
+    "that it does not include yet, and ask them to approve it again."
+)
+
+
+def _revision_pending(tool_context: ToolContext) -> bool:
+    record = _revision(tool_context.state)
+    return (
+        record is not None
+        and record["status"] == PENDING
+        and approved_plan(tool_context.state) is None
+    )
+
 
 # Added after the build's own refusal text (KG-44), but only where a way forward
 # exists: a label or relationship type can be renamed to follow its rule. A
@@ -959,19 +983,8 @@ def format_problem_bullets(problems: list[str]) -> str:
     return "\n".join(f"- {problem}" for problem in problems)
 
 
-class StateLike(Protocol):
-    """Anything the plan checks can read session state from.
-
-    ADK's State is a plain class exposing .get(key, default=None) -- not a
-    Mapping -- while the refinement loop's stop-check holds a plain dict. The
-    parameters are positional-only (`, /`) so that dict's own overloaded .get
-    satisfies this protocol: without the slash, pyright rejects
-    dict[str, Any] with "No overloaded function matches type
-    (key: str, default: Any = None) -> Any" and the CI gate fails at the
-    stop-check's call site.
-    """
-
-    def get(self, key: str, default: Any = None, /) -> Any: ...
+# Anything the plan checks can read session state from; see common/session_state.py.
+StateLike = SessionStateReader
 
 
 def find_plan_problems(state: StateLike) -> tuple[list[str], list[str]]:
@@ -1088,6 +1101,12 @@ def approve_proposed_construction_plan(tool_context: ToolContext) -> dict:
         )
 
     tool_context.state[APPROVED_CONSTRUCTION_PLAN] = construction_plan
+    # A record left asked (the user moved on without answering) or answered (a
+    # failed rebuild) belongs to the plan approved before this one. Reopened, it
+    # makes construction ask afresh, and only a later turn's answer counts, so the
+    # approval's own "yes" is never taken for "yes, clear the database".
+    if _revision(tool_context.state) is not None:
+        mark_pending(tool_context.state)
     return tool_success(
         "result",
         {"approved_construction_plan": construction_plan, "not_verified": unverified},
@@ -1112,9 +1131,10 @@ def get_proposed_construction_plan_with_approval_check(
         return tool_error(NO_PROPOSED_PLAN_MESSAGE)
 
     notes = _format_unverified_notes(unverified)
+    revision = {"revision": REVISION_NOTE} if _revision_pending(tool_context) else {}
 
     if problems:
-        return tool_error(
+        refused = tool_error(
             # States the fact and stops. It deliberately does NOT say "run
             # schema_refinement_loop with these as feedback": that is right
             # mid-turn but contradicts the instruction outright on the second
@@ -1137,6 +1157,7 @@ def get_proposed_construction_plan_with_approval_check(
             "has you presenting it, but do not present it for approval until "
             "this tool reports success." + notes
         )
+        return refused | revision
 
     return tool_success(
         "result",
@@ -1168,7 +1189,8 @@ def get_proposed_construction_plan_with_approval_check(
                 "that decision to them -- when you present it, do not tell them "
                 "the plan is not ready for approval."
             ),
-        },
+        }
+        | revision,
     )
 
 
@@ -1186,5 +1208,8 @@ def get_proposed_construction_plan(tool_context: ToolContext) -> dict:
 
 
 def get_approved_construction_plan(tool_context: ToolContext) -> dict:
-    """Get the approved construction plan."""
-    return tool_context.state.get(APPROVED_CONSTRUCTION_PLAN, [])
+    """Get the approved construction plan, or an error saying none is approved."""
+    plan = approved_plan(tool_context.state)
+    if plan is None:
+        return tool_error(NOT_APPROVED_MESSAGE)
+    return plan

@@ -1,16 +1,20 @@
 import logging
 from enum import StrEnum
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from google.adk.agents import BaseAgent, LlmAgent, LoopAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.adk.models.llm_response import LlmResponse
-from google.adk.tools import agent_tool
+from google.adk.tools import ToolContext, agent_tool
 from google.genai import types
 
-from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
+from agentic_kg.common.agent_names import (
+    GRAPH_CONSTRUCTION_AGENT,
+    MULTI_AGENT_COORDINATOR,
+    SCHEMA_PROPOSAL_COORDINATOR,
+)
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_plan_tools import (
@@ -20,8 +24,29 @@ from agentic_kg.tools.construction_plan_tools import (
     format_problem_bullets,
     get_proposed_construction_plan_with_approval_check,
 )
+from agentic_kg.tools.kg_construction_tools import approved_plan
+from agentic_kg.tools.plan_revision_record import revision as _revision
 
-finished = make_finished(MULTI_AGENT_COORDINATOR)
+_back_to_coordinator = make_finished(MULTI_AGENT_COORDINATOR)
+# A peer, so make_finished may target it (handoff-gates.md).
+_back_to_construction = make_finished(GRAPH_CONSTRUCTION_AGENT)
+
+
+def finished(tool_context: ToolContext) -> Dict[str, Any]:
+    """Finish the plan step once the plan's approval has been recorded.
+
+    When the user came here from the construction step to change the plan and
+    the revised plan is now approved, this hands them straight back to the
+    construction step to rebuild. Otherwise it hands control back to the
+    coordinator, as after a first approval.
+    """
+    # The target is chosen here, not by the coordinator's model, which could
+    # restart the user at the goal or file steps. Not a hard guarantee: this
+    # agent is ungated, so its model still has ADK's own transfer_to_agent.
+    if _revision(tool_context.state) is not None and approved_plan(tool_context.state):
+        return _back_to_construction(tool_context)
+    return _back_to_coordinator(tool_context)
+
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +278,9 @@ def reset_schema_refinement_turn_budget(callback_context: CallbackContext) -> No
     callback_context.state["schema_refinement_calls_this_turn"] = 0
 
 
+# Deliberately not wired as a callback: a user who comes back from the
+# construction step to change the plan must find the current plan, and this
+# would empty it on re-entry.
 def initialize_schema_and_construction_plan(callback_context: CallbackContext) -> None:
     callback_context.state["proposed_schema"] = ""
     callback_context.state["proposed_construction_plan"] = []
@@ -401,13 +429,20 @@ refinement_loop = LoopAgent(
 )
 
 root_agent = LlmAgent(
-    name="schema_proposal_agent_coordinator",
+    name=SCHEMA_PROPOSAL_COORDINATOR,
     model=get_llm(LlmKind.reasoning),
     before_agent_callback=reset_schema_refinement_turn_budget,
     instruction="""
     You are a coordinator for the graph construction plan process. Use tools to propose a schema to the user.
     If the user disapproves, use the tools to refine the schema and ask the user to approve again.
     When the schema approval has been recorded, use the 'finished' tool.
+
+    If 'get_proposed_construction_plan_with_approval_check' returns a 'revision' note, the user came back from the
+    construction step to change the plan, and its approval was withdrawn. Show them the plan as returned. If they
+    already said what to change, pass that change to 'schema_refinement_loop' without asking them to restate it;
+    if they did not, ask what they want to change. A change to the goal or the files cannot be made after a build:
+    say so plainly. Then present the revised plan for approval, following the rules below. After the approval is
+    recorded, 'finished' takes them straight back to the construction step.
 
     You cannot change the construction plan yourself. Only the 'schema_refinement_loop' tool can, and the
     only way to learn what the plan currently says is the

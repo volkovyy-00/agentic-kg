@@ -8,27 +8,29 @@ of that window to the model's reading of "the user seems satisfied" is what
 this module removes: the flag below is set only by an explicit tool call, and
 the retrieval agent's own `finished` wrapper refuses to transfer without it.
 
-This deliberately duplicates `construction_handoff_tools.py` rather than
-sharing with it. A shared factory would have to take the state key, the
-confirm tool, the transfer target -- construction hands the user sideways to
-a live-imported sibling, retrieval hands them up to the coordinator -- and the
-`finished` docstring, which ADK shows the model as the tool's description and
-which says something different for each gate. Counting
-`graphrag_partition_tools.py`, this flag/reset/confirm shape has three copies;
-extract a helper when a fourth is needed, not before.
+Its confirm tool, gated 'finished' and refusal text deliberately stay its own
+rather than shared with `construction_handoff_tools.py`: the transfer target
+differs (construction hands the user sideways to a live-imported sibling,
+retrieval hands them up to the coordinator), and so does the `finished`
+docstring, which ADK shows the model as the tool's description. Only the key
+and its set/read/reset plumbing are shared, through `TurnFlag`
+(common/turn_flags.py).
 
 The key is spelled here, once. The agent's agent.py (which clears it every
-turn) and its variants.py (which reads it) both import this constant rather
-than retyping the string. It is deliberately not named `HANDOFF_CONFIRMED_KEY`:
-that name already means something else, with a different value, one module
-over.
+turn) and its variants.py (which reads it) both import
+`GRAPHRAG_HANDOFF_CONFIRMED` rather than retyping the string, and `TurnFlag`
+(common/turn_flags.py) holds the plumbing. It is deliberately not named
+`HANDOFF_CONFIRMED_KEY`: that name already means something else, with a
+different value, one module over.
 """
 
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.tool_result import ToolResult, tool_success
+from agentic_kg.common.turn_flags import TurnFlag
 
 GRAPHRAG_HANDOFF_CONFIRMED_KEY = "graphrag_handoff_confirmed"
+GRAPHRAG_HANDOFF_CONFIRMED = TurnFlag(GRAPHRAG_HANDOFF_CONFIRMED_KEY)
 
 
 def confirm_graphrag_handoff(tool_context: ToolContext) -> ToolResult:
@@ -38,5 +40,5 @@ def confirm_graphrag_handoff(tool_context: ToolContext) -> ToolResult:
     never on an inference that they sound finished, and never to pre-authorise a
     handoff you expect them to want. Call 'finished' in the same reply.
     """
-    tool_context.state[GRAPHRAG_HANDOFF_CONFIRMED_KEY] = True
+    GRAPHRAG_HANDOFF_CONFIRMED.set(tool_context.state)
     return tool_success(GRAPHRAG_HANDOFF_CONFIRMED_KEY, True)

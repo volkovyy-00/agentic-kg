@@ -37,7 +37,10 @@ full_workflow_agent = LlmAgent(
         1. user_intent_agent -- start here to determine the user goal for kind of graph and description
         2. file_suggestion_agent -- requires approved user goals to make suggestions about what files to use
         3. schema_proposal_agent -- requires approved file suggestions to propose a graph schema with construction rules
-        4. graph_construction_agent -- requires an approved graph schema design
+        4. graph_construction_agent -- requires an approved graph schema design. It can send the user back to
+           schema_proposal_agent to change the plan; after re-approval the plan step hands them straight back.
+           A user who reaches you with a withdrawn plan approval goes to schema_proposal_agent, never back to
+           the goal or file steps
         5. graphrag_agent -- used to interact with the knowledge graph.only available if 'get_physical_schema' tool shows that a graph exists
         """,
     sub_agents=[
