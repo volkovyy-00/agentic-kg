@@ -190,7 +190,8 @@ def test_missing_parameters_are_capped_and_have_adks_shape():
     assert agent.model.call_count == MAX_CONSECUTIVE_STUCK_REPLIES
     assert _final_text(events) == STUCK_TURN_END
     replies = _responses(events, "needs_value")
-    assert replies and all(is_adk_rejection(reply) for reply in replies)
+    assert replies
+    assert all(is_adk_rejection(reply) for reply in replies)
     assert not _unanswered_calls(saved)
 
 
@@ -357,7 +358,8 @@ def test_the_coordinators_real_transfer_is_not_refused(monkeypatch):
 
     assert _final_text(events) == "file step speaking"
     replies = _responses(events, "transfer_to_agent")
-    assert replies and not any(is_error(reply) for reply in replies)
+    assert replies
+    assert not any(is_error(reply) for reply in replies)
     assert any(
         event.actions.transfer_to_agent == file_suggestion_agent.name
         for event in events

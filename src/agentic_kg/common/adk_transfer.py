@@ -161,6 +161,7 @@ def strip_transfer_to_agent(
     would keep offering the model the tool. system_instruction is where ADK
     tells the model the tool exists at all.
     """
+    del callback_context  # Part of ADK's keyword contract; the strip does not read it.
     was_injected = llm_request.tools_dict.pop(TRANSFER_TOOL_NAME, None) is not None
 
     config = getattr(llm_request, "config", None)
