@@ -34,12 +34,16 @@ from agentic_kg.tools.plan_revision_record import (
 )
 
 NO_REBUILD_PENDING = (
-    "No rebuild is pending: the user has not come back to change the plan. Carry "
-    "on with whatever the user asked."
+    "No rebuild is pending: no revised plan is waiting to be built. Carry on with "
+    "whatever the user asked."
 )
 REBUILD_OWED = (
-    "A revised plan is approved and not yet built. Run steps 1 to 6 again against "
-    "it; the earlier build in this conversation is the previous version."
+    "A revised plan is approved and not yet built. Run steps 1 to 6 against "
+    "it; any earlier build in this conversation is the previous version."
+)
+OTHER_REQUEST = (
+    "If the user's latest message asks for something else, such as changing the "
+    "plan again, do that instead."
 )
 SAME_TURN_REFUSAL = (
     "The clear question was asked in this same turn, so the user has not answered "
@@ -59,7 +63,8 @@ def _question(contents: dict, asked_earlier: bool) -> str:
             "The question whether to clear the database was put to the user in an "
             "earlier turn. If the user's latest message answers it, call "
             "'clear_database_for_rebuild' for yes or 'keep_database_for_rebuild' "
-            "for no; otherwise ask again: list what the database holds:\n"
+            "for no. " + OTHER_REQUEST + " If it does not answer, otherwise ask again: "
+            "list what the database holds:\n"
             + listing
             + "\nSay that clearing erases the whole database, including anything this "
             "program did not build, and that keeping it rebuilds on top of what is "
@@ -88,7 +93,7 @@ def check_database_before_rebuild(tool_context: ToolContext) -> ToolResult:
     if approved_plan(state) is None:
         return tool_error(NOT_APPROVED_MESSAGE)
     if record["status"] == ANSWERED:
-        return tool_success("rebuild", REBUILD_OWED)
+        return tool_success("rebuild", REBUILD_OWED + " " + OTHER_REQUEST)
     if record["status"] == ASKED:
         earlier = record["asked_in"] != tool_context.invocation_id
         return tool_success("question", _question(record["contents"], earlier))

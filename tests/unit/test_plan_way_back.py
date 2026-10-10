@@ -93,6 +93,21 @@ def test_way_back_refuses_without_confirmation_and_changes_nothing():
     assert context.actions.transfer_to_agent is None
 
 
+def test_refusal_with_no_approval_does_not_say_the_plan_is_still_approved():
+    context = FakeToolContext({APPROVED_CONSTRUCTION_PLAN: None})
+    text = construction.return_to_plan(context)["error_message"]
+    assert "still approved" not in text
+    assert "still not approved" in text
+    assert "nothing was changed" in text
+
+
+def test_refusal_with_an_approved_plan_still_says_it_is_still_approved():
+    context = FakeToolContext({APPROVED_CONSTRUCTION_PLAN: _PLAN})
+    text = construction.return_to_plan(context)["error_message"]
+    assert "the plan is still approved" in text
+    assert "still not approved" not in text
+
+
 def test_confirmed_way_back_withdraws_records_and_hands_over():
     context = FakeToolContext({APPROVED_CONSTRUCTION_PLAN: _PLAN})
     confirm_plan_revision(context)
@@ -275,7 +290,7 @@ def test_the_instruction_carries_the_way_back_and_the_every_turn_check():
         "At the start of every turn, before anything else, call 'check_database_before_rebuild'"
         in text
     )
-    assert "the earlier build in this conversation is the previous version" in text
+    assert "any earlier build in this conversation is the previous version" in text
     assert "Never offer the way back while the approval is intact" in text
     assert "'confirm_plan_revision' and then 'return_to_plan'" in text
     assert "{" not in text and "}" not in text

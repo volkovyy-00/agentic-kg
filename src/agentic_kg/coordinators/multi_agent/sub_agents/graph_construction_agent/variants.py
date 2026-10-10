@@ -29,6 +29,7 @@ from agentic_kg.tools.cypher_tools import (
 )
 from agentic_kg.tools.file_tools import get_approved_files
 from agentic_kg.tools.kg_construction_tools import (
+    approved_plan,
     build_graph_from_construction_rules,
     withdraw_approval,
 )
@@ -95,11 +96,16 @@ def return_to_plan(tool_context: ToolContext) -> Dict[str, Any]:
     plan step before anything is built.
     """
     if not PLAN_REVISION_CONFIRMED.is_set(tool_context.state):
+        standing = (
+            "still approved"
+            if approved_plan(tool_context.state) is not None
+            else "still not approved"
+        )
         return tool_error(
             "no request to change the plan was recorded this turn -- if you called "
             "'confirm_plan_revision' later in this same reply, it has been recorded "
             "now: call 'return_to_plan' once more and it will succeed. Otherwise "
-            "nothing was changed and the plan is still approved: ask the user whether "
+            f"nothing was changed (the plan is {standing}): ask the user whether "
             "they want to change the plan, then call 'confirm_plan_revision' and "
             "'return_to_plan' in the same reply, confirming first."
         )
@@ -135,7 +141,7 @@ variants = {
         At the start of every turn, before anything else, call 'check_database_before_rebuild' and follow its
         result. It is the only way you learn that the user came back from the plan step: you do not see
         that step's messages. When it reports that a revised plan is approved and not yet built, steps 1 to 6
-        run again against the new plan, and the earlier build in this conversation is the previous version.
+        run against the new plan, and any earlier build in this conversation is the previous version.
         When it reports that no rebuild is pending, carry on with whatever the user asked.
         If 'get_approved_construction_plan' returns an error, the plan is not approved: tell the user so and
         offer to take them back to the plan step.

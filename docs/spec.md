@@ -123,8 +123,8 @@ except the next stage's tools failing on the missing state key, the same fail-fa
    by writing `None` and records `plan_revision`). After a way back it asks, once, whether to clear the
    database before rebuilding, if the database is not empty; the build refuses until that is answered, and
    a clear erases the whole database but keeps Neo4j's built-in lookup indexes. ADK's
-   injected `transfer_to_agent` tool is stripped from this agent's requests, so that gated `finished`
-   is the only exit the model is offered.
+   injected `transfer_to_agent` tool is stripped from this agent's requests, so the gated `finished`
+   and `return_to_plan` are the only exits the model is offered.
 5. **`graphrag_agent_v2`** — answers questions over the finished graph. Reads and writes one key,
    `graphrag_handoff_confirmed`, a per-turn flag gating the explicit handoff back to the coordinator.
    ADK's injected `transfer_to_agent` tool is stripped from `graphrag_agent_v2`'s requests, so that

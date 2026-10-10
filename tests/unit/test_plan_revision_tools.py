@@ -100,7 +100,10 @@ def test_answered_means_rebuild_owed_and_nothing_asked(monkeypatch):
     result = tools.check_database_before_rebuild(
         FakeToolContext(_state(record.ANSWERED, cleared=False))
     )
-    assert result == {"status": "success", "rebuild": tools.REBUILD_OWED}
+    assert result == {
+        "status": "success",
+        "rebuild": tools.REBUILD_OWED + " " + tools.OTHER_REQUEST,
+    }
     assert "steps 1 to 6" in tools.REBUILD_OWED
 
 
@@ -142,6 +145,28 @@ def test_asked_in_an_earlier_turn_says_answer_or_ask_again(contents):
     assert "end your reply with the question" in result["question"]
     assert "including anything this program did not build" in result["question"]
     assert record.revision(state)["asked_in"] == "inv-1"
+
+
+_OTHER_REQUEST = "If the user's latest message asks for something else"
+
+
+def test_asked_in_an_earlier_turn_lets_a_different_request_win(contents):
+    contents(_EMPTY)
+    state = _state(record.ASKED, asked_in="inv-1", contents=_FULL)
+    result = tools.check_database_before_rebuild(FakeToolContext(state, "inv-2"))
+    text = " ".join(result["question"].split())
+    assert _OTHER_REQUEST in text
+    assert "such as changing the plan again, do that instead" in text
+    assert "If it does not answer, otherwise ask again: list" in text
+
+
+def test_answered_lets_a_different_request_win():
+    result = tools.check_database_before_rebuild(
+        FakeToolContext(_state(record.ANSWERED, cleared=False))
+    )
+    text = " ".join(result["rebuild"].split())
+    assert _OTHER_REQUEST in text
+    assert "such as changing the plan again, do that instead" in text
 
 
 def test_a_failed_read_leaves_the_record_alone(monkeypatch):

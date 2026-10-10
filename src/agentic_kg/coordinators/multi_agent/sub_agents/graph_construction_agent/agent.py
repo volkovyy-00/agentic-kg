@@ -64,9 +64,9 @@ graph_construction_agent = Agent(
     # post-construction window: every follow-up question would go back to the
     # coordinator.
     #
-    # 'finished' is unaffected -- it writes actions.transfer_to_agent
-    # directly, which ADK acts on after the tool returns and no
-    # request-level strip touches.
+    # 'finished' and 'return_to_plan' are unaffected -- each writes
+    # actions.transfer_to_agent directly, which ADK acts on after the tool
+    # returns and no request-level strip touches.
     **transfer_guard_callbacks(gated=True),
 )
 

@@ -70,6 +70,7 @@ def test_build_then_clear_leaves_a_fresh_database(db, tmp_path):
 
     fresh = _lookups(db)
     logger.warning("fresh database LOOKUP indexes: %d %s", len(fresh), fresh)
+    assert fresh
     assert is_empty(_contents())
 
     _write(tmp_path, "people.csv", ["id", "name"], [["p1", "A"], ["p2", "B"]])

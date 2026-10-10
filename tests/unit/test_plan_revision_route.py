@@ -101,6 +101,50 @@ def test_the_approval_check_says_the_user_came_back_while_pending(monkeypatch):
     assert "withdrawn" in cpt.REVISION_NOTE
 
 
+def test_the_approval_check_drops_the_note_once_a_plan_is_approved(monkeypatch):
+    monkeypatch.setattr(cpt, "find_plan_problems", lambda state: ([], []))
+    result = cpt.get_proposed_construction_plan_with_approval_check(
+        FakeToolContext(
+            {
+                cpt.PROPOSED_CONSTRUCTION_PLAN: _PLAN,
+                APPROVED_CONSTRUCTION_PLAN: _PLAN,
+                record.PLAN_REVISION_KEY: {"status": record.PENDING},
+            }
+        )
+    )
+    assert "revision" not in result.get("result", {})
+
+
+@pytest.mark.parametrize("status", [record.ASKED, record.ANSWERED])
+def test_the_approval_check_has_no_note_while_the_clear_question_is_open(
+    monkeypatch, status
+):
+    monkeypatch.setattr(cpt, "find_plan_problems", lambda state: ([], []))
+    result = cpt.get_proposed_construction_plan_with_approval_check(
+        FakeToolContext(
+            {
+                cpt.PROPOSED_CONSTRUCTION_PLAN: _PLAN,
+                record.PLAN_REVISION_KEY: {"status": status},
+            }
+        )
+    )
+    assert "revision" not in result.get("result", {})
+
+
+def test_the_approval_check_error_path_carries_the_note_while_pending(monkeypatch):
+    monkeypatch.setattr(cpt, "find_plan_problems", lambda state: (["a problem"], []))
+    result = cpt.get_proposed_construction_plan_with_approval_check(
+        FakeToolContext(
+            {
+                cpt.PROPOSED_CONSTRUCTION_PLAN: _PLAN,
+                record.PLAN_REVISION_KEY: {"status": record.PENDING},
+            }
+        )
+    )
+    assert result["status"] == "error"
+    assert result["revision"] == cpt.REVISION_NOTE
+
+
 def test_the_schema_instruction_handles_a_revision():
     text = " ".join(schema_module.root_agent.instruction.split())
     assert "came back from the construction step" in text

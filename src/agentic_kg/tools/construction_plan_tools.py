@@ -43,7 +43,11 @@ REVISION_NOTE = (
 
 def _revision_pending(tool_context: ToolContext) -> bool:
     record = _revision(tool_context.state)
-    return record is not None and record["status"] == PENDING
+    return (
+        record is not None
+        and record["status"] == PENDING
+        and approved_plan(tool_context.state) is None
+    )
 
 
 # Added after the build's own refusal text (KG-44), but only where a way forward
