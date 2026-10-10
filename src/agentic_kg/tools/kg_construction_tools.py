@@ -926,22 +926,13 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
         message_parts = []
         if successes:
             message_parts.append("loaded: " + ", ".join(successes))
-        if warnings:
-            message_parts.append("warnings: " + "; ".join(warnings))
         message_parts.append("failed: " + "; ".join(failures))
-        # The same list the success branch attaches below. It is built above,
-        # before this branch splits, so a partial failure has always had these
-        # strings -- until now they survived only inside the message text, which
-        # left the two branches structurally different for no reason.
-        failed = tool_error("; ".join(message_parts))
-        if warnings:
-            failed["warnings"] = warnings
-        return failed
+        # The warnings go in the top-level list, as on success, and are not
+        # repeated in the message: it carries what loaded and what failed, and
+        # nothing a reader would have to tell apart from them.
+        return tool_error("; ".join(message_parts), warnings=warnings)
 
-    success = tool_success("domain_graph_constructed", outcomes)
-    if warnings:
-        success["warnings"] = warnings
-    return success
+    return tool_success("domain_graph_constructed", outcomes, warnings=warnings)
 
 
 def build_graph_from_construction_rules(tool_context: ToolContext) -> Dict[str, Any]:
