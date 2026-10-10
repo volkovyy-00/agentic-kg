@@ -23,11 +23,11 @@ from agentic_kg.tools.cypher_tools import (
     read_neo4j_cypher,
 )
 from agentic_kg.tools.graphrag_handoff_tools import (
-    GRAPHRAG_HANDOFF_CONFIRMED_KEY,
+    GRAPHRAG_HANDOFF_CONFIRMED,
     confirm_graphrag_handoff,
 )
 from agentic_kg.tools.graphrag_partition_tools import (
-    PARTITION_INTERPRETATION_DECLARED_KEY,
+    PARTITION_INTERPRETATION_DECLARED,
     declare_partition_interpretation,
 )
 
@@ -56,7 +56,7 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
 
     v2 only. v1 holds '_transfer_to_coordinator' directly.
     """
-    if not tool_context.state.get(GRAPHRAG_HANDOFF_CONFIRMED_KEY):
+    if not GRAPHRAG_HANDOFF_CONFIRMED.is_set(tool_context.state):
         return tool_error(
             "no confirmation recorded this turn -- if you called "
             "'confirm_graphrag_handoff' later in this same reply, it has been "
@@ -122,7 +122,7 @@ def make_gated_read_neo4j_cypher(
         if (
             profile is not None
             and _AGGREGATE_KEYWORD_RE.search(query)
-            and not tool_context.state.get(PARTITION_INTERPRETATION_DECLARED_KEY)
+            and not PARTITION_INTERPRETATION_DECLARED.is_set(tool_context.state)
         ):
             flagged = numeric_partitioned_properties(profile)
             if flagged:

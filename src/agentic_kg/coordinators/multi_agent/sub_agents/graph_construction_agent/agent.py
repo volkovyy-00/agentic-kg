@@ -3,7 +3,7 @@ from google.adk.agents.callback_context import CallbackContext
 
 from agentic_kg.common.adk_transfer import transfer_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
-from agentic_kg.tools.construction_handoff_tools import HANDOFF_CONFIRMED_KEY
+from agentic_kg.tools.construction_handoff_tools import HANDOFF_CONFIRMED
 
 # variants are pairs of instructions with tools
 from .variants import variants
@@ -26,7 +26,7 @@ def reset_construction_handoff_confirmation(callback_context: CallbackContext) -
     (BaseAgent._handle_before_agent_callback), so renaming it fails at
     request time with a TypeError, not at import.
     """
-    callback_context.state[HANDOFF_CONFIRMED_KEY] = False
+    HANDOFF_CONFIRMED.reset(callback_context.state)
 
 
 AGENT_NAME = "graph_construction_agent_v1"

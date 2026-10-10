@@ -3,9 +3,9 @@ from google.adk.agents.callback_context import CallbackContext
 
 from agentic_kg.common.adk_transfer import transfer_guard_callbacks
 from agentic_kg.common.llm_catalog import LlmKind, get_llm
-from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED_KEY
+from agentic_kg.tools.graphrag_handoff_tools import GRAPHRAG_HANDOFF_CONFIRMED
 from agentic_kg.tools.graphrag_partition_tools import (
-    PARTITION_INTERPRETATION_DECLARED_KEY,
+    PARTITION_INTERPRETATION_DECLARED,
 )
 
 from .variants import variants
@@ -28,7 +28,7 @@ def reset_graphrag_handoff_confirmation(callback_context: CallbackContext) -> No
     (BaseAgent._handle_before_agent_callback), so renaming it fails at
     request time with a TypeError, not at import.
     """
-    callback_context.state[GRAPHRAG_HANDOFF_CONFIRMED_KEY] = False
+    GRAPHRAG_HANDOFF_CONFIRMED.reset(callback_context.state)
 
 
 def reset_partition_interpretation_declaration(
@@ -41,7 +41,7 @@ def reset_partition_interpretation_declaration(
     earlier turn must not silently authorise an undeclared aggregation on a
     later one, the same stale-flag risk that reset guards against.
     """
-    callback_context.state[PARTITION_INTERPRETATION_DECLARED_KEY] = False
+    PARTITION_INTERPRETATION_DECLARED.reset(callback_context.state)
 
 
 AGENT_NAME = "graphrag_agent_v2"

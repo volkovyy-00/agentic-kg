@@ -8,15 +8,18 @@ below is set only by an explicit tool call, and the construction agent's own
 `finished` wrapper refuses to transfer without it.
 
 The key is spelled here, once. The agent's agent.py (which clears it every
-turn) and its variants.py (which reads it) both import this constant rather
-than retyping the string.
+turn) and its variants.py (which reads it) both import `HANDOFF_CONFIRMED`
+rather than retyping the string, and `TurnFlag` (common/turn_flags.py) holds
+the plumbing.
 """
 
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.tool_result import ToolResult, tool_success
+from agentic_kg.common.turn_flags import TurnFlag
 
 HANDOFF_CONFIRMED_KEY = "construction_handoff_confirmed"
+HANDOFF_CONFIRMED = TurnFlag(HANDOFF_CONFIRMED_KEY)
 
 
 def confirm_construction_handoff(tool_context: ToolContext) -> ToolResult:
@@ -26,5 +29,5 @@ def confirm_construction_handoff(tool_context: ToolContext) -> ToolResult:
     never on an inference that they sound finished, and never to pre-authorise a
     handoff you expect them to want. Call 'finished' in the same reply.
     """
-    tool_context.state[HANDOFF_CONFIRMED_KEY] = True
+    HANDOFF_CONFIRMED.set(tool_context.state)
     return tool_success(HANDOFF_CONFIRMED_KEY, True)

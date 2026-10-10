@@ -11,7 +11,7 @@ from google.adk.tools import ToolContext
 from agentic_kg.common.tool_result import tool_error
 from agentic_kg.tools.adk_tools import make_finished
 from agentic_kg.tools.construction_handoff_tools import (
-    HANDOFF_CONFIRMED_KEY,
+    HANDOFF_CONFIRMED,
     confirm_construction_handoff,
 )
 from agentic_kg.tools.construction_plan_tools import (
@@ -54,7 +54,7 @@ def finished(tool_context: ToolContext) -> Dict[str, Any]:
     other 'finished' in this codebase; the error path is the only one that
     speaks ToolResult.
     """
-    if not tool_context.state.get(HANDOFF_CONFIRMED_KEY):
+    if not HANDOFF_CONFIRMED.is_set(tool_context.state):
         return tool_error(
             "no confirmation recorded this turn -- if you called "
             "'confirm_construction_handoff' later in this same reply, it has "

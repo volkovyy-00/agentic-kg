@@ -13,7 +13,8 @@ paths:
 - Gates come in two shapes: the turn-scoped flag/reset/confirm shape (construction exit, retrieval
   exit, the partition tool gate) and the durable-state equality check (intent exit). Never factor the
   intent gate into the flag shape.
-- Extract a shared helper for the flag/reset/confirm shape only when a fourth copy of it is needed.
+- A new flag/reset/confirm gate takes its key and plumbing from `TurnFlag`; its confirm tool, gated tool,
+  reset function, docstrings and refusal text stay hand-written for that gate.
 - A gated agent takes every transfer-related callback from `**transfer_guard_callbacks(gated=...)`;
   if it needs its own callback of one of those kinds, extend the helper rather than wiring lists.
 - Leave `disallow_transfer_to_parent` and `disallow_transfer_to_peers` unset; a `make_finished`
