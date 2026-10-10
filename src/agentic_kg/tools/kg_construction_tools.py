@@ -23,6 +23,7 @@ from agentic_kg.common.cypher_identifiers import InvalidIdentifier, checked_fiel
 from agentic_kg.common.cypher_identifiers import checked as _checked
 from agentic_kg.common.file_source import SourceEncodingError
 from agentic_kg.common.neo4j_for_adk import get_graphdb
+from agentic_kg.common.session_state import SessionState
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import (
     BLANK,
@@ -39,7 +40,34 @@ logger = logging.getLogger(__name__)
 
 graphdb = get_graphdb()
 
+# The one definition: construction_plan_tools imports it from here (it already
+# imports this module; the reverse would be a cycle).
 APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
+
+# What the build and get_approved_construction_plan say when no plan is approved.
+NOT_APPROVED_MESSAGE = (
+    "No approved construction plan: it was never approved, or its approval was "
+    "withdrawn when the user went back to change it. It needs approval at the "
+    "plan step before anything is built."
+)
+
+
+def approved_plan(state: SessionState) -> Optional[dict]:
+    """The approved plan, or None when none is approved.
+
+    ADK's State cannot delete a key (google/adk/sessions/state.py has no
+    delete), so the way back withdraws an approval by writing None. A missing
+    key, None, and an empty value all mean "not approved"; every reader goes
+    through here so none of them can disagree.
+    """
+    plan = state.get(APPROVED_CONSTRUCTION_PLAN)
+    return plan if isinstance(plan, dict) and plan else None
+
+
+def withdraw_approval(state: SessionState) -> None:
+    """Withdraw the plan's approval (see approved_plan for why None)."""
+    state[APPROVED_CONSTRUCTION_PLAN] = None
+
 
 # Marks a typed value that must be REMOVED from the node/relationship rather
 # than written. Cypher cannot distinguish "this row never had this column" from
@@ -913,7 +941,8 @@ def construct_domain_graph(construction_plan: dict) -> Dict[str, Any]:
 
 def build_graph_from_construction_rules(tool_context: ToolContext) -> Dict[str, Any]:
     """Build a graph from the approved construction rules."""
-    if APPROVED_CONSTRUCTION_PLAN not in tool_context.state:
-        return tool_error(f"{APPROVED_CONSTRUCTION_PLAN} not set.")
+    plan = approved_plan(tool_context.state)
+    if plan is None:
+        return tool_error(NOT_APPROVED_MESSAGE)
 
-    return construct_domain_graph(tool_context.state[APPROVED_CONSTRUCTION_PLAN])
+    return construct_domain_graph(plan)

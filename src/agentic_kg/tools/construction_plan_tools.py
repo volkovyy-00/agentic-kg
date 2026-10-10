@@ -13,6 +13,9 @@ graphdb = get_graphdb()
 from .file_tools import APPROVED_FILES, check_columns_in_header
 from .join_property_check import check_joined_properties_hold_one_value
 from .kg_construction_tools import (
+    APPROVED_CONSTRUCTION_PLAN,
+    NOT_APPROVED_MESSAGE,
+    approved_plan,
     matched_property_name_problem,
     node_rule_name_problem,
     required_relationship_name_problem,
@@ -25,7 +28,6 @@ from .reference_reachability import (
 from .relationship_endpoints import is_omitted, relationship_endpoints
 
 PROPOSED_CONSTRUCTION_PLAN = "proposed_construction_plan"
-APPROVED_CONSTRUCTION_PLAN = "approved_construction_plan"
 
 # Added after the build's own refusal text (KG-44), but only where a way forward
 # exists: a label or relationship type can be renamed to follow its rule. A
@@ -1186,5 +1188,8 @@ def get_proposed_construction_plan(tool_context: ToolContext) -> dict:
 
 
 def get_approved_construction_plan(tool_context: ToolContext) -> dict:
-    """Get the approved construction plan."""
-    return tool_context.state.get(APPROVED_CONSTRUCTION_PLAN, [])
+    """Get the approved construction plan, or an error saying none is approved."""
+    plan = approved_plan(tool_context.state)
+    if plan is None:
+        return tool_error(NOT_APPROVED_MESSAGE)
+    return plan
