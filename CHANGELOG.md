@@ -15,9 +15,10 @@ There is no `[Unreleased]` section.
   `column_type_hints` used to keep every value of every requested column before classifying any of it, so a
   large source file cost memory in proportion to its rows. They now read the file once, keep only counts per
   column, and report the same hints as before. A column named twice in one `column_type_hints` call is
-  counted once: the bundled `products.csv` reported 20 convertible prices instead of 10. When several
-  requested columns are missing, one error now names all of them (`Column(s) [...] are not in ...`), so the
-  model can fix them in one retry; before, it named only the first. Each value is now tried against every
+  counted once: the bundled `products.csv` reported 20 convertible prices instead of 10. When a
+  `column_type_hints` call names columns the file lacks, one `Column(s) [...] are not in ...` error now names
+  all of them (even when only one is missing), so the model can fix them in one retry; before, it named only
+  the first, as `Column '...' is not in ...`. A one-column call keeps that wording. Each value is now tried against every
   type, so a hint takes longer. At 300,000 rows: a numeric column 3.14 s → 4.64 s, a text column 1.39 s → 3.18 s,
   a date column 5.47 s → 6.95 s.
 

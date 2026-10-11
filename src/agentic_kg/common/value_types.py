@@ -165,9 +165,10 @@ def classify(values: Iterable[Any]) -> str:
 def _clean_number(text: str) -> Optional[str]:
     """Strip currency, thousands separators and accounting brackets.
 
-    Returns None when the value is not numeric at all. Shared by coerce and
-    has_fractional_part so the two cannot disagree about what counts as a
-    number or how it is cleaned.
+    Returns None when the value is not numeric at all. Shared by coerce,
+    has_fractional_part and _read (the one reading behind coerce_all and
+    ColumnTally) so they cannot disagree about what counts as a number or how
+    it is cleaned.
     """
     negated_by_brackets = bool(_PARENTHESISED_NEGATIVE.match(text))
     if not (negated_by_brackets or _NUMERIC_LIKE.match(text)):
