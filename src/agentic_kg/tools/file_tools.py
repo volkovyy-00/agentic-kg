@@ -18,21 +18,7 @@ from agentic_kg.common.file_source import (
     source_exists,
 )
 from agentic_kg.common.tool_result import tool_error, tool_success
-from agentic_kg.common.value_types import (
-    BARE_NUMERIC,
-    BLANK,
-    BOOLEAN,
-    BOOLEAN_LIKE,
-    CONVERTED,
-    FLOAT,
-    INTEGER,
-    NUMERIC_AFTER_CLEANING,
-    TEMPORAL_SHAPE_TYPES,
-    classify,
-    coerce,
-    has_fractional_part,
-    is_blank,
-)
+from agentic_kg.common.value_types import ColumnTally, is_blank
 
 logger = logging.getLogger(__name__)
 
@@ -265,8 +251,11 @@ def _missing_columns_error(
 
     Exact match, as the build compares. The wording follows how many columns
     were asked for, not how many are missing: one asked gets the one-column
-    message, several asked get the 'Column(s)' message.
+    message, several asked get the 'Column(s)' message. A column asked for
+    twice counts, and is named, once, so a repeated typo keeps the one-column
+    wording whichever caller passed it.
     """
+    columns = list(dict.fromkeys(columns))
     missing = [column for column in columns if column not in header]
     if not missing:
         return None
@@ -295,7 +284,7 @@ def check_columns_in_header(file_path: str, columns: List[str]) -> Optional[dict
         return tool_error(f"Error reading CSV file {file_path}: {exc}")
     if not header:
         return tool_error(f"CSV file has no header row: {file_path}")
-    return _missing_columns_error(file_path, list(dict.fromkeys(columns)), header)
+    return _missing_columns_error(file_path, columns, header)
 
 
 def _csv_source_error(file_path: str) -> Optional[dict]:
@@ -337,8 +326,9 @@ def _column_rows(file_path: str, columns: List[str]):
     living inside the batch loop never runs for one.
 
     A failure part way through the stream raises out of the returned iterator.
-    Consume it inside a try -- `summarize_column` and `summarize_key_groups` do,
-    which is why they, and not their callers, own the whole read.
+    Consume it inside a try -- `summarize_column`, `summarize_key_groups` and
+    `_hint_tallies` do, which is why they, and not their callers, own the whole
+    read.
     """
     source_error = _csv_source_error(file_path)
     if source_error is not None:
@@ -612,53 +602,6 @@ def summarize_key_groups(
     )
 
 
-def collect_column_values(file_path: str, column: str):
-    """Read every value of one column from a source CSV.
-
-    Returns:
-        (values, error) where values holds one entry per data row and error is a
-        tool_error dict when the file or column cannot be read.
-
-    read_csv_batches omits the key entirely for a row shorter than the header, so
-    a ragged row contributes None here while a present-but-empty cell contributes
-    "". The two are the same absence to column_stats, whose row_count and
-    empty_count treat both as empty -- but not to the loader, which skips an
-    absent key and clears a blank one, so the hint tool counts them apart.
-
-    Public because `column_type_hint` reads one column through it. The hint tools
-    count an absent key apart from a blank cell, so they need the per-row list
-    this returns rather than either summariser's reduction; giving them the
-    streaming reader is their own ticket.
-    """
-    source_error = _csv_source_error(file_path)
-    if source_error is not None:
-        return None, source_error
-
-    values: List[Optional[str]] = []
-    header: List[str] = []
-    saw_header = False
-    try:
-        for batch_header, rows in read_csv_batches(file_path):
-            if not saw_header:
-                header = batch_header
-                saw_header = True
-                if column not in header:
-                    return None, _missing_column_error(file_path, column, header)
-            for row in rows:
-                values.append(row.get(column))
-        if not saw_header:
-            # No batches at all: either a header-only file or an empty one.
-            header = read_csv_header(file_path)
-            if not header:
-                return None, tool_error(f"CSV file has no header row: {file_path}")
-            if column not in header:
-                return None, _missing_column_error(file_path, column, header)
-    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
-
-    return values, None
-
-
 def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict:
     """Reports how unique the values of one CSV column are.
 
@@ -698,144 +641,73 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
     )
 
 
-def _suggested_type(shape: str, values) -> str | None:
-    """Map a column's shape to the type to suggest for it.
+def _hint_tallies(file_path: str, columns: List[str]):
+    """Stream the file once, keeping one ColumnTally per distinct column.
 
-    The shape decides, and for a column needing cleaning it decides alone: every
-    price in the bundled products.csv is a round dollar amount, so a
-    whole-number test would suggest integer for a currency column and then
-    refuse the first fractional price the data ever gains. Needing a currency
-    symbol or thousands separator stripped is itself the evidence it is money.
+    Returns:
+        (tallies, missing_counts, error), each dict keyed by distinct column in
+        first-seen order; on error the first two are None. A column asked for
+        twice is read and counted once -- counting it per mention doubled every
+        count (KG-11).
 
-    Wholeness is consulted only to split integer from float WITHIN the
-    bare_numeric shape, where there is nothing else to go on -- and only for
-    values that are numbers at all, so one "N/A" in a column of 400 integers
-    cannot make it look fractional.
-
-    It asks has_fractional_part rather than inferring the fraction from a failed
-    integer coercion. coerce refuses a value for two different reasons, and
-    treating them alike types a column float on the strength of a whole number
-    too large for Neo4j's INTEGER -- which then loads as a rounded, wrong number
-    and reports a clean conversion. An overflowing value leaves the suggestion
-    at integer, so the loader counts it, reports it as an example, and clears
-    it; one unstorable outlier does not cost the whole column its type, the same
-    tolerance classify() already applies.
+    A row too short to reach a column (None from _column_rows) is counted as
+    missing and never reaches the tally; everything else does, blank cells
+    included. This owns the whole read, like summarize_column: a failure part
+    way through comes back as an error result, never as a raise. Columns are
+    checked against the header by _column_rows before any row is consumed, and
+    every missing one is named in the same error.
     """
-    if shape in TEMPORAL_SHAPE_TYPES:
-        return TEMPORAL_SHAPE_TYPES[shape]
-    if shape == BOOLEAN_LIKE:
-        return BOOLEAN
-    if shape == NUMERIC_AFTER_CLEANING:
-        return FLOAT
-    if shape == BARE_NUMERIC:
-        for value in values:
-            if has_fractional_part(value):
-                return FLOAT
-        return INTEGER
-    return None
+    distinct = list(dict.fromkeys(columns))
+    rows, error = _column_rows(file_path, distinct)
+    if error is not None:
+        return None, None, error
+
+    tallies = {column: ColumnTally() for column in distinct}
+    missing = dict.fromkeys(distinct, 0)
+    try:
+        for row in rows:
+            for column, value in zip(distinct, row):
+                if value is None:
+                    missing[column] += 1
+                else:
+                    tallies[column].add(value)
+    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
+        return None, None, tool_error(f"Error reading CSV file {file_path}: {exc}")
+    return tallies, missing, None
 
 
-def _hint_from_values(file_path: str, column: str, values: List[Optional[str]]) -> dict:
-    """Build one column_type_hint payload from values already read.
-
-    Split out from column_type_hint so column_type_hints can reuse it after a
-    single file pass, rather than re-reading the source once per column.
-    """
-    shape = classify(values)
-    suggested = _suggested_type(shape, values)
-
-    convertible_count = 0
-    blank_count = 0
-    missing_count = 0
-    unconvertible_count = 0
-    examples: List[str] = []
-
-    for value in values:
-        # A row too short to reach this column is not the same as a row with an
-        # empty cell. An absent key is skipped whatever the property's type,
-        # leaving an earlier row's value alone; an empty cell is a value the row
-        # actually carried, and the loader either clears the property (typed) or
-        # stores "" (text). Reported together, blank_count would overstate what
-        # the build will erase -- and this tool's counts exist precisely to say
-        # what the build will do.
-        if value is None:
-            missing_count += 1
-            continue
-        if suggested is None:
-            if is_blank(value):
-                blank_count += 1
-            continue
-        _converted, outcome = coerce(value, suggested)
-        if outcome == CONVERTED:
-            convertible_count += 1
-        elif outcome == BLANK:
-            blank_count += 1
-        else:
-            unconvertible_count += 1
-            if len(examples) < 3:
-                examples.append(value)
-
+def _hint_payload(
+    file_path: str, column: str, tally: ColumnTally, missing_count: int
+) -> dict:
+    """Format one column_type_hint payload from a tally. No typing rule here:
+    shape, suggestion and counts all come from value_types.ColumnTally."""
+    suggested = tally.suggested_type
+    # Counts only for the suggested type; a column with no suggestion reports
+    # none, though the tally counted all six.
+    if suggested is None:
+        convertible, unconvertible, examples = 0, 0, []
+    else:
+        convertible = tally.converted[suggested]
+        unconvertible = tally.unconvertible[suggested]
+        examples = list(tally.examples[suggested])
+    # A row too short to reach this column is not the same as a row with an
+    # empty cell. An absent key is skipped whatever the property's type,
+    # leaving an earlier row's value alone; an empty cell is a value the row
+    # actually carried, and the loader either clears the property (typed) or
+    # stores "" (text). Reported together, blank_count would overstate what
+    # the build will erase -- and this tool's counts exist precisely to say
+    # what the build will do.
     return {
         "path": file_path,
         "column": column,
-        "shape": shape,
+        "shape": tally.shape,
         "suggested_type": suggested,
-        "convertible_count": convertible_count,
-        "blank_count": blank_count,
+        "convertible_count": convertible,
+        "blank_count": tally.blank,
         "missing_count": missing_count,
-        "unconvertible_count": unconvertible_count,
+        "unconvertible_count": unconvertible,
         "example_unconvertible": examples,
     }
-
-
-def _collect_columns_values(file_path: str, columns: List[str]):
-    """Read every value of several columns in ONE pass over a source CSV.
-
-    Returns:
-        (values_by_column, error) where values_by_column maps each requested
-        column to one entry per data row, and error is a tool_error dict when
-        the file or any requested column cannot be read.
-
-    Source files are read through fsspec and may be remote, so reading once per
-    requested column turns a hint request for N properties into N downloads and
-    N parses of the same file. Columns are validated against the header before
-    any row is collected, so an unreadable column still fails on the first
-    batch rather than after a full scan. A ragged row contributes None and a
-    present-but-empty cell contributes "", the distinction
-    collect_column_values documents and _hint_from_values counts apart.
-    """
-    source_error = _csv_source_error(file_path)
-    if source_error is not None:
-        return None, source_error
-
-    values_by_column: Dict[str, List[Optional[str]]] = {
-        column: [] for column in columns
-    }
-    saw_header = False
-    try:
-        for batch_header, rows in read_csv_batches(file_path):
-            if not saw_header:
-                saw_header = True
-                for column in columns:
-                    if column not in batch_header:
-                        return None, _missing_column_error(
-                            file_path, column, batch_header
-                        )
-            for row in rows:
-                for column in columns:
-                    values_by_column[column].append(row.get(column))
-        if not saw_header:
-            # No batches at all: either a header-only file or an empty one.
-            header = read_csv_header(file_path)
-            if not header:
-                return None, tool_error(f"CSV file has no header row: {file_path}")
-            for column in columns:
-                if column not in header:
-                    return None, _missing_column_error(file_path, column, header)
-    except Exception as exc:  # noqa: BLE001 - report read failures to the agent
-        return None, tool_error(f"Error reading CSV file {file_path}: {exc}")
-
-    return values_by_column, None
 
 
 def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> dict:
@@ -875,13 +747,14 @@ def column_type_hint(file_path: str, column: str, tool_context: ToolContext) -> 
               'unconvertible_count' and up to three 'example_unconvertible'
               values.
     """
-    values, error = collect_column_values(file_path, column)
+    tallies, missing, error = _hint_tallies(file_path, [column])
     if error is not None:
         return error
-    assert values is not None
+    assert tallies is not None and missing is not None
 
     return tool_success(
-        "column_type_hint", _hint_from_values(file_path, column, values)
+        "column_type_hint",
+        _hint_payload(file_path, column, tallies[column], missing[column]),
     )
 
 
@@ -890,9 +763,9 @@ def column_type_hints(
 ) -> dict:
     """Reports 'column_type_hint' for several columns of one file in a single call.
 
-    Each column is analyzed with the same rules as 'column_type_hint'. Analysis
-    stops at the first column that cannot be read, so the error names the column
-    to correct.
+    Each column is analyzed with the same rules as 'column_type_hint'. Every
+    requested column the file does not have is named in one error, so all of them
+    can be corrected in one retry. A column named twice gets two identical entries.
 
     Args:
       file_path: Path to the CSV file, relative to the source location.
@@ -920,15 +793,15 @@ def column_type_hints(
     if not requested:
         return tool_success("column_type_hints", [])
 
-    values_by_column, error = _collect_columns_values(file_path, requested)
+    tallies, missing, error = _hint_tallies(file_path, requested)
     if error is not None:
         return error
-    assert values_by_column is not None
+    assert tallies is not None and missing is not None
 
     return tool_success(
         "column_type_hints",
         [
-            _hint_from_values(file_path, column, values_by_column[column])
+            _hint_payload(file_path, column, tallies[column], missing[column])
             for column in requested
         ],
     )

@@ -9,6 +9,7 @@ from datetime import timedelta, timezone
 import pytest
 from neo4j import time as neo4j_time
 
+from agentic_kg.common import value_types
 from agentic_kg.common.value_types import (
     BARE_NUMERIC,
     BLANK,
@@ -26,6 +27,7 @@ from agentic_kg.common.value_types import (
     NUMERIC_AFTER_CLEANING,
     TEXT,
     UNCONVERTIBLE,
+    ColumnTally,
     classify,
     coerce,
     has_fractional_part,
@@ -485,3 +487,111 @@ def test_classify_strips_padded_values_like_coerce_does():
     """coerce strips before parsing; if classify did not, a padded date column
     would classify as text while every value converted."""
     assert classify([" 2025-03-04", "2025-03-05 ", "\t2025-03-06"]) == DATE_LIKE
+
+
+def test_coerce_prepares_only_what_its_one_converter_needs(monkeypatch):
+    """The loaders call coerce on every typed cell of every row. Cleaning a number
+    and parsing a date for a boolean column would slow every load for nothing, so
+    coerce must not take the all-types read that coerce_all and the hint tools use."""
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("coerce did work its declared type does not need")
+
+    monkeypatch.setattr(value_types, "parse_temporal", must_not_run)
+    assert value_types.coerce("yes", value_types.BOOLEAN) == (
+        True,
+        value_types.CONVERTED,
+    )
+    assert value_types.coerce("42", value_types.INTEGER) == (42, value_types.CONVERTED)
+
+    monkeypatch.undo()
+    monkeypatch.setattr(value_types, "_clean_number", must_not_run)
+    assert value_types.coerce("yes", value_types.BOOLEAN) == (
+        True,
+        value_types.CONVERTED,
+    )
+    assert (
+        value_types.coerce("2025-03-04", value_types.DATE)[1] == value_types.CONVERTED
+    )
+
+
+def test_a_tally_of_nothing_or_only_blanks_is_text():
+    assert ColumnTally.of([]).shape == TEXT
+    blanks = ColumnTally.of(["", "   ", None])
+    assert blanks.shape == TEXT
+    assert blanks.suggested_type is None
+    assert (blanks.blank, blanks.non_blank) == (3, 0)
+
+
+def test_a_tally_accepts_values_that_are_not_strings():
+    """classify has always accepted Iterable[Any] and judged str(value); the
+    tally must too, or a caller passing numbers gets a different answer."""
+    assert ColumnTally.of([42, 43, None]).shape == BARE_NUMERIC
+    assert ColumnTally.of([42, 43, None]).suggested_type == INTEGER
+    assert ColumnTally.of([True, False, True]).shape == BOOLEAN_LIKE
+    assert classify([42, 43]) == BARE_NUMERIC
+
+
+def test_a_tally_keeps_examples_as_given_and_at_most_three():
+    """The hint reports a value the way the source holds it: not stripped, not
+    str()-ed. Three examples, the first three in row order, whatever the length
+    of the column -- the bound that keeps the tally fixed-size."""
+    tally = ColumnTally.of([True, False, 42, " x ", "p", "q", "r"])
+    assert tally.examples[BOOLEAN] == [42, " x ", "p"]
+    assert type(tally.examples[BOOLEAN][0]) is int
+    assert tally.unconvertible[BOOLEAN] == 5
+
+    many = ColumnTally.of(f"bad{n}" for n in range(1000))
+    assert all(len(examples) == 3 for examples in many.examples.values())
+
+
+def test_a_tally_counts_every_type_from_the_same_values():
+    tally = ColumnTally.of(["42", "4.5", "yes", "2025-03-04"])
+    assert tally.converted == {
+        INTEGER: 1,
+        FLOAT: 2,
+        BOOLEAN: 1,
+        DATE: 1,
+        DATETIME: 0,
+        LOCALDATETIME: 0,
+    }
+    assert tally.unconvertible == {
+        INTEGER: 3,
+        FLOAT: 2,
+        BOOLEAN: 3,
+        DATE: 3,
+        DATETIME: 4,
+        LOCALDATETIME: 4,
+    }
+
+
+def test_one_value_with_cents_makes_a_bare_numeric_column_float():
+    """any_fraction looks at every non-blank value, not only the bare-numeric
+    ones: a "$1.50" among whole numbers is evidence the column holds fractions."""
+    tally = ColumnTally.of([str(n) for n in range(10)] + ["$1.50"])
+    assert tally.shape == BARE_NUMERIC
+    assert tally.any_fraction is True
+    assert tally.suggested_type == FLOAT
+
+
+def test_a_mostly_zero_or_one_quantity_stays_a_count():
+    """The two flags behind _is_really_a_count: a 0/1-heavy quantity with real
+    2s and 3s is a number; a yes/no column with a stray number stays boolean."""
+    assert ColumnTally.of(["0", "1", "1", "0", "2", "3"]).shape == BARE_NUMERIC
+    assert ColumnTally.of(["yes", "no", "yes", "5"]).shape == BOOLEAN_LIKE
+    assert ColumnTally.of(["1", "0", "1", "1"]).shape == BOOLEAN_LIKE
+
+
+def test_a_tally_parses_each_value_once(monkeypatch):
+    """Trying six types must cost one parse per value, not six: the slowdown the
+    spec measured assumes it. _read is the one parse."""
+    calls = []
+    real_read = value_types._read
+
+    def counting_read(value):
+        calls.append(value)
+        return real_read(value)
+
+    monkeypatch.setattr(value_types, "_read", counting_read)
+    ColumnTally.of(["2025-03-04", "42", "yes", "", None])
+    assert calls == ["2025-03-04", "42", "yes"]

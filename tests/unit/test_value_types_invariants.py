@@ -3,7 +3,7 @@
 Every defect found in review on this branch lived in a SEAM rather than in a
 component: classify and coerce disagreeing about accounting parentheses,
 coerce and the driver disagreeing about how large an integer may be,
-_suggested_type and coerce disagreeing about what an integer refusal means.
+the type suggestion and coerce disagreeing about what an integer refusal means.
 Each piece was individually defensible; the pair was not. Two of the three were
 introduced by the fix for the previous one.
 
@@ -36,6 +36,7 @@ from neo4j._codec.hydration.v2 import HydrationHandler
 from neo4j._codec.packstream.v1 import Packer
 
 from agentic_kg.common.value_types import (
+    ALLOWED_TYPES,
     BARE_NUMERIC,
     BLANK,
     BOOLEAN,
@@ -49,13 +50,14 @@ from agentic_kg.common.value_types import (
     MAJORITY_SHARE,
     NUMERIC_AFTER_CLEANING,
     TEXT,
+    ColumnTally,
     _clean_number,
     classify,
     coerce,
+    coerce_all,
     has_fractional_part,
     is_blank,
 )
-from agentic_kg.tools.file_tools import _suggested_type
 
 _DEHYDRATION_HOOKS = HydrationHandler().dehydration_hooks
 
@@ -229,6 +231,23 @@ def test_a_non_converted_outcome_never_carries_a_value(value, declared_type):
     assert (outcome == BLANK) == is_blank(value)
 
 
+@pytest.mark.parametrize("value", ADVERSARIAL_VALUES)
+def test_coerce_all_gives_exactly_what_coerce_gives_for_every_type(value):
+    """coerce_all reads a value once and runs every converter on that one read,
+    so the hint tools can try all six types without parsing six times. It is a
+    second entry point to the same rules, and a second entry point is exactly
+    where this pipeline has drifted before. Whatever coerce says for a type,
+    coerce_all must say for that type."""
+    together = coerce_all(value)
+    assert list(together) == list(ALLOWED_TYPES)
+    for declared_type in ALLOWED_TYPES:
+        assert together[declared_type] == coerce(value, declared_type), (
+            f"coerce_all({value!r})[{declared_type}] is "
+            f"{together[declared_type]!r}, coerce says "
+            f"{coerce(value, declared_type)!r}"
+        )
+
+
 @pytest.mark.parametrize("column", ADVERSARIAL_COLUMNS)
 def test_a_suggested_type_never_trips_the_loaders_refusal_gate(column):
     """The hint tool and the loader must not contradict each other.
@@ -239,7 +258,7 @@ def test_a_suggested_type_never_trips_the_loaders_refusal_gate(column):
     approved plan that cannot load. Broken once already, by classify not
     counting the accounting parentheses coerce accepts.
     """
-    suggested = _suggested_type(classify(column), column)
+    suggested = ColumnTally.of(column).suggested_type
     if suggested is None:
         return
     non_blank = [value for value in column if not is_blank(value)]
@@ -255,7 +274,7 @@ def test_a_suggested_type_never_trips_the_loaders_refusal_gate(column):
 
 @pytest.mark.parametrize("value", ADVERSARIAL_VALUES)
 def test_has_fractional_part_agrees_with_coerce_about_what_a_fraction_is(value):
-    """The two must not drift, because _suggested_type uses one to explain the
+    """The two must not drift, because the type suggestion uses one to explain the
     other's refusals. A fractional value can never be a valid integer, and a
     value that converts as an integer can never be fractional."""
     integer_outcome = coerce(value, INTEGER)[1]
@@ -270,7 +289,7 @@ def test_has_fractional_part_agrees_with_coerce_about_what_a_fraction_is(value):
 @pytest.mark.parametrize("value", ADVERSARIAL_VALUES)
 def test_anything_an_integer_accepts_a_float_accepts_too(value):
     """FLOAT is the wider type; a value storable as an integer must be storable
-    as a float. If this ever fails, _suggested_type's fallback from integer to
+    as a float. If this ever fails, the suggestion's fallback from integer to
     float would silently drop values rather than widening the column."""
     if coerce(value, INTEGER)[1] == CONVERTED:
         assert coerce(value, FLOAT)[1] == CONVERTED, (
@@ -340,7 +359,7 @@ def test_a_column_of_whole_bare_numbers_is_never_suggested_float(column):
         return
     if any(has_fractional_part(value) for value in column):
         return
-    assert _suggested_type(BARE_NUMERIC, column) != FLOAT, (
+    assert ColumnTally.of(column).suggested_type != FLOAT, (
         f"column {column!r} holds no fractional value yet was suggested float, "
         f"which cannot store every one of its values exactly"
     )

@@ -241,9 +241,9 @@ def test_a_source_error_keeps_its_own_message(survey_source, monkeypatch):
     this message with the read-failure wording."""
     _fail_existence(monkeypatch, SourceError)
 
-    values, error = file_tools.collect_column_values("plots.csv", "plot_id")
+    tallies, _missing, error = file_tools._hint_tallies("plots.csv", ["plot_id"])
 
-    assert values is None
+    assert tallies is None
     assert error is not None
     # Exactly str(exc): no "Error reading CSV file" wrapper around it.
     assert error["error_message"] == FAILURE_TEXT
