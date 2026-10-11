@@ -1161,11 +1161,12 @@ def test_the_hint_counts_are_what_the_converter_does_to_the_column(
             failed[:3],
         )
 
-    assert (
+    reported = (
         hint["convertible_count"],
         hint["unconvertible_count"],
         hint["example_unconvertible"],
-    ) == expected
+    )
+    assert reported == expected
 
 
 def test_a_typing_rule_changed_in_value_types_alone_changes_the_hint(
