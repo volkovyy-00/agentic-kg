@@ -74,7 +74,8 @@ def _numeric_like_state(values) -> str:
     '(42.00)' text while the loader converted them.
 
     It judges only the values it is handed. The library lists at most ten distinct values, each cut to 50
-    characters (neo4j_graphrag/schema.py), so on a "partial" property the verdict covers those ten.
+    characters (neo4j_graphrag/schema.py), so on a "partial" property the verdict covers those ten, and
+    prompt rule 6 has the agent run NUMERIC_CAST_GAP_CHECK for the rest.
 
     Blanks are ignored, after the text-only guard: an untyped property stores a blank cell as "", and one of
     them must not cost a money column its verdict. A column of nothing but blanks has no number in it and

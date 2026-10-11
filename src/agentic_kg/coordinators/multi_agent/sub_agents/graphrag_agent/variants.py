@@ -12,6 +12,8 @@ from google.adk.tools import ToolContext
 
 from agentic_kg.common.agent_names import MULTI_AGENT_COORDINATOR
 from agentic_kg.common.graph_profile import (
+    NUMERIC_CAST,
+    NUMERIC_CAST_GAP_CHECK,
     numeric_partitioned_properties,
     peek_cached_profile,
 )
@@ -236,10 +238,27 @@ variants = {
            entities to it as if it were one. Where 'uniqueness' is 'unknown',
            say so rather than proceeding as if it were unique.
         6. Before ordering, comparing or aggregating a STRING property
-           numerically, check the profile's 'numeric_like': 'yes' means a plain
-           cast works, 'numeric_after_cleaning' means the values carry a currency
-           symbol or thousands separator and a plain cast returns null -- strip
-           those characters first -- 'no' means do not cast, and 'unknown' is
+           numerically, check the profile's 'numeric_like'. 'yes' (bare
+           numerals) and 'numeric_after_cleaning' (values carrying a currency
+           symbol, a thousands separator or accounting brackets) both mean
+           every non-blank value the profile lists converts to a number. Cast
+           with exactly this expression, putting the property in place of v:
+           """
+        + NUMERIC_CAST
+        + """
+           It reads brackets as a minus sign, takes a sign on either side of a
+           currency symbol, removes separators and spaces, and turns a blank
+           into null, which sum(), avg() and count() skip. Never cast such a
+           property with a bare toFloat: for '$42.73', '(42.00)' or '1,234' it
+           returns null without an error, and the value drops out of the
+           result. When the property's 'completeness' is 'partial', the profile
+           listed only some of its values, so before relying on the cast, bind
+           the property to v (WITH x.property AS v) and run:
+           """
+        + NUMERIC_CAST_GAP_CHECK
+        + """
+           If 'uncast' is above 0, say how many values the cast leaves out and
+           show the examples. 'no' means do not cast, and 'unknown' is
            something to disclose, never a 'yes'. Without a cast '9' sorts after
            '30'. INTEGER and FLOAT properties need no cast; 'numeric_like' does
            not apply to them. DATE, DATE_TIME and LOCAL_DATE_TIME properties need

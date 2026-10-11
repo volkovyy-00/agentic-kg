@@ -5,9 +5,12 @@ The agent learns how to filter a typed date only from its prompt, and the traps
 invisible in a result set, so the text is pinned.
 """
 
+from agentic_kg.common.graph_profile import NUMERIC_CAST, NUMERIC_CAST_GAP_CHECK
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
     variants,
 )
+
+_TRIM_MISSES = "\x85\xa0\u2007\u202f"
 
 
 def _instruction() -> str:
@@ -38,3 +41,40 @@ def test_rule_6_says_zoned_and_local_values_cannot_be_compared():
         "A DATE_TIME value and a LOCAL_DATE_TIME value cannot be compared with each other"
         in text
     )
+
+
+def _raw_instruction() -> str:
+    """Not normalised: str.split() splits on the very characters these tests look for."""
+    return variants["graphrag_agent_v2"]["instruction"]
+
+
+def test_the_instruction_carries_no_brace_for_adk_to_substitute():
+    raw = _raw_instruction()
+    assert "{" not in raw
+    assert "}" not in raw
+
+
+def test_the_instruction_writes_whitespace_as_escapes_never_raw():
+    raw = _raw_instruction()
+    assert "\\u00A0" in raw
+    for char in _TRIM_MISSES:
+        assert char not in raw
+
+
+def test_rule_6_quotes_the_generated_cast_and_gap_check_verbatim():
+    raw = _raw_instruction()
+    assert NUMERIC_CAST in raw
+    assert NUMERIC_CAST_GAP_CHECK in raw
+
+
+def test_rule_6_says_what_the_cast_does_and_when_to_check_it():
+    text = _instruction()
+    for phrase in (
+        "every non-blank value the profile lists converts to a number",
+        "reads brackets as a minus sign",
+        "turns a blank into null",
+        "Never cast such a property with a bare toFloat",
+        "the profile listed only some of its values",
+    ):
+        assert phrase in text, phrase
+    assert "a plain cast works" not in text
