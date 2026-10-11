@@ -1,10 +1,10 @@
 """Decide what a CSV string means, and convert it.
 
 Shared by the schema-proposal evidence tools (tools/file_tools.column_type_hint
-and column_type_hints) and by both loaders (tools/kg_construction_tools). Using
-one converter on both paths is deliberate: what the model is told a column
-supports and what the loader actually does to that column cannot then drift
-apart.
+and column_type_hints), by both loaders (tools/kg_construction_tools), and by the graph
+profile (common/graph_profile). Using one converter on both paths is deliberate: what the
+model is told a column supports and what the loader actually does to that column cannot
+then drift apart.
 
 Every typing rule lives here: what counts as blank, each type's conversion, the
 majority share, the fraction rule, and the mapping from shape to suggested type.
@@ -18,12 +18,8 @@ value.
 No ToolContext, no database, no I/O -- strings in, answers out. Same shape and
 the same reason as common/cypher_identifiers.py.
 
-The numeric character classes below deliberately duplicate
-common/graph_profile.py's _BARE_NUMERIC / _NUMERIC_LIKE rather than importing
-them. The profile is retrieval-side and out of scope for this change, and the
-ticket's dependency reasoning -- that a genuinely typed property takes the
-profile's type branch and never reaches its regex path -- holds only while that
-file stays untouched.
+The graph profile is a caller like the others: it decides whether a text property is numeric with
+coerce and is_bare_numeric, and restates no rule.
 
 The temporal types build neo4j.time objects, never datetime.datetime and never
 through fromisoformat. A Python datetime stops at microseconds, so nine

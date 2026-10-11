@@ -8,10 +8,20 @@ over only its own half would fit the design to the bugs instead of the class.
 """
 
 import pytest
+from test_value_types_invariants import ADVERSARIAL_COLUMNS, ADVERSARIAL_VALUES
 
+from agentic_kg.common import value_types
 from agentic_kg.common.graph_profile import (
     VALUE_COUNT_MAX_DISTINCT,
+    _partitions,
     annotate_property,
+)
+from agentic_kg.common.value_types import (
+    CONVERTED,
+    FLOAT,
+    UNCONVERTIBLE,
+    coerce,
+    is_blank,
 )
 
 # NOTE ON KIND SYMMETRY.
@@ -121,11 +131,11 @@ def test_non_numeric_string_is_not_flagged():
     ],
 )
 def test_numeric_like_separates_castable_text_from_text_needing_cleaning(values):
-    """Would catch: one "yes" covering both bare numerals and currency.
+    """Would catch: one "yes" covering both bare numerals and values carrying a symbol or separator.
 
-    Prompt rule 6 reads "yes" as "a plain cast works". It does not here:
-    toFloat('$42.73') and toFloat('1,234') both return null in Neo4j, and an
-    aggregation over nulls reports a confident wrong number rather than failing.
+    The two states mean different things: "yes" is bare numerals, "numeric_after_cleaning" values that
+    carry a currency symbol, thousands separator or brackets. Prompt rule 6 casts both with NUMERIC_CAST,
+    but the split tells the agent which kind of column it is looking at.
     """
     prop = {
         "property": "unit_cost",
@@ -833,3 +843,129 @@ def test_numeric_partitioned_properties_is_none_safe():
     from agentic_kg.common.graph_profile import numeric_partitioned_properties
 
     assert numeric_partitioned_properties(None) == []
+
+
+def _numeric_like(values):
+    prop = {
+        "property": "amount",
+        "type": "STRING",
+        "values": values,
+        "distinct_count": len(values),
+    }
+    return annotate_property(prop, entity_count=1000)["numeric_like"]
+
+
+def _converter_calls_it_numeric(values):
+    """SC1's oracle, stated over the values the profile is handed."""
+    if not values or not all(isinstance(v, str) for v in values):
+        return False
+    present = [v for v in values if not is_blank(v)]
+    return bool(present) and all(coerce(v, FLOAT)[1] == CONVERTED for v in present)
+
+
+_SC1_COLUMNS = [*ADVERSARIAL_COLUMNS, *([value] for value in ADVERSARIAL_VALUES)]
+_SC1_COLUMNS += [[*column, ""] for column in list(_SC1_COLUMNS)]
+
+
+@pytest.mark.parametrize("values", _SC1_COLUMNS)
+def test_the_profile_calls_a_column_numeric_exactly_when_the_converter_converts_it(
+    values,
+):
+    assert (_numeric_like(values) != "no") == _converter_calls_it_numeric(values)
+
+
+def test_a_converter_that_refuses_a_number_turns_the_profile_to_no(monkeypatch):
+    """A numeric rule changed only in the converter changes the profile."""
+    assert _numeric_like(["42"]) == "yes"
+    monkeypatch.setattr(value_types, "_to_float", lambda cleaned: (None, UNCONVERTIBLE))
+    assert _numeric_like(["42"]) == "no"
+
+
+def test_a_converter_that_accepts_a_word_turns_the_profile_numeric(monkeypatch):
+    assert _numeric_like(["abc"]) == "no"
+    monkeypatch.setattr(value_types, "_clean_number", lambda text: "1")
+    assert _numeric_like(["abc"]) == "numeric_after_cleaning"
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        (["-$42.00", "(42.00)"], "numeric_after_cleaning"),
+        (["$-1.50", "€5", "$+5", "1,234", "- 42"], "numeric_after_cleaning"),
+        (["8", "", "12"], "yes"),
+        (["+5", "  7  "], "yes"),
+        (["\xa042"], "yes"),
+    ],
+)
+def test_the_profile_reads_what_the_loader_converts(values, expected):
+    assert _numeric_like(values) == expected
+
+
+def test_a_numeral_the_converter_cannot_hold_reads_no():
+    """coerce refuses a 400-digit numeral (it overflows a double). The library cuts every listed value
+    to 50 characters, so this cannot arise from real profile input; it pins the rule, not a scenario."""
+    assert _numeric_like(["1" + "0" * 400]) == "no"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["a1", "Q3", "#5"],
+        ["", "  "],
+        [1, 2],
+        ["1", 2],
+    ],
+)
+def test_identifiers_blanks_and_non_text_read_no(values):
+    assert _numeric_like(values) == "no"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["1.234,50", "42,00"],
+        ["42 €", "7 €"],
+        ["42$"],
+        ["12%", "7%"],
+        ["1e5", "2e3"],
+        ["₹1,23,456", "₹5"],
+    ],
+)
+def test_formats_the_loader_refuses_read_no(values):
+    """Review Focus 1 and 2. The loader refuses each of these, so the agent must not be told to cast
+    them -- even 1e5, which Neo4j's toFloat would accept."""
+    assert _numeric_like(values) == "no"
+
+
+def test_a_partial_property_is_judged_on_the_values_it_lists():
+    prop = {
+        "property": "unit_cost",
+        "type": "STRING",
+        "values": ["$1.00", "$2.50"],
+        "distinct_count": 5000,
+    }
+    out = annotate_property(prop, entity_count=10000)
+    assert out["completeness"] == "partial"
+    assert out["numeric_like"] == "numeric_after_cleaning"
+
+
+def test_a_signed_currency_partition_property_now_reads_as_numbers():
+    """numeric_like feeds partitioned_by's values_are. A relationship property holding signed or
+    bracketed amounts used to read "no", so its partition entry said "categories". It now says
+    "numbers", so read_neo4j_cypher asks for a partition declaration before any aggregating query,
+    the gap check included. Intended: those values are quantities, and 'none' clears the gate."""
+    prop = annotate_property(
+        {
+            "property": "fee",
+            "type": "STRING",
+            "values": ["-$1.00", "(2.00)"],
+            "distinct_count": 2,
+        },
+        entity_count=10,
+    )
+    prop["value_counts"] = [
+        {"value": "-$1.00", "count": 6},
+        {"value": "(2.00)", "count": 4},
+    ]
+    (entry,) = _partitions([prop], patterns_of_type=1)
+    assert entry["values_are"] == "numbers"

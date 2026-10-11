@@ -23,12 +23,12 @@ against schema.py will find that branch and wonder why it is unhandled.
 """
 
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 from .cypher_identifiers import quote
 from .neo4j_for_adk import get_graphdb
 from .tool_result import is_success
+from .value_types import CONVERTED, FLOAT, coerce, is_bare_numeric, is_blank
 
 logger = logging.getLogger(__name__)
 
@@ -56,39 +56,34 @@ MAX_PROFILED_PATTERNS = 25
 
 _NUMERIC_TYPES = {"INTEGER", "FLOAT"}
 
-# Spots values that *look* numeric while being stored as text -- which is where
-# silent lexicographic ordering comes from ('9' sorts after '30').
-#
-# Two patterns, not one, because the two answer different questions. Text that
-# is a bare numeral casts directly: toFloat('42.73') is 42.73. Text carrying a
-# currency symbol or thousands separator does NOT -- toFloat('$42.73') and
-# toFloat('1,234') both return null, silently, and an aggregation over nulls
-# reports a confident wrong number. Collapsing both into one "yes" told the
-# agent (prompt rule 6) that a plain cast was safe when it was not.
-#
-# The currency class is still explicit rather than "any non-digit". A wildcard
-# prefix matches ordinary identifier shapes -- 'a1', 'x9', 'Q3', '#5' all pass
-# -- and flagging an identifier column as numeric would tell the agent to cast
-# a key to a number.
-_BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
-_NUMERIC_LIKE = re.compile(
-    r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$"
-)
-
 
 def _numeric_like_state(values) -> str:
-    """Classify string values as directly castable, castable after cleaning, or not.
+    """Say whether the listed string values are numbers, by the loader's own rule.
 
-    Returns one of "yes" / "numeric_after_cleaning" / "no". Callers decide what
-    an absent or untrustworthy `values` means -- this only reads what it is given.
+    Returns "yes" (every non-blank value is a bare numeral), "numeric_after_cleaning" (every one converts,
+    and some carry a currency symbol, a thousands separator or accounting brackets) or "no". What converts
+    is coerce(v, FLOAT)'s answer and what is bare is is_bare_numeric's, so what the profile tells the agent
+    cannot drift from what the loader does; an earlier copy of the patterns here called '-$42.00' and
+    '(42.00)' text while the loader converted them.
+
+    It judges only the values it is handed. The library lists at most ten distinct values, each cut to 50
+    characters (neo4j_graphrag/schema.py), so on a "partial" property the verdict covers those ten.
+
+    Blanks are ignored, after the text-only guard: an untyped property stores a blank cell as "", and one of
+    them must not cost a money column its verdict. A column of nothing but blanks has no number in it and
+    reads "no". Every non-blank value must convert, not a majority: rule 6 tells the agent to cast, and a
+    cast over a value the converter refuses can give a wrong number rather than null.
     """
     if not values or not all(isinstance(v, str) for v in values):
         return "no"
-    if all(_BARE_NUMERIC.match(v) for v in values):
+    present = [v for v in values if not is_blank(v)]
+    if not present:
+        return "no"
+    if not all(coerce(v, FLOAT)[1] == CONVERTED for v in present):
+        return "no"
+    if all(is_bare_numeric(v) for v in present):
         return "yes"
-    if all(_NUMERIC_LIKE.match(v) for v in values):
-        return "numeric_after_cleaning"
-    return "no"
+    return "numeric_after_cleaning"
 
 
 def annotate_property(
