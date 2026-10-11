@@ -28,7 +28,14 @@ from typing import Any, Dict, List, Optional
 from .cypher_identifiers import quote
 from .neo4j_for_adk import get_graphdb
 from .tool_result import is_success
-from .value_types import CONVERTED, FLOAT, coerce, is_bare_numeric, is_blank
+from .value_types import (
+    CONVERTED,
+    FLOAT,
+    STRIP_FROM_NUMBERS,
+    coerce,
+    is_bare_numeric,
+    is_blank,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +91,72 @@ def _numeric_like_state(values) -> str:
     if all(is_bare_numeric(v) for v in present):
         return "yes"
     return "numeric_after_cleaning"
+
+
+# Python whitespace that Neo4j's trim() leaves in place. coerce strips all 29 characters str.isspace()
+# accepts; trim() removes 25 of them. Measured on Neo4j 5.26 and on Aura 5.27, and pinned by
+# tests/integration/test_numeric_cast_integration.py, so a Neo4j upgrade that changes trim() fails that
+# test rather than a sum.
+_NEO4J_TRIM_MISSES = "\x85\xa0\u2007\u202f"
+
+
+def _cypher_char(char: str) -> str:
+    """One character as a single-quoted Cypher string literal that is safe to print in a prompt.
+
+    A visible character, and the ASCII space, is written as itself. Any other whitespace is written as
+    the six-character escape \\uXXXX, which Cypher decodes: a raw no-break space in a prompt is invisible
+    to a reader and can be normalised away on the way to the model.
+    """
+    if char in "'\\":
+        raise ValueError(f"{char!r} cannot be quoted into the cast's character list")
+    if char == " " or (char.isprintable() and not char.isspace()):
+        return f"'{char}'"
+    return f"'\\u{ord(char):04X}'"
+
+
+def _numeric_cast() -> str:
+    symbols = [c for c in STRIP_FROM_NUMBERS if c != "("] + list(_NEO4J_TRIM_MISSES)
+    listed = ", ".join(_cypher_char(c) for c in symbols)
+    return (
+        "toFloat(trim(reduce(text = replace(v, '(', '-'), "
+        f"symbol IN [{listed}] | replace(text, symbol, ''))))"
+    )
+
+
+NUMERIC_CAST = _numeric_cast()
+"""The Cypher expression prompt rule 6 gives the agent to read a text property as a number.
+
+Written over a variable named v; the agent puts the property in its place. Built from value_types'
+STRIP_FROM_NUMBERS, so a symbol the converter learns reaches the prompt with no other edit.
+
+The contract: for every value coerce(v, FLOAT) converts, this gives coerce's number, and for a blank it
+gives null, which sum(), avg() and count() skip. Nothing is promised for a value coerce refuses:
+'-\\u00a042' becomes -42 and '1,23' becomes 123 here. That is harmless on a property whose listed values
+all convert, which is the only kind rule 6 sends the agent to cast.
+
+- '(' becomes '-'. On such a property a bracket can only be an accounting negative.
+- trim() runs after the characters are stripped, not before: in '$\\u1680-42' the symbol hides the
+  padding from trim() until it is gone. Trimming first got 675 of 3,533 converted values wrong.
+- The last four characters in the list are _NEO4J_TRIM_MISSES. A bare toFloat's whitespace handling
+  differs between Neo4j versions (5.26 nulls '\\u200342', Aura 5.27 reads 42), which is why the agent never
+  relies on it.
+
+Known exceptions, also in docs/spec.md: a value the profile did not list (a "partial" property) can be one
+coerce refuses, and NUMERIC_CAST_GAP_CHECK finds it only if it casts to null; non-ASCII decimal digits
+convert in Python and cast to null here; a value longer than 50 characters was judged on its first 50.
+"""
+
+NUMERIC_CAST_GAP_CHECK = (
+    f"WHERE trim(v) <> '' AND {NUMERIC_CAST} IS NULL "
+    "RETURN count(*) AS uncast, collect(v)[..5] AS examples"
+)
+"""The check rule 6 has the agent run on a "partial" property before relying on NUMERIC_CAST.
+
+Follows the agent's own MATCH ... WITH x.property AS v. Counts the values that are not blank but cast
+to null, and returns up to five. A value that is only a no-break space is counted, because trim() leaves
+it; that false positive is harmless, since the agent looks and reports it. A value that casts to a wrong
+number ('1,23') is not found; see NUMERIC_CAST.
+"""
 
 
 def annotate_property(

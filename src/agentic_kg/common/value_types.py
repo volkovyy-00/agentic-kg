@@ -19,7 +19,9 @@ No ToolContext, no database, no I/O -- strings in, answers out. Same shape and
 the same reason as common/cypher_identifiers.py.
 
 The graph profile is a caller like the others: it decides whether a text property is numeric with
-coerce and is_bare_numeric, and restates no rule.
+coerce and is_bare_numeric, and restates no rule. CURRENCY_SYMBOLS and STRIP_FROM_NUMBERS are public
+because the profile builds its Cypher cast, NUMERIC_CAST, from them;
+tests/integration/test_numeric_cast_integration.py pins that cast to coerce.
 
 The temporal types build neo4j.time objects, never datetime.datetime and never
 through fromisoformat. A Python datetime stops at microseconds, so nine
