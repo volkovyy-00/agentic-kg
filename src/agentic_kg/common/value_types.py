@@ -464,3 +464,175 @@ def coerce_all(value: Any) -> Dict[str, Tuple[Optional[Any], str]]:
     if is_blank(value):
         return {declared_type: (None, BLANK) for declared_type in ALLOWED_TYPES}
     return _convert_all(_read(value))
+
+
+EXAMPLE_LIMIT = 3
+"""Unconvertible values kept per type: the hint reports the first three."""
+
+_NUMERIC_BOOLEANS = frozenset({"0", "1"})
+
+
+class ColumnTally:
+    """What a column's values add up to, kept as counts rather than values.
+
+    Fixed per column: counts, three flags and at most EXAMPLE_LIMIT examples per
+    type, however many rows are added. This is what lets the hint tools read a
+    source of any length (KG-11); classify is this tally's shape over a list.
+
+    Every count comes from one _read of each value and the same converters
+    coerce uses, so the shape, the suggestion and the counts the hint reports
+    cannot disagree with what the loader will do.
+    """
+
+    __slots__ = (
+        "blank",
+        "non_blank",
+        "bare_numeric",
+        "numeric_after_cleaning",
+        "word_boolean_seen",
+        "number_outside_vocabulary_seen",
+        "any_fraction",
+        "converted",
+        "unconvertible",
+        "examples",
+    )
+
+    def __init__(self) -> None:
+        self.blank = 0
+        self.non_blank = 0
+        self.bare_numeric = 0
+        self.numeric_after_cleaning = 0
+        self.word_boolean_seen = False
+        self.number_outside_vocabulary_seen = False
+        self.any_fraction = False
+        self.converted: Dict[str, int] = dict.fromkeys(ALLOWED_TYPES, 0)
+        self.unconvertible: Dict[str, int] = dict.fromkeys(ALLOWED_TYPES, 0)
+        self.examples: Dict[str, list] = {t: [] for t in ALLOWED_TYPES}
+
+    @classmethod
+    def of(cls, values: Iterable[Any]) -> "ColumnTally":
+        tally = cls()
+        for value in values:
+            tally.add(value)
+        return tally
+
+    def add(self, value: Any) -> None:
+        """Count one value. None and whitespace are blank, as everywhere here."""
+        if is_blank(value):
+            self.blank += 1
+            return
+        self.non_blank += 1
+        reading = _read(value)
+        self._count_shapes(reading)
+        self._count_conversions(reading)
+
+    def _count_shapes(self, reading: _Reading) -> None:
+        """The shape counts and flags the converters cannot give."""
+        # Unstripped, as classify always matched it; the pattern allows the
+        # surrounding whitespace itself.
+        bare = _BARE_NUMERIC.match(str(reading.raw)) is not None
+        in_vocabulary = reading.lowered in _BOOLEAN_VALUES
+        if bare:
+            self.bare_numeric += 1
+            if not in_vocabulary:
+                self.number_outside_vocabulary_seen = True
+        if in_vocabulary and reading.lowered not in _NUMERIC_BOOLEANS:
+            self.word_boolean_seen = True
+        if reading.cleaned is not None:
+            self.numeric_after_cleaning += 1
+            if _has_fraction(reading.cleaned):
+                self.any_fraction = True
+
+    def _count_conversions(self, reading: _Reading) -> None:
+        """Each type's outcome, and its first EXAMPLE_LIMIT failures as given."""
+        for declared_type, (_value, outcome) in _convert_all(reading).items():
+            if outcome == CONVERTED:
+                self.converted[declared_type] += 1
+                continue
+            self.unconvertible[declared_type] += 1
+            examples = self.examples[declared_type]
+            if len(examples) < EXAMPLE_LIMIT:
+                examples.append(reading.raw)
+
+    def _majority(self, count: int) -> bool:
+        return count > self.non_blank * MAJORITY_SHARE
+
+    @property
+    def shape(self) -> str:
+        """The most specific shape a strict majority of non-blank values fit.
+
+        The rules and their order are classify's; see its docstring for why
+        boolean is checked first. The boolean and temporal counts are the
+        converters' own converted counts -- the same test, not a second one.
+        """
+        if not self.non_blank:
+            return TEXT
+        if self._majority(self.converted[BOOLEAN]) and not self._is_really_a_count():
+            return BOOLEAN_LIKE
+        if self._majority(self.bare_numeric):
+            return BARE_NUMERIC
+        if self._majority(self.numeric_after_cleaning):
+            return NUMERIC_AFTER_CLEANING
+        # A kind has to be a strict majority ALONE: a 45% zoned / 45% local
+        # column gets no suggestion, because either type would clear the other
+        # half.
+        for shape, kind in TEMPORAL_SHAPE_TYPES.items():
+            if self._majority(self.converted[kind]):
+                return shape
+        return TEXT
+
+    def _is_really_a_count(self) -> bool:
+        """True for a column that only LOOKS boolean because most of its values are
+        0 or 1.
+
+        A quantity that is overwhelmingly 0 or 1 -- a backorder quantity, a defect
+        count, a discount count -- wins the boolean majority on those rows while
+        carrying real 2s and 3s. Calling it boolean would make every value above 1
+        unconvertible, and the loader clears an unconvertible value: the large
+        numbers, the only ones that change an answer, are exactly the ones that
+        would disappear, and at a minority share the refusal gate never fires.
+
+        Narrow on purpose, so TRAP 5 still holds: this fires only when no value in
+        the column is a word from the vocabulary (yes, true, y ...), so the boolean
+        majority is carried by 0 and 1 alone, and some bare number outside the
+        vocabulary is present. A genuine 0/1 flag has nothing else in the column
+        and stays boolean_like; a yes/no column with a stray "5" stays
+        boolean_like too.
+        """
+        return self.number_outside_vocabulary_seen and not self.word_boolean_seen
+
+    @property
+    def suggested_type(self) -> Optional[str]:
+        """The type to suggest for this column's shape.
+
+        The shape decides, and for a column needing cleaning it decides alone: every
+        price in the bundled products.csv is a round dollar amount, so a
+        whole-number test would suggest integer for a currency column and then
+        refuse the first fractional price the data ever gains. Needing a currency
+        symbol or thousands separator stripped is itself the evidence it is money.
+
+        Wholeness is consulted only to split integer from float WITHIN the
+        bare_numeric shape, where there is nothing else to go on -- and only for
+        values that are numbers at all, so one "N/A" in a column of 400 integers
+        cannot make it look fractional.
+
+        It reads any_fraction (has_fractional_part's rule, _has_fraction) rather
+        than inferring the fraction from a failed integer coercion. coerce refuses
+        a value for two different reasons, and treating them alike types a column
+        float on the strength of a whole number too large for Neo4j's INTEGER --
+        which then loads as a rounded, wrong number and reports a clean
+        conversion. An overflowing value leaves the suggestion at integer, so the
+        loader counts it, reports it as an example, and clears it; one unstorable
+        outlier does not cost the whole column its type, the same tolerance
+        classify() already applies.
+        """
+        shape = self.shape
+        if shape in TEMPORAL_SHAPE_TYPES:
+            return TEMPORAL_SHAPE_TYPES[shape]
+        if shape == BOOLEAN_LIKE:
+            return BOOLEAN
+        if shape == NUMERIC_AFTER_CLEANING:
+            return FLOAT
+        if shape == BARE_NUMERIC:
+            return FLOAT if self.any_fraction else INTEGER
+        return None
