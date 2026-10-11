@@ -7,13 +7,12 @@ that it is generated from the converter's constants and is safe to put in a prom
 import pytest
 
 from agentic_kg.common.graph_profile import (
+    _NEO4J_TRIM_MISSES,
     NUMERIC_CAST,
     NUMERIC_CAST_GAP_CHECK,
     _cypher_char,
 )
 from agentic_kg.common.value_types import STRIP_FROM_NUMBERS
-
-_TRIM_MISSES = "\x85\xa0\u2007\u202f"
 
 
 def test_the_cast_lists_every_stripped_character_but_the_opening_bracket():
@@ -24,7 +23,7 @@ def test_the_cast_lists_every_stripped_character_but_the_opening_bracket():
 
 
 def test_the_cast_writes_whitespace_as_escapes_never_as_raw_characters():
-    for char in _TRIM_MISSES:
+    for char in _NEO4J_TRIM_MISSES:
         assert char not in NUMERIC_CAST
         assert f"'\\u{ord(char):04X}'" in NUMERIC_CAST
 

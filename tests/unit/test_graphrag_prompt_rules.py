@@ -5,12 +5,14 @@ The agent learns how to filter a typed date only from its prompt, and the traps
 invisible in a result set, so the text is pinned.
 """
 
-from agentic_kg.common.graph_profile import NUMERIC_CAST, NUMERIC_CAST_GAP_CHECK
+from agentic_kg.common.graph_profile import (
+    _NEO4J_TRIM_MISSES,
+    NUMERIC_CAST,
+    NUMERIC_CAST_GAP_CHECK,
+)
 from agentic_kg.coordinators.multi_agent.sub_agents.graphrag_agent.variants import (
     variants,
 )
-
-_TRIM_MISSES = "\x85\xa0\u2007\u202f"
 
 
 def _instruction() -> str:
@@ -57,7 +59,7 @@ def test_the_instruction_carries_no_brace_for_adk_to_substitute():
 def test_the_instruction_writes_whitespace_as_escapes_never_raw():
     raw = _raw_instruction()
     assert "\\u00A0" in raw
-    for char in _TRIM_MISSES:
+    for char in _NEO4J_TRIM_MISSES:
         assert char not in raw
 
 

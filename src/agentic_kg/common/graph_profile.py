@@ -110,7 +110,7 @@ def _cypher_char(char: str) -> str:
     """
     if char in "'\\":
         raise ValueError(f"{char!r} cannot be quoted into the cast's character list")
-    if char == " " or (char.isprintable() and not char.isspace()):
+    if char.isprintable():
         return f"'{char}'"
     return f"'\\u{ord(char):04X}'"
 

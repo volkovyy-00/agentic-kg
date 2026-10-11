@@ -88,13 +88,13 @@ _NUMERIC_LIKE = re.compile(
 
 # Accounting notation for a negative: (42.00), ($42.00). Handled separately
 # because the minus sign is implied by the brackets rather than written, so it
-# survives neither the pattern above nor _STRIP_FROM_NUMBERS.
+# survives neither the pattern above nor _STRIP_TABLE.
 _PARENTHESISED_NEGATIVE = re.compile(rf"^\s*\(\s*{_CURRENCY}?\s*{_DIGITS}\s*\)\s*$")
 
 # Applied only after a numeric pattern has matched, so this cannot turn "1,2,3"
 # into 123 -- that string never reaches here.
 STRIP_FROM_NUMBERS = CURRENCY_SYMBOLS + ",() "
-_STRIP_FROM_NUMBERS = str.maketrans("", "", STRIP_FROM_NUMBERS)
+_STRIP_TABLE = str.maketrans("", "", STRIP_FROM_NUMBERS)
 
 _TRUE_VALUES = frozenset({"yes", "true", "y", "1"})
 _FALSE_VALUES = frozenset({"no", "false", "n", "0"})
@@ -188,7 +188,7 @@ def _clean_number(text: str) -> Optional[str]:
     negated_by_brackets = bool(_PARENTHESISED_NEGATIVE.match(text))
     if not (negated_by_brackets or _NUMERIC_LIKE.match(text)):
         return None
-    cleaned = text.translate(_STRIP_FROM_NUMBERS)
+    cleaned = text.translate(_STRIP_TABLE)
     return f"-{cleaned}" if negated_by_brackets else cleaned
 
 

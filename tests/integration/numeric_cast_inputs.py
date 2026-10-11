@@ -9,9 +9,6 @@ from pathlib import Path
 
 from agentic_kg.common.value_types import CURRENCY_SYMBOLS
 
-# Every character str.strip() removes -- the whitespace coerce tolerates around a value.
-PYTHON_WHITESPACE = tuple(chr(c) for c in range(0x110000) if chr(c).isspace())
-
 _SIGNS = ("", "-", "+")
 _SHAPES = ("42", "1,234.50", "0.5")
 # Each place a value can carry whitespace: both ends, between sign and symbol, between symbol and digits,
@@ -44,7 +41,9 @@ def generated_values() -> list:
     symbol (and none), each sign and three number shapes. ASCII digits only: non-ASCII digits are a known
     gap with their own test."""
     values = set(_adversarial_values())
-    for w in PYTHON_WHITESPACE:
+    # Every character str.strip() removes -- the whitespace coerce tolerates around a value.
+    python_whitespace = [chr(c) for c in range(0x110000) if chr(c).isspace()]
+    for w in python_whitespace:
         for c in ("", *CURRENCY_SYMBOLS):
             for s in _SIGNS:
                 for d in _SHAPES:
