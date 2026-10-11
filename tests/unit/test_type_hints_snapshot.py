@@ -18,7 +18,6 @@ oracle tests in test_file_tools.py (the hint's counts equal a plain coerce loop)
 the classify tests in test_value_types.py, and the invariant tests.
 """
 
-import csv
 import json
 import os
 import sys
@@ -102,8 +101,9 @@ def test_every_bom_column_keeps_its_hint_at_any_batch_size(
 
 
 def _list_entries():
-    # Read at collection time. Missing only while Step 4 of Task 1 generates it;
-    # test_the_snapshot_holds_value_lists then fails loudly if it stays missing.
+    # Read at collection time, which also runs when this file is executed to
+    # regenerate the snapshot, so a missing snapshot must not stop the import;
+    # test_the_snapshot_holds_value_lists fails loudly if it stays missing.
     return _load()["lists"] if SNAPSHOT.exists() else []
 
 
@@ -125,9 +125,7 @@ def _record():
     reset_settings()
     bom = []
     for path in sorted(BOM.glob("*.csv")):
-        with path.open(encoding="utf-8", newline="") as handle:
-            header = next(csv.reader(handle))
-        for column in header:
+        for column in csv_reader.read_csv_header(path.name):
             hint = file_tools.column_type_hint(path.name, column, FakeToolContext())
             assert hint["status"] == "success", hint
             bom.append(

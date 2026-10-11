@@ -434,7 +434,6 @@ class ColumnTally:
         "number_outside_vocabulary_seen",
         "any_fraction",
         "converted",
-        "unconvertible",
         "examples",
     )
 
@@ -447,7 +446,6 @@ class ColumnTally:
         self.number_outside_vocabulary_seen = False
         self.any_fraction = False
         self.converted: Dict[str, int] = dict.fromkeys(ALLOWED_TYPES, 0)
-        self.unconvertible: Dict[str, int] = dict.fromkeys(ALLOWED_TYPES, 0)
         self.examples: Dict[str, list] = {t: [] for t in ALLOWED_TYPES}
 
     @classmethod
@@ -469,20 +467,22 @@ class ColumnTally:
 
     def _count_shapes(self, reading: _Reading) -> None:
         """The shape counts and flags the converters cannot give."""
-        # Unstripped, as classify always matched it; the pattern allows the
-        # surrounding whitespace itself.
-        bare = _BARE_NUMERIC.match(str(reading.raw)) is not None
         in_vocabulary = reading.lowered in _BOOLEAN_VALUES
-        if bare:
+        if in_vocabulary and reading.lowered not in _NUMERIC_BOOLEANS:
+            self.word_boolean_seen = True
+        if reading.cleaned is None:
+            return
+        self.numeric_after_cleaning += 1
+        if not self.any_fraction and _has_fraction(reading.cleaned):
+            self.any_fraction = True
+        # Only a value that cleans to a number can be bare numeric: the bare
+        # pattern is a subset of the numeric one. Matched unstripped, as
+        # classify always matched it; the pattern allows the surrounding
+        # whitespace itself.
+        if _BARE_NUMERIC.match(str(reading.raw)) is not None:
             self.bare_numeric += 1
             if not in_vocabulary:
                 self.number_outside_vocabulary_seen = True
-        if in_vocabulary and reading.lowered not in _NUMERIC_BOOLEANS:
-            self.word_boolean_seen = True
-        if reading.cleaned is not None:
-            self.numeric_after_cleaning += 1
-            if _has_fraction(reading.cleaned):
-                self.any_fraction = True
 
     def _count_conversions(self, reading: _Reading) -> None:
         """Each type's outcome, and its first EXAMPLE_LIMIT failures as given."""
@@ -490,10 +490,15 @@ class ColumnTally:
             if outcome == CONVERTED:
                 self.converted[declared_type] += 1
                 continue
-            self.unconvertible[declared_type] += 1
             examples = self.examples[declared_type]
             if len(examples) < EXAMPLE_LIMIT:
                 examples.append(reading.raw)
+
+    @property
+    def unconvertible(self) -> Dict[str, int]:
+        """Each type's unconvertible count. A non-blank value either converts or
+        is unconvertible, so this is derived rather than counted a second time."""
+        return {t: self.non_blank - self.converted[t] for t in ALLOWED_TYPES}
 
     def _majority(self, count: int) -> bool:
         return count > self.non_blank * MAJORITY_SHARE

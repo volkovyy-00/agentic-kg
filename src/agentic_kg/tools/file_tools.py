@@ -251,8 +251,11 @@ def _missing_columns_error(
 
     Exact match, as the build compares. The wording follows how many columns
     were asked for, not how many are missing: one asked gets the one-column
-    message, several asked get the 'Column(s)' message.
+    message, several asked get the 'Column(s)' message. A column asked for
+    twice counts, and is named, once, so a repeated typo keeps the one-column
+    wording whichever caller passed it.
     """
+    columns = list(dict.fromkeys(columns))
     missing = [column for column in columns if column not in header]
     if not missing:
         return None
@@ -281,7 +284,7 @@ def check_columns_in_header(file_path: str, columns: List[str]) -> Optional[dict
         return tool_error(f"Error reading CSV file {file_path}: {exc}")
     if not header:
         return tool_error(f"CSV file has no header row: {file_path}")
-    return _missing_columns_error(file_path, list(dict.fromkeys(columns)), header)
+    return _missing_columns_error(file_path, columns, header)
 
 
 def _csv_source_error(file_path: str) -> Optional[dict]:
@@ -679,6 +682,14 @@ def _hint_payload(
     """Format one column_type_hint payload from a tally. No typing rule here:
     shape, suggestion and counts all come from value_types.ColumnTally."""
     suggested = tally.suggested_type
+    # Counts only for the suggested type; a column with no suggestion reports
+    # none, though the tally counted all six.
+    if suggested is None:
+        convertible, unconvertible, examples = 0, 0, []
+    else:
+        convertible = tally.converted[suggested]
+        unconvertible = tally.unconvertible[suggested]
+        examples = list(tally.examples[suggested])
     # A row too short to reach this column is not the same as a row with an
     # empty cell. An absent key is skipped whatever the property's type,
     # leaving an earlier row's value alone; an empty cell is a value the row
@@ -691,11 +702,11 @@ def _hint_payload(
         "column": column,
         "shape": tally.shape,
         "suggested_type": suggested,
-        "convertible_count": tally.converted[suggested] if suggested else 0,
+        "convertible_count": convertible,
         "blank_count": tally.blank,
         "missing_count": missing_count,
-        "unconvertible_count": tally.unconvertible[suggested] if suggested else 0,
-        "example_unconvertible": list(tally.examples[suggested]) if suggested else [],
+        "unconvertible_count": unconvertible,
+        "example_unconvertible": examples,
     }
 
 
