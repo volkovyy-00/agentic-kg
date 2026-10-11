@@ -96,17 +96,17 @@ def _numeric_like_state(values) -> str:
 
 # Python whitespace that Neo4j's trim() leaves in place. coerce strips all 29 characters str.isspace()
 # accepts; trim() removes 25 of them. Measured on Neo4j 5.26 and on Aura 5.27, and pinned by
-# tests/integration/test_numeric_cast_integration.py, so a Neo4j upgrade that changes trim() fails that
-# test rather than a sum.
+# tests/integration/test_numeric_cast_integration.py. That test catches a Neo4j upgrade that changes
+# trim() when the integration suite is run, on the image it runs against; unit tests and CI do not.
 _NEO4J_TRIM_MISSES = "\x85\xa0\u2007\u202f"
 
 
 def _cypher_char(char: str) -> str:
     """One character as a single-quoted Cypher string literal that is safe to print in a prompt.
 
-    A visible character, and the ASCII space, is written as itself. Any other whitespace is written as
-    the six-character escape \\uXXXX, which Cypher decodes: a raw no-break space in a prompt is invisible
-    to a reader and can be normalised away on the way to the model.
+    A visible character, and the ASCII space, is written as itself. Any other character, whitespace or
+    not, is written as the six-character escape \\uXXXX, which Cypher decodes: a raw no-break space in
+    a prompt is invisible to a reader and can be normalised away on the way to the model.
     """
     if char in "'\\":
         raise ValueError(f"{char!r} cannot be quoted into the cast's character list")

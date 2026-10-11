@@ -2,7 +2,7 @@
 
 Shared by the schema-proposal evidence tools (tools/file_tools.column_type_hint
 and column_type_hints), by both loaders (tools/kg_construction_tools), and by the graph
-profile (common/graph_profile). Using one converter on both paths is deliberate: what the
+profile (common/graph_profile). Using one converter for every caller is deliberate: what the
 model is told a column supports and what the loader actually does to that column cannot
 then drift apart.
 
@@ -69,7 +69,8 @@ UNCONVERTIBLE = "unconvertible"
 _BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
 
 # The currency symbols a number may carry. Public because the graph profile builds its Cypher cast
-# from this and STRIP_FROM_NUMBERS, so the database cleans a value exactly as this module does.
+# from this and STRIP_FROM_NUMBERS, so for every value this module converts the database gives
+# this module's number.
 CURRENCY_SYMBOLS = "$€£¥₹"
 
 _CURRENCY = f"[{re.escape(CURRENCY_SYMBOLS)}]"
