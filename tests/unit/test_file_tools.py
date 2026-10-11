@@ -1,8 +1,10 @@
 import fsspec
 import pytest
 
+from agentic_kg.common import value_types
 from agentic_kg.common.config import reset_settings
-from agentic_kg.common.value_types import ColumnTally
+from agentic_kg.common.csv_reader import read_csv_batches
+from agentic_kg.common.value_types import CONVERTED, UNCONVERTIBLE, ColumnTally, coerce
 from agentic_kg.tools import file_tools
 
 
@@ -563,8 +565,7 @@ def test_the_group_summary_folds_an_absent_key_in_with_a_blank_one(ragged_source
 
 def test_the_column_readers_are_importable_under_their_public_names(memory_source):
     """Catches a rename that touched the definition and not the call sites (or
-    the reverse) -- reference_reachability imports the summarisers by name, and
-    column_type_hint still imports the per-row collector."""
+    the reverse) -- reference_reachability imports the summarisers by name."""
     summary, error = file_tools.summarize_column("people.csv", "name")
     assert error is None
     assert summary is not None
@@ -575,10 +576,6 @@ def test_the_column_readers_are_importable_under_their_public_names(memory_sourc
     assert error is None
     assert groups is not None
     assert groups.group_count == 2
-
-    values, error = file_tools.collect_column_values("people.csv", "name")
-    assert error is None
-    assert values == ["Ada", "Grace"]
 
 
 @pytest.fixture
@@ -1080,6 +1077,134 @@ def test_every_bundled_bom_column_keeps_its_hint(
         "column_type_hint"
     ]
     assert (hint["shape"], hint["suggested_type"]) == (shape, suggested)
+
+
+def test_a_column_named_twice_gets_two_identical_entries_counted_once(bom_source):
+    """Counting the column once per mention reported 20 convertible prices on a
+    10-row file. One answer per requested name, in order; one count per column."""
+    single = file_tools.column_type_hint("products.csv", "price", FakeToolContext())[
+        "column_type_hint"
+    ]
+    hints = file_tools.column_type_hints(
+        "products.csv", ["price", "price"], FakeToolContext()
+    )["column_type_hints"]
+
+    assert single["convertible_count"] == 10
+    assert hints == [single, single]
+    assert hints[0]["example_unconvertible"] is not hints[1]["example_unconvertible"]
+
+
+def test_every_missing_column_is_named_in_one_error(bom_source):
+    """Naming only the first missing column cost the model one retry per typo."""
+    result = file_tools.column_type_hints(
+        "part_supplier_mapping.csv",
+        ["lead_time_days", "leed_time", "unit_cots"],
+        FakeToolContext(),
+    )
+
+    assert result["status"] == "error"
+    message = result["error_message"]
+    assert message.startswith("Column(s) ")
+    assert "leed_time" in message
+    assert "unit_cots" in message
+
+
+def test_a_misspelled_column_named_twice_keeps_the_one_column_wording(bom_source):
+    result = file_tools.column_type_hints(
+        "products.csv", ["prcie", "prcie"], FakeToolContext()
+    )
+
+    assert result["status"] == "error"
+    assert result["error_message"].startswith("Column 'prcie' is not in products.csv")
+
+
+def test_a_text_column_reports_no_counts_for_a_type_nobody_suggested(bom_source):
+    """The tally counts all six types for every column. A text column has no
+    suggestion, so its hint must not report failures for some type anyway."""
+    hint = file_tools.column_type_hint("suppliers.csv", "name", FakeToolContext())[
+        "column_type_hint"
+    ]
+
+    assert hint["suggested_type"] is None
+    assert hint["convertible_count"] == 0
+    assert hint["unconvertible_count"] == 0
+    assert hint["example_unconvertible"] == []
+
+
+@pytest.mark.parametrize(
+    "file_name, column", [(file_name, column) for file_name, column, *_ in BOM_HINTS]
+)
+def test_the_hint_counts_are_what_the_converter_does_to_the_column(
+    bom_source, file_name, column
+):
+    """The lasting test that a typing rule lives in one place: whatever the rules
+    in value_types become, the hint's counts equal a plain coerce loop over the
+    column. The snapshot test pins only this refactor."""
+    hint = file_tools.column_type_hint(file_name, column, FakeToolContext())[
+        "column_type_hint"
+    ]
+    values = [
+        row[column]
+        for _header, batch in read_csv_batches(file_name)
+        for row in batch
+        if column in row
+    ]
+    declared = hint["suggested_type"]
+    if declared is None:
+        expected = (0, 0, [])
+    else:
+        outcomes = [(value, coerce(value, declared)[1]) for value in values]
+        failed = [value for value, outcome in outcomes if outcome == UNCONVERTIBLE]
+        expected = (
+            sum(1 for _value, outcome in outcomes if outcome == CONVERTED),
+            len(failed),
+            failed[:3],
+        )
+
+    assert (
+        hint["convertible_count"],
+        hint["unconvertible_count"],
+        hint["example_unconvertible"],
+    ) == expected
+
+
+def test_a_typing_rule_changed_in_value_types_alone_changes_the_hint(
+    bom_source, monkeypatch
+):
+    """One edit in value_types must reach the hint, with none in file_tools."""
+    before = file_tools.column_type_hint(
+        "part_supplier_mapping.csv", "preferred_supplier", FakeToolContext()
+    )["column_type_hint"]
+    assert before["suggested_type"] == "boolean"
+
+    monkeypatch.setattr(value_types, "_TRUE_VALUES", frozenset({"true"}))
+    monkeypatch.setattr(value_types, "_FALSE_VALUES", frozenset({"false"}))
+    monkeypatch.setattr(value_types, "_BOOLEAN_VALUES", frozenset({"true", "false"}))
+    after = file_tools.column_type_hint(
+        "part_supplier_mapping.csv", "preferred_supplier", FakeToolContext()
+    )["column_type_hint"]
+
+    assert after["shape"] == "text"
+    assert after["suggested_type"] is None
+
+
+def test_a_failure_part_way_through_a_hint_read_returns_an_error(
+    memory_source, monkeypatch
+):
+    """The streaming read raises out of its row iterator. The hint tools own the
+    whole read, as the summarisers do, so that comes back as a tool error."""
+
+    def failing_batches(path, *args, **kwargs):
+        yield ["id", "name"], [{"id": "1", "name": "Ada"}]
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(file_tools, "read_csv_batches", failing_batches)
+    for result in (
+        file_tools.column_type_hint("people.csv", "id", FakeToolContext()),
+        file_tools.column_type_hints("people.csv", ["id", "name"], FakeToolContext()),
+    ):
+        assert result["status"] == "error"
+        assert result["error_message"].startswith("Error reading CSV file people.csv")
 
 
 def test_the_hint_docstring_names_every_temporal_shape_and_type():

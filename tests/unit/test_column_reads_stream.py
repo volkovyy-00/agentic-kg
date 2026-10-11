@@ -1,4 +1,4 @@
-"""Peak-memory shape tests for the four distinct-value column checks.
+"""Peak-memory shape tests for the column checks and the type hints.
 
 These measure a SHAPE, not an absolute: peak Python allocation at 4x the rows,
 with the distinct-value count held constant, must not grow. Measured on
@@ -11,6 +11,11 @@ tracemalloc counts Python allocations deterministically, unlike RSS, so this
 does not flake. The sources are real memory:// files carrying the right header
 -- the readers call source_exists, and the reachability check reads headers
 through read_csv_header -- with only the row stream fabricated.
+
+The two type-hint tests use HINT_SMALL_ROWS instead: the hints try six types on
+every value, so 10,000 rows against 40,000 would add tens of seconds. Measured
+on 2026-10-11 at 2,500 against 10,000: the list-holding hints grew about 3.1x
+(one column) and 3.8x (three), the streaming hints about 1.0x.
 """
 
 import gc
@@ -24,7 +29,6 @@ from agentic_kg.tools import file_tools
 from agentic_kg.tools import reference_reachability as rr
 
 SMALL_ROWS = 10_000
-LARGE_ROWS = 4 * SMALL_ROWS
 MAX_GROWTH = 1.5
 FLAGSHIP_KEYS = 5
 BATCH_ROWS = 100
@@ -106,13 +110,15 @@ def _peak_bytes(work):
         tracemalloc.stop()
 
 
-def _growth(monkeypatch, make_row, work, header=("key", "value")):
+def _growth(
+    monkeypatch, make_row, work, header=("key", "value"), small_rows=SMALL_ROWS
+):
     """Peak at 4N rows divided by peak at N rows."""
     with monkeypatch.context() as patch:
-        _fabricate(patch, make_row, SMALL_ROWS, header)
+        _fabricate(patch, make_row, small_rows, header)
         small = _peak_bytes(work)
     with monkeypatch.context() as patch:
-        _fabricate(patch, make_row, LARGE_ROWS, header)
+        _fabricate(patch, make_row, 4 * small_rows, header)
         large = _peak_bytes(work)
     assert small > 0
     return large / small
@@ -232,5 +238,50 @@ def test_the_reachability_check_does_not_grow_with_rows(streamed_source, monkeyp
         monkeypatch,
         lambda i: {"key": f"k{i % 10}", "value": f"v{i % 10}"},
         work,
+    )
+    assert growth < MAX_GROWTH, f"peak grew {growth:.2f}x with 4x the rows"
+
+
+HINT_SMALL_ROWS = 2_500
+HINT_HEADER = ("a", "b", "c")
+
+
+def _hint_row(index):
+    """Unique per row, and every seventh value unconvertible, so a leaked set of
+    seen values or an unbounded example list shows up as growth."""
+    unconvertible = index % 7 == 0
+    return {
+        "a": f"x{index}" if unconvertible else str(index),
+        "b": f"item {index}",
+        "c": "N/A" if unconvertible else f"{index}.5",
+    }
+
+
+def test_column_type_hint_does_not_grow_with_rows(streamed_source, monkeypatch):
+    growth = _growth(
+        monkeypatch,
+        _hint_row,
+        _succeeds(
+            lambda: file_tools.column_type_hint("big.csv", "a", FakeToolContext())
+        ),
+        header=HINT_HEADER,
+        small_rows=HINT_SMALL_ROWS,
+    )
+    assert growth < MAX_GROWTH, f"peak grew {growth:.2f}x with 4x the rows"
+
+
+def test_column_type_hints_over_three_columns_does_not_grow_with_rows(
+    streamed_source, monkeypatch
+):
+    growth = _growth(
+        monkeypatch,
+        _hint_row,
+        _succeeds(
+            lambda: file_tools.column_type_hints(
+                "big.csv", ["a", "b", "c"], FakeToolContext()
+            )
+        ),
+        header=HINT_HEADER,
+        small_rows=HINT_SMALL_ROWS,
     )
     assert growth < MAX_GROWTH, f"peak grew {growth:.2f}x with 4x the rows"

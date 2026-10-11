@@ -29,6 +29,7 @@ import pytest
 
 from agentic_kg.common import csv_reader
 from agentic_kg.common.config import reset_settings
+from agentic_kg.common.value_types import ColumnTally
 from agentic_kg.tools import file_tools
 
 SNAPSHOT = Path(__file__).parent / "fixtures" / "type_hints_before.json"
@@ -52,8 +53,12 @@ class FakeToolContext:
 
 
 def _list_hint(name, values):
-    """The hint for a list of values, through the code under test."""
-    return file_tools._hint_from_values("list.csv", name, values)
+    """The hint for a list of values, through the code under test: None is a row
+    too short to reach the column, so it is missing, not a tally value."""
+    present = [value for value in values if value is not None]
+    return file_tools._hint_payload(
+        "list.csv", name, ColumnTally.of(present), len(values) - len(present)
+    )
 
 
 def _load():

@@ -130,13 +130,10 @@ def test_the_summarisers_return_the_refusal_as_an_error_value(refused_source):
     _assert_refused(error)
 
 
-def test_the_column_collectors_return_the_refusal_as_an_error_value(refused_source):
-    values, error = file_tools.collect_column_values("readings.csv", "plot_id")
-    assert values is None
-    _assert_refused(error)
-
-    by_column, error = file_tools._collect_columns_values("readings.csv", ["plot_id"])
-    assert by_column is None
+def test_the_hint_reader_returns_the_refusal_as_an_error_value(refused_source):
+    tallies, missing, error = file_tools._hint_tallies("readings.csv", ["plot_id"])
+    assert tallies is None
+    assert missing is None
     _assert_refused(error)
 
 
