@@ -8,6 +8,19 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.12.2] - 2026-10-11
+
+### Fixed
+- **Column type hints read each column once, in fixed memory (#NN, KG-11)**: `column_type_hint` and
+  `column_type_hints` used to keep every value of every requested column before classifying any of it, so a
+  large source file cost memory in proportion to its rows. They now read the file once, keep only counts per
+  column, and report the same hints as before. A column named twice in one `column_type_hints` call is
+  counted once: the bundled `products.csv` reported 20 convertible prices instead of 10. When several
+  requested columns are missing, one error now names all of them (`Column(s) [...] are not in ...`), so the
+  model can fix them in one retry; before, it named only the first. Each value is now tried against every
+  type, so a hint takes longer. At 300,000 rows: a numeric column 3.14 s → 4.64 s, a text column 1.39 s → 3.18 s,
+  a date column 5.47 s → 6.95 s.
+
 ## [0.12.1] - 2026-10-11
 
 ### Changed

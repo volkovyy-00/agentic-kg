@@ -1,9 +1,19 @@
 """Decide what a CSV string means, and convert it.
 
-Shared by the schema-proposal evidence tool (tools/file_tools.column_type_hint)
-and by both loaders (tools/kg_construction_tools). Using one converter on both
-paths is deliberate: what the model is told a column supports and what the
-loader actually does to that column cannot then drift apart.
+Shared by the schema-proposal evidence tools (tools/file_tools.column_type_hint
+and column_type_hints) and by both loaders (tools/kg_construction_tools). Using
+one converter on both paths is deliberate: what the model is told a column
+supports and what the loader actually does to that column cannot then drift
+apart.
+
+Every typing rule lives here: what counts as blank, each type's conversion, the
+majority share, the fraction rule, and the mapping from shape to suggested type.
+The hint tools and the loaders call these and never restate one. Counting
+conversions inline in file_tools was declined in PR #13's review, and KG-11 kept
+that decision: an inline counter is a second copy of these rules, which is the
+drift this module exists to prevent. Since KG-11 the hint tools stream a column
+through ColumnTally, which keeps counts rather than values, from one _read per
+value.
 
 No ToolContext, no database, no I/O -- strings in, answers out. Same shape and
 the same reason as common/cypher_identifiers.py.

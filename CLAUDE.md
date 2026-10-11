@@ -27,6 +27,8 @@ and (*Where project knowledge lives*) every home; humans start at `docs/spec.md`
   rejects, and a test enforces it. Before adding an agent or a tool, read `.claude/rules/rejected-call-cap.md`.
 - Before adding a tool that writes construction-plan rules, read `.claude/rules/construction-plan.md`.
 - Before adding a Neo4j driver entry point, read `.claude/rules/neo4j-access.md`.
+- Before adding or changing a typing rule (what converts, the majority share, shape to suggested type),
+  read `.claude/rules/typing-rules.md`.
 - To debug a silent or failing `adk web` turn, read `.claude/skills/debug-adk-web/SKILL.md`.
 
 ## Commands
