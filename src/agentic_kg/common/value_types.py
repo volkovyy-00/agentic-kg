@@ -26,7 +26,7 @@ import re
 from collections import Counter
 from datetime import timedelta, timezone
 from math import isfinite
-from typing import Any, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Tuple
 
 from neo4j import time as neo4j_time
 
@@ -236,6 +236,17 @@ def _clean_number(text: str) -> Optional[str]:
     return f"-{cleaned}" if negated_by_brackets else cleaned
 
 
+def _has_fraction(cleaned: str) -> bool:
+    """True when a cleaned number's digits after the point are not all zeros.
+
+    The one statement of the fraction rule. has_fractional_part, the integer
+    converter's refusal and ColumnTally's any_fraction flag all ask it, so what
+    counts as "fractional" cannot differ between the hint and the loader.
+    """
+    _whole, _, fraction = cleaned.partition(".")
+    return bool(fraction.strip("0"))
+
+
 def has_fractional_part(value: Any) -> bool:
     """True for a numeric value carrying a non-zero fractional part.
 
@@ -253,8 +264,7 @@ def has_fractional_part(value: Any) -> bool:
     cleaned = _clean_number(str(value).strip())
     if cleaned is None:
         return False
-    _whole, _, fraction = cleaned.partition(".")
-    return bool(fraction.strip("0"))
+    return _has_fraction(cleaned)
 
 
 def _as_storable_integer(number: int) -> Tuple[Optional[int], str]:
@@ -325,6 +335,62 @@ def parse_temporal(text: str) -> Optional[Tuple[str, Any]]:
         return None
 
 
+def _to_boolean(lowered: str) -> Tuple[Optional[bool], str]:
+    """The boolean rule: the stripped, lowered text is in the vocabulary."""
+    if lowered in _TRUE_VALUES:
+        return True, CONVERTED
+    if lowered in _FALSE_VALUES:
+        return False, CONVERTED
+    return None, UNCONVERTIBLE
+
+
+def _to_integer(cleaned: Optional[str]) -> Tuple[Optional[int], str]:
+    """The integer rule, given _clean_number's result (None: not a number)."""
+    if cleaned is None:
+        return None, UNCONVERTIBLE
+    # Read from the digits, never through float. float() rounds
+    # anything past 2**53 to the nearest representable value, and a
+    # fractional check applied afterwards cannot see damage done before
+    # it ran: "9007199254740993" and "9007199254740993.0" both come back
+    # as ...992 and report CONVERTED. Neo4j's INTEGER is a full 64-bit
+    # signed, so the wrong number is stored without a murmur. Splitting
+    # the string keeps every digit the source actually wrote.
+    if _has_fraction(cleaned):
+        return None, UNCONVERTIBLE
+    whole = cleaned.partition(".")[0]
+    try:
+        return _as_storable_integer(int(whole))
+    except ValueError:  # pragma: no cover - guarded by the patterns above
+        return None, UNCONVERTIBLE
+
+
+def _to_float(cleaned: Optional[str]) -> Tuple[Optional[float], str]:
+    """The float rule, given _clean_number's result (None: not a number)."""
+    if cleaned is None:
+        return None, UNCONVERTIBLE
+    try:
+        number = float(cleaned)
+    except ValueError:  # pragma: no cover - guarded by the patterns above
+        return None, UNCONVERTIBLE
+    if not isfinite(number):
+        # A literal with more digits than a double can hold becomes inf,
+        # which the driver packs happily as a Neo4j FLOAT -- the graph would
+        # store Infinity and the load would report success.
+        return None, UNCONVERTIBLE
+    return number, CONVERTED
+
+
+def _to_temporal(
+    parsed: Optional[Tuple[str, Any]], declared_type: str
+) -> Tuple[Optional[Any], str]:
+    """The temporal rule, given parse_temporal's result."""
+    # Each type takes only its own shape: a bare date is not a datetime, and
+    # a zoned value is not a local one. Never trimmed, never filled in.
+    if parsed is not None and parsed[0] == declared_type:
+        return parsed[1], CONVERTED
+    return None, UNCONVERTIBLE
+
+
 def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
     """Convert one source value to the type the construction plan declared.
 
@@ -339,56 +405,62 @@ def coerce(value: Any, declared_type: str) -> Tuple[Optional[Any], str]:
     if is_blank(value):
         return None, BLANK
 
+    # Only the piece this one type needs: the loaders call coerce on every
+    # typed cell, so it must not take _read's all-types reading.
     text = str(value).strip()
-
     if declared_type == BOOLEAN:
-        lowered = text.lower()
-        if lowered in _TRUE_VALUES:
-            return True, CONVERTED
-        if lowered in _FALSE_VALUES:
-            return False, CONVERTED
-        return None, UNCONVERTIBLE
-
-    if declared_type in (INTEGER, FLOAT):
-        cleaned = _clean_number(text)
-        if cleaned is None:
-            return None, UNCONVERTIBLE
-
-        if declared_type == INTEGER:
-            # Read from the digits, never through float. float() rounds
-            # anything past 2**53 to the nearest representable value, and a
-            # fractional check applied afterwards cannot see damage done before
-            # it ran: "9007199254740993" and "9007199254740993.0" both come back
-            # as ...992 and report CONVERTED. Neo4j's INTEGER is a full 64-bit
-            # signed, so the wrong number is stored without a murmur. Splitting
-            # the string keeps every digit the source actually wrote.
-            whole, _, fraction = cleaned.partition(".")
-            if fraction.strip("0"):
-                return None, UNCONVERTIBLE
-            try:
-                return _as_storable_integer(int(whole))
-            except ValueError:  # pragma: no cover - guarded by the patterns above
-                return None, UNCONVERTIBLE
-
-        try:
-            number = float(cleaned)
-        except ValueError:  # pragma: no cover - guarded by the patterns above
-            return None, UNCONVERTIBLE
-        if not isfinite(number):
-            # A literal with more digits than a double can hold becomes inf,
-            # which the driver packs happily as a Neo4j FLOAT -- the graph would
-            # store Infinity and the load would report success.
-            return None, UNCONVERTIBLE
-        return number, CONVERTED
-
+        return _to_boolean(text.lower())
+    if declared_type == INTEGER:
+        return _to_integer(_clean_number(text))
+    if declared_type == FLOAT:
+        return _to_float(_clean_number(text))
     if declared_type in TEMPORAL_TYPES:
-        parsed = parse_temporal(text)
-        # Each type takes only its own shape: a bare date is not a datetime, and
-        # a zoned value is not a local one. Never trimmed, never filled in.
-        if parsed is not None and parsed[0] == declared_type:
-            return parsed[1], CONVERTED
-        return None, UNCONVERTIBLE
+        return _to_temporal(parse_temporal(text), declared_type)
 
     # An unknown declared type reaches here only if the plan carried one that
     # check_construction_plan_consistency should have refused. Fail closed.
     return None, UNCONVERTIBLE
+
+
+class _Reading(NamedTuple):
+    """One non-blank value, read once for every type at the same time."""
+
+    raw: Any
+    text: str
+    lowered: str
+    cleaned: Optional[str]
+    temporal: Optional[Tuple[str, Any]]
+
+
+def _read(value: Any) -> _Reading:
+    """Strip, lower, clean and parse a non-blank value once.
+
+    What coerce_all and ColumnTally share, so trying six types costs one parse,
+    not six. coerce deliberately does not use it: see coerce.
+    """
+    text = str(value).strip()
+    return _Reading(
+        value, text, text.lower(), _clean_number(text), parse_temporal(text)
+    )
+
+
+def _convert_all(reading: _Reading) -> Dict[str, Tuple[Optional[Any], str]]:
+    """Every converter on one reading, keyed in ALLOWED_TYPES order."""
+    return {
+        INTEGER: _to_integer(reading.cleaned),
+        FLOAT: _to_float(reading.cleaned),
+        BOOLEAN: _to_boolean(reading.lowered),
+        **{kind: _to_temporal(reading.temporal, kind) for kind in TEMPORAL_TYPES},
+    }
+
+
+def coerce_all(value: Any) -> Dict[str, Tuple[Optional[Any], str]]:
+    """coerce(value, t) for every type in ALLOWED_TYPES, from one reading.
+
+    The same converters coerce dispatches to, so only the dispatch is written
+    twice -- never a rule. test_value_types_invariants pins the two together over
+    the adversarial corpus.
+    """
+    if is_blank(value):
+        return {declared_type: (None, BLANK) for declared_type in ALLOWED_TYPES}
+    return _convert_all(_read(value))

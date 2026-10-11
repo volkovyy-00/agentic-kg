@@ -36,6 +36,7 @@ from neo4j._codec.hydration.v2 import HydrationHandler
 from neo4j._codec.packstream.v1 import Packer
 
 from agentic_kg.common.value_types import (
+    ALLOWED_TYPES,
     BARE_NUMERIC,
     BLANK,
     BOOLEAN,
@@ -52,6 +53,7 @@ from agentic_kg.common.value_types import (
     _clean_number,
     classify,
     coerce,
+    coerce_all,
     has_fractional_part,
     is_blank,
 )
@@ -227,6 +229,23 @@ def test_a_non_converted_outcome_never_carries_a_value(value, declared_type):
     if outcome != CONVERTED:
         assert converted is None
     assert (outcome == BLANK) == is_blank(value)
+
+
+@pytest.mark.parametrize("value", ADVERSARIAL_VALUES)
+def test_coerce_all_gives_exactly_what_coerce_gives_for_every_type(value):
+    """coerce_all reads a value once and runs every converter on that one read,
+    so the hint tools can try all six types without parsing six times. It is a
+    second entry point to the same rules, and a second entry point is exactly
+    where this pipeline has drifted before. Whatever coerce says for a type,
+    coerce_all must say for that type."""
+    together = coerce_all(value)
+    assert list(together) == list(ALLOWED_TYPES)
+    for declared_type in ALLOWED_TYPES:
+        assert together[declared_type] == coerce(value, declared_type), (
+            f"coerce_all({value!r})[{declared_type}] is "
+            f"{together[declared_type]!r}, coerce says "
+            f"{coerce(value, declared_type)!r}"
+        )
 
 
 @pytest.mark.parametrize("column", ADVERSARIAL_COLUMNS)

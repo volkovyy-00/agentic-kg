@@ -9,6 +9,7 @@ from datetime import timedelta, timezone
 import pytest
 from neo4j import time as neo4j_time
 
+from agentic_kg.common import value_types
 from agentic_kg.common.value_types import (
     BARE_NUMERIC,
     BLANK,
@@ -485,3 +486,29 @@ def test_classify_strips_padded_values_like_coerce_does():
     """coerce strips before parsing; if classify did not, a padded date column
     would classify as text while every value converted."""
     assert classify([" 2025-03-04", "2025-03-05 ", "\t2025-03-06"]) == DATE_LIKE
+
+
+def test_coerce_prepares_only_what_its_one_converter_needs(monkeypatch):
+    """The loaders call coerce on every typed cell of every row. Cleaning a number
+    and parsing a date for a boolean column would slow every load for nothing, so
+    coerce must not take the all-types read that coerce_all and the hint tools use."""
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("coerce did work its declared type does not need")
+
+    monkeypatch.setattr(value_types, "parse_temporal", must_not_run)
+    assert value_types.coerce("yes", value_types.BOOLEAN) == (
+        True,
+        value_types.CONVERTED,
+    )
+    assert value_types.coerce("42", value_types.INTEGER) == (42, value_types.CONVERTED)
+
+    monkeypatch.undo()
+    monkeypatch.setattr(value_types, "_clean_number", must_not_run)
+    assert value_types.coerce("yes", value_types.BOOLEAN) == (
+        True,
+        value_types.CONVERTED,
+    )
+    assert (
+        value_types.coerce("2025-03-04", value_types.DATE)[1] == value_types.CONVERTED
+    )
