@@ -248,7 +248,9 @@ variants = {
         + """
            It reads brackets as a minus sign, takes a sign on either side of a
            currency symbol, removes separators and spaces, and turns a blank
-           into null, which sum(), avg() and count() skip. Never cast such a
+           into null, which sum(), avg() and count() skip. Before ordering by
+           the cast, filter out rows where it is null: a descending ORDER BY
+           puts nulls first, so a blank would top the list. Never cast such a
            property with a bare toFloat: for '$42.73', '(42.00)' or '1,234' it
            returns null without an error, and the value drops out of the
            result. When the property's 'completeness' is 'partial', the profile

@@ -75,6 +75,7 @@ def test_rule_6_says_what_the_cast_does_and_when_to_check_it():
         "every non-blank value the profile lists converts to a number",
         "reads brackets as a minus sign",
         "turns a blank into null",
+        "a descending ORDER BY puts nulls first",
         "Never cast such a property with a bare toFloat",
         "the profile listed only some of its values",
     ):
