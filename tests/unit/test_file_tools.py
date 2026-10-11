@@ -2,7 +2,7 @@ import fsspec
 import pytest
 
 from agentic_kg.common.config import reset_settings
-from agentic_kg.common.value_types import classify
+from agentic_kg.common.value_types import ColumnTally
 from agentic_kg.tools import file_tools
 
 
@@ -304,14 +304,14 @@ def test_column_type_hint_reports_a_plain_count_as_integer(bom_source):
 
 
 def test_suggested_type_ignores_a_single_dirty_value_in_a_bare_numeric_column():
-    """Catches _suggested_type downgrading a clean integer column to float
+    """Catches the type suggestion downgrading a clean integer column to float
     because ONE non-blank value fails INTEGER coercion, even when that value
     is not a number at all (e.g. 'N/A'). A value that also fails FLOAT
     coercion is dirty data, not evidence of fractional-ness, and must not
     influence integer-vs-float -- otherwise 400 integers plus one 'N/A'
     would be suggested float and store 8.0 where the source says 8."""
     values = [str(n) for n in range(400)] + ["N/A"]
-    assert file_tools._suggested_type(file_tools.BARE_NUMERIC, values) == "integer"
+    assert ColumnTally.of(values).suggested_type == "integer"
 
 
 def test_column_type_hint_reports_currency_as_float_by_shape(bom_source):
@@ -407,14 +407,12 @@ def test_suggested_type_does_not_downgrade_an_overflowing_integer_to_float():
     as a clean conversion. Integer keeps the outlier on the counted-and-cleared
     path instead, where the hint's own unconvertible_count shows it."""
     values = ["1", "2", "9223372036854775809"]
-    assert file_tools._suggested_type(classify(values), values) == "integer"
+    assert ColumnTally.of(values).suggested_type == "integer"
 
 
 def test_suggested_type_still_sees_a_genuinely_fractional_column():
     """The overflow fix must not cost the fractional detection it sits next to."""
-    assert (
-        file_tools._suggested_type(classify(["1.5", "2.5"]), ["1.5", "2.5"]) == "float"
-    )
+    assert ColumnTally.of(["1.5", "2.5"]).suggested_type == "float"
 
 
 def test_column_type_hints_reads_the_source_once_for_all_columns(

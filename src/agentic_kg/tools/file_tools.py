@@ -19,18 +19,10 @@ from agentic_kg.common.file_source import (
 )
 from agentic_kg.common.tool_result import tool_error, tool_success
 from agentic_kg.common.value_types import (
-    BARE_NUMERIC,
     BLANK,
-    BOOLEAN,
-    BOOLEAN_LIKE,
     CONVERTED,
-    FLOAT,
-    INTEGER,
-    NUMERIC_AFTER_CLEANING,
-    TEMPORAL_SHAPE_TYPES,
-    classify,
+    ColumnTally,
     coerce,
-    has_fractional_part,
     is_blank,
 )
 
@@ -698,51 +690,15 @@ def column_stats(file_path: str, column: str, tool_context: ToolContext) -> dict
     )
 
 
-def _suggested_type(shape: str, values) -> str | None:
-    """Map a column's shape to the type to suggest for it.
-
-    The shape decides, and for a column needing cleaning it decides alone: every
-    price in the bundled products.csv is a round dollar amount, so a
-    whole-number test would suggest integer for a currency column and then
-    refuse the first fractional price the data ever gains. Needing a currency
-    symbol or thousands separator stripped is itself the evidence it is money.
-
-    Wholeness is consulted only to split integer from float WITHIN the
-    bare_numeric shape, where there is nothing else to go on -- and only for
-    values that are numbers at all, so one "N/A" in a column of 400 integers
-    cannot make it look fractional.
-
-    It asks has_fractional_part rather than inferring the fraction from a failed
-    integer coercion. coerce refuses a value for two different reasons, and
-    treating them alike types a column float on the strength of a whole number
-    too large for Neo4j's INTEGER -- which then loads as a rounded, wrong number
-    and reports a clean conversion. An overflowing value leaves the suggestion
-    at integer, so the loader counts it, reports it as an example, and clears
-    it; one unstorable outlier does not cost the whole column its type, the same
-    tolerance classify() already applies.
-    """
-    if shape in TEMPORAL_SHAPE_TYPES:
-        return TEMPORAL_SHAPE_TYPES[shape]
-    if shape == BOOLEAN_LIKE:
-        return BOOLEAN
-    if shape == NUMERIC_AFTER_CLEANING:
-        return FLOAT
-    if shape == BARE_NUMERIC:
-        for value in values:
-            if has_fractional_part(value):
-                return FLOAT
-        return INTEGER
-    return None
-
-
 def _hint_from_values(file_path: str, column: str, values: List[Optional[str]]) -> dict:
     """Build one column_type_hint payload from values already read.
 
     Split out from column_type_hint so column_type_hints can reuse it after a
     single file pass, rather than re-reading the source once per column.
     """
-    shape = classify(values)
-    suggested = _suggested_type(shape, values)
+    tally = ColumnTally.of(values)
+    shape = tally.shape
+    suggested = tally.suggested_type
 
     convertible_count = 0
     blank_count = 0

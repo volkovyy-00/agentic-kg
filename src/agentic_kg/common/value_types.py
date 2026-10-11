@@ -23,7 +23,6 @@ value library (no connection), so the "no I/O" rule above still holds.
 """
 
 import re
-from collections import Counter
 from datetime import timedelta, timezone
 from math import isfinite
 from typing import Any, Dict, Iterable, NamedTuple, Optional, Tuple
@@ -97,8 +96,8 @@ _BOOLEAN_VALUES = _TRUE_VALUES | _FALSE_VALUES
 MAJORITY_SHARE = 0.5
 
 # A temporal shape names its own type: unlike the numeric shapes there is nothing
-# to split within it. classify() reports the shape and file_tools suggests the
-# type from this one table.
+# to split within it. classify() reports the shape and ColumnTally.suggested_type
+# maps it to the type through this one table.
 TEMPORAL_SHAPE_TYPES = {
     DATE_LIKE: DATE,
     DATETIME_LIKE: DATETIME,
@@ -137,36 +136,6 @@ def is_blank(value: Any) -> bool:
     return value is None or str(value).strip() == ""
 
 
-def _is_really_a_count(non_blank) -> bool:
-    """True for a column that only LOOKS boolean because most of its values are
-    0 or 1.
-
-    A quantity that is overwhelmingly 0 or 1 -- a backorder quantity, a defect
-    count, a discount count -- wins the boolean majority on those rows while
-    carrying real 2s and 3s. Calling it boolean would make every value above 1
-    unconvertible, and the loader clears an unconvertible value: the large
-    numbers, the only ones that change an answer, are exactly the ones that
-    would disappear, and at a minority share the refusal gate never fires.
-
-    Narrow on purpose, so TRAP 5 still holds: this fires only when the values
-    carrying the boolean majority are all drawn from the NUMERIC half of the
-    vocabulary. A genuine 0/1 flag has nothing else in the column and stays
-    boolean_like; a yes/no column with a stray "5" stays boolean_like too.
-    """
-    numeric_vocabulary = {"0", "1"}
-    fitting = [
-        value.strip().lower()
-        for value in non_blank
-        if value.strip().lower() in _BOOLEAN_VALUES
-    ]
-    if not all(value in numeric_vocabulary for value in fitting):
-        return False
-    return any(
-        _BARE_NUMERIC.match(value) and value.strip().lower() not in _BOOLEAN_VALUES
-        for value in non_blank
-    )
-
-
 def classify(values: Iterable[Any]) -> str:
     """Report the most specific shape a majority of non-blank values fit.
 
@@ -180,46 +149,7 @@ def classify(values: Iterable[Any]) -> str:
     pattern at 100% and never reach the boolean check. Values outside the
     boolean vocabulary (2, 3, 5 ...) still fall through to the numeric shapes.
     """
-    non_blank = [str(value) for value in values if not is_blank(value)]
-    if not non_blank:
-        return TEXT
-
-    def majority(matches) -> bool:
-        fitting = sum(1 for value in non_blank if matches(value))
-        return fitting > len(non_blank) * MAJORITY_SHARE
-
-    def in_boolean_vocabulary(value) -> bool:
-        return value.strip().lower() in _BOOLEAN_VALUES
-
-    if majority(in_boolean_vocabulary) and not _is_really_a_count(non_blank):
-        return BOOLEAN_LIKE
-    if majority(_BARE_NUMERIC.match):
-        return BARE_NUMERIC
-
-    def numeric_after_cleaning(value) -> bool:
-        # Both forms coerce() accepts, or this reports text for a column the
-        # loader would have converted -- the exact evidence/behaviour drift
-        # sharing this module is meant to prevent. A column written entirely in
-        # accounting parentheses would otherwise get no type suggestion at all.
-        return bool(_NUMERIC_LIKE.match(value) or _PARENTHESISED_NEGATIVE.match(value))
-
-    if majority(numeric_after_cleaning):
-        return NUMERIC_AFTER_CLEANING
-
-    # Temporal text cannot match any test above (it carries '-' and ':'), so the
-    # order is not load-bearing here. Each value is parsed once, stripped, as
-    # coerce() does. A kind has to be a strict majority ALONE: a 45% zoned / 45%
-    # local column gets no suggestion, because either type would clear the other
-    # half.
-    kinds = Counter(
-        parsed[0]
-        for value in non_blank
-        if (parsed := parse_temporal(value.strip())) is not None
-    )
-    for shape, kind in TEMPORAL_SHAPE_TYPES.items():
-        if kinds[kind] > len(non_blank) * MAJORITY_SHARE:
-            return shape
-    return TEXT
+    return ColumnTally.of(values).shape
 
 
 def _clean_number(text: str) -> Optional[str]:

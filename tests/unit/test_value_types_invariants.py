@@ -3,7 +3,7 @@
 Every defect found in review on this branch lived in a SEAM rather than in a
 component: classify and coerce disagreeing about accounting parentheses,
 coerce and the driver disagreeing about how large an integer may be,
-_suggested_type and coerce disagreeing about what an integer refusal means.
+the type suggestion and coerce disagreeing about what an integer refusal means.
 Each piece was individually defensible; the pair was not. Two of the three were
 introduced by the fix for the previous one.
 
@@ -50,6 +50,7 @@ from agentic_kg.common.value_types import (
     MAJORITY_SHARE,
     NUMERIC_AFTER_CLEANING,
     TEXT,
+    ColumnTally,
     _clean_number,
     classify,
     coerce,
@@ -57,7 +58,6 @@ from agentic_kg.common.value_types import (
     has_fractional_part,
     is_blank,
 )
-from agentic_kg.tools.file_tools import _suggested_type
 
 _DEHYDRATION_HOOKS = HydrationHandler().dehydration_hooks
 
@@ -258,7 +258,7 @@ def test_a_suggested_type_never_trips_the_loaders_refusal_gate(column):
     approved plan that cannot load. Broken once already, by classify not
     counting the accounting parentheses coerce accepts.
     """
-    suggested = _suggested_type(classify(column), column)
+    suggested = ColumnTally.of(column).suggested_type
     if suggested is None:
         return
     non_blank = [value for value in column if not is_blank(value)]
@@ -274,7 +274,7 @@ def test_a_suggested_type_never_trips_the_loaders_refusal_gate(column):
 
 @pytest.mark.parametrize("value", ADVERSARIAL_VALUES)
 def test_has_fractional_part_agrees_with_coerce_about_what_a_fraction_is(value):
-    """The two must not drift, because _suggested_type uses one to explain the
+    """The two must not drift, because the type suggestion uses one to explain the
     other's refusals. A fractional value can never be a valid integer, and a
     value that converts as an integer can never be fractional."""
     integer_outcome = coerce(value, INTEGER)[1]
@@ -289,7 +289,7 @@ def test_has_fractional_part_agrees_with_coerce_about_what_a_fraction_is(value):
 @pytest.mark.parametrize("value", ADVERSARIAL_VALUES)
 def test_anything_an_integer_accepts_a_float_accepts_too(value):
     """FLOAT is the wider type; a value storable as an integer must be storable
-    as a float. If this ever fails, _suggested_type's fallback from integer to
+    as a float. If this ever fails, the suggestion's fallback from integer to
     float would silently drop values rather than widening the column."""
     if coerce(value, INTEGER)[1] == CONVERTED:
         assert coerce(value, FLOAT)[1] == CONVERTED, (
@@ -359,7 +359,7 @@ def test_a_column_of_whole_bare_numbers_is_never_suggested_float(column):
         return
     if any(has_fractional_part(value) for value in column):
         return
-    assert _suggested_type(BARE_NUMERIC, column) != FLOAT, (
+    assert ColumnTally.of(column).suggested_type != FLOAT, (
         f"column {column!r} holds no fractional value yet was suggested float, "
         f"which cannot store every one of its values exactly"
     )
