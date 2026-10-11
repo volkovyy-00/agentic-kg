@@ -70,7 +70,11 @@ UNCONVERTIBLE = "unconvertible"
 
 _BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
 
-_CURRENCY = r"[$€£¥₹]"
+# The currency symbols a number may carry. Public because the graph profile builds its Cypher cast
+# from this and STRIP_FROM_NUMBERS, so the database cleans a value exactly as this module does.
+CURRENCY_SYMBOLS = "$€£¥₹"
+
+_CURRENCY = f"[{re.escape(CURRENCY_SYMBOLS)}]"
 _DIGITS = r"(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?"
 # The sign may sit on either side of the currency symbol. Both orders are real:
 # "$-42.00" is what a bare float formatter emits, "-$42.00" is what Excel and
@@ -90,7 +94,8 @@ _PARENTHESISED_NEGATIVE = re.compile(rf"^\s*\(\s*{_CURRENCY}?\s*{_DIGITS}\s*\)\s
 
 # Applied only after a numeric pattern has matched, so this cannot turn "1,2,3"
 # into 123 -- that string never reaches here.
-_STRIP_FROM_NUMBERS = str.maketrans("", "", "$€£¥₹,() ")
+STRIP_FROM_NUMBERS = CURRENCY_SYMBOLS + ",() "
+_STRIP_FROM_NUMBERS = str.maketrans("", "", STRIP_FROM_NUMBERS)
 
 _TRUE_VALUES = frozenset({"yes", "true", "y", "1"})
 _FALSE_VALUES = frozenset({"no", "false", "n", "0"})
@@ -144,6 +149,17 @@ MAX_OFFSET_MINUTES = 18 * 60
 def is_blank(value: Any) -> bool:
     """True for a value that carries nothing: None, empty, or only whitespace."""
     return value is None or str(value).strip() == ""
+
+
+def is_bare_numeric(value: Any) -> bool:
+    """True for a plain numeral: an optional sign, digits, an optional fraction, no symbol.
+
+    Matched on str(value), unstripped; the pattern allows surrounding whitespace itself. The one statement
+    of "bare": ColumnTally's bare_numeric count and the graph profile's "yes" both ask it. It says nothing
+    about whether the value converts -- a 400-digit numeral is bare and coerce still refuses it -- so a
+    caller that needs both asks coerce first.
+    """
+    return _BARE_NUMERIC.match(str(value)) is not None
 
 
 def classify(values: Iterable[Any]) -> str:
@@ -479,7 +495,7 @@ class ColumnTally:
         # pattern is a subset of the numeric one. Matched unstripped, as
         # classify always matched it; the pattern allows the surrounding
         # whitespace itself.
-        if _BARE_NUMERIC.match(str(reading.raw)) is not None:
+        if is_bare_numeric(reading.raw):
             self.bare_numeric += 1
             if not in_vocabulary:
                 self.number_outside_vocabulary_seen = True
