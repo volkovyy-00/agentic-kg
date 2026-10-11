@@ -2446,6 +2446,36 @@
     "unconvertible_count": 0,
     "example_unconvertible": []
    }
+  },
+  {
+   "name": "extra-06",
+   "values": [
+    "1",
+    "x",
+    "2",
+    "y",
+    "3",
+    "z",
+    "4",
+    "w",
+    "5",
+    "6"
+   ],
+   "hint": {
+    "path": "list.csv",
+    "column": "extra-06",
+    "shape": "bare_numeric",
+    "suggested_type": "integer",
+    "convertible_count": 6,
+    "blank_count": 0,
+    "missing_count": 0,
+    "unconvertible_count": 4,
+    "example_unconvertible": [
+     "x",
+     "y",
+     "z"
+    ]
+   }
   }
  ]
 }
