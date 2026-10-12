@@ -315,7 +315,7 @@ def test_one_failing_entity_degrades_only_that_entry(
             return {"status": "error", "error_message": "simulated failure"}
         return original(query, parameters, max_rows)
 
-    # monkeypatch, not a bare assignment: db is the shared client every later test uses.
+    # Undone when the test ends, even if it fails: db is the shared client every later test uses.
     monkeypatch.setattr(db, "send_read_query", flaky)
     profile = graph_profile.build_profile(_schema_for(db))
 
