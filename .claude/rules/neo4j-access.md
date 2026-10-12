@@ -14,4 +14,5 @@ paths:
 - Every path that hands out or uses the driver gets it from `Neo4jForADK._connection()`; a new one
   adds its own close-then-call step to `tests/integration/test_connection_recovery.py`.
 - Load rows with parameterised `UNWIND` batches read client-side; never `LOAD CSV`.
-- Tests touching physical or profiled schema use the `neo4j_graph_with_apoc` fixture.
+- Integration tests take the `neo4j_graph` fixture: one shared container (with APOC) per run, wiped and
+  its caches reset before each test by `tests/integration/shared_database.py`; never start another container.

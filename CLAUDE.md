@@ -42,7 +42,7 @@ uv run adk web src/agentic_kg/coordinators/     # dev UI on http://localhost:800
 uv run pytest -q                                 # unit tests; never touches Docker
 uv run pytest tests/unit/test_tool_result.py::test_tool_success -v   # one test
 uv run pytest --cov --cov-report=term-missing    # coverage (CI sends coverage.xml to SonarCloud)
-uv run pytest -q -m integration                  # Neo4j via Testcontainers; needs Docker, ~12 min
+uv run pytest -m integration -rs                 # one shared Neo4j via Testcontainers; needs Docker, ~2 min
 
 uv run ruff check . && uv run ruff format --check .   # both gate CI; drop --check to fix
 uv run pyright                                   # src only; must report 0 errors

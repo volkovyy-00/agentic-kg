@@ -59,7 +59,9 @@ def _contents():
     return result["contents"]
 
 
-def test_build_then_clear_leaves_a_fresh_database(db, tmp_path):
+def test_build_then_clear_leaves_a_fresh_database(db, shared_container, tmp_path):
+    from shared_database import fresh_lookup_indexes
+
     import agentic_kg.tools.kg_construction_tools as kg
     from agentic_kg.tools.construction_plan_tools import (
         PROPOSED_CONSTRUCTION_PLAN,
@@ -68,9 +70,12 @@ def test_build_then_clear_leaves_a_fresh_database(db, tmp_path):
     )
     from agentic_kg.tools.cypher_tools import is_empty, reset_neo4j_data
 
-    fresh = _lookups(db)
+    # Read when the shared container was new: reading it here would read what the setup's own
+    # reset_neo4j_data left, and compare the code under test with itself.
+    fresh = fresh_lookup_indexes(shared_container)
     logger.warning("fresh database LOOKUP indexes: %d %s", len(fresh), fresh)
     assert fresh
+    assert _lookups(db) == fresh
     assert is_empty(_contents())
 
     _write(tmp_path, "people.csv", ["id", "name"], [["p1", "A"], ["p2", "B"]])

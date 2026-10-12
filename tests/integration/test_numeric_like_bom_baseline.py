@@ -120,30 +120,22 @@ BASELINE = {
 }
 
 
-def test_every_bom_property_keeps_its_numeric_like_answer(
-    neo4j_graph_with_apoc, monkeypatch
-):
+def test_every_bom_property_keeps_its_numeric_like_answer(neo4j_graph, monkeypatch):
     import agentic_kg.tools.cypher_tools as cypher_tools
     import agentic_kg.tools.kg_construction_tools as kg
     from agentic_kg.common import graph_profile
 
-    monkeypatch.setattr(kg, "graphdb", neo4j_graph_with_apoc)
-    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph_with_apoc)
-    monkeypatch.setattr(graph_profile, "graphdb", neo4j_graph_with_apoc)
-    # The profile cache is process-wide and keyed on node and edge totals, which another test's
-    # graph could share. Start and end clean.
-    graph_profile.reset_cache()
-    try:
-        built = kg.construct_domain_graph(BOM_PLAN)
-        assert built["status"] == "success", built.get("error_message")
+    monkeypatch.setattr(kg, "graphdb", neo4j_graph)
+    monkeypatch.setattr(cypher_tools, "graphdb", neo4j_graph)
+    monkeypatch.setattr(graph_profile, "graphdb", neo4j_graph)
+    built = kg.construct_domain_graph(BOM_PLAN)
+    assert built["status"] == "success", built.get("error_message")
 
-        result = cypher_tools.get_graph_schema_with_profile()
-        assert result["status"] == "success", result.get("error_message")
-        properties = result["schema"]["profile"]["properties"]
-        actual = {
-            entity: {prop["property"]: prop["numeric_like"] for prop in props}
-            for entity, props in properties.items()
-        }
-        assert actual == BASELINE
-    finally:
-        graph_profile.reset_cache()
+    result = cypher_tools.get_graph_schema_with_profile()
+    assert result["status"] == "success", result.get("error_message")
+    properties = result["schema"]["profile"]["properties"]
+    actual = {
+        entity: {prop["property"]: prop["numeric_like"] for prop in props}
+        for entity, props in properties.items()
+    }
+    assert actual == BASELINE

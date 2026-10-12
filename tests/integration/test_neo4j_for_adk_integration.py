@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -14,58 +12,22 @@ except Exception as e:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {e}", allow_module_level=True)
 
 
-def _compose_dsn(
-    bolt_url: str, auth: tuple[str, str | None], database: str = "neo4j"
-) -> str:
-    """Build a DSN from bolt URL and auth tuple suitable for Neo4jConfig."""
-    # bolt_url expected like bolt://host:port
-    username, password = auth
-    # username may be None; default to neo4j to align with Neo4jConfig defaults
-    userinfo = username or "neo4j"
-    if password is not None:
-        userinfo = f"{userinfo}:{password}"
-    return bolt_url.replace("bolt://", f"bolt://{userinfo}@") + f"/{database}"
-
-
-def test_neo4j_for_adk_roundtrip_with_testcontainers():
-    try:
-        from testcontainers.neo4j import Neo4jContainer
-    except Exception as e:  # pragma: no cover
-        pytest.skip(f"testcontainers not available: {e}")
+def test_neo4j_for_adk_roundtrip_with_testcontainers(shared_container):
+    """A Neo4jForADK built from an explicit config reaches the shared container. It is its own
+    client, not the shared one, so closing it leaves every other test's connection alone."""
+    from shared_database import container_dsn
 
     from agentic_kg.common.neo4j_for_adk import Neo4jForADK
     from agentic_kg.common.pydantic_neo4j import Neo4jConfig
 
-    # Start ephemeral Neo4j
-    with Neo4jContainer(image="neo4j:5") as neo4j:
-        # Connection info
-        try:
-            bolt_url = neo4j.get_connection_url()  # e.g., bolt://localhost:7687
-        except AttributeError:
-            host = "localhost"
-            try:
-                port = neo4j.get_exposed_port(7687)
-            except Exception:
-                port = 7687
-            bolt_url = f"bolt://{host}:{port}"
-
-        try:
-            auth = neo4j.get_auth()  # (username, password)
-        except AttributeError:
-            # Default fallback; matches Neo4jContainer's own default password
-            auth = ("neo4j", os.getenv("NEO4J_PASSWORD", "password"))
-
-        dsn = _compose_dsn(bolt_url, auth, database="neo4j")
-        cfg = Neo4jConfig(dsn=dsn)
-
-        client = Neo4jForADK(cfg)
-        try:
-            # Simple read query to validate roundtrip and ADK result envelope
-            result = client.send_query("RETURN 1 AS ok")
-            assert result["status"] == "success"
-            rows = result["records"]
-            assert isinstance(rows, list)
-            assert len(rows) == 1
-            assert rows[0] == {"ok": 1}
-        finally:
-            client.close()
+    client = Neo4jForADK(Neo4jConfig(dsn=container_dsn(shared_container)))
+    try:
+        # Simple read query to validate roundtrip and ADK result envelope
+        result = client.send_query("RETURN 1 AS ok")
+        assert result["status"] == "success"
+        rows = result["records"]
+        assert isinstance(rows, list)
+        assert len(rows) == 1
+        assert rows[0] == {"ok": 1}
+    finally:
+        client.close()
