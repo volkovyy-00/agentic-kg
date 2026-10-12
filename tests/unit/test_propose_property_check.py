@@ -73,7 +73,7 @@ def _node(ctx, properties, key="plotID", approved_file="plots.csv", label="Plot"
     return propose_node_construction(approved_file, label, key, properties, ctx)
 
 
-def _rel(ctx, properties, from_column="plotID", to_column="siteID"):
+def _rel(ctx, properties, from_column="plotID", to_column="siteID", **matched):
     return propose_relationship_construction(
         "plots.csv",
         "ON_SITE",
@@ -83,6 +83,7 @@ def _rel(ctx, properties, from_column="plotID", to_column="siteID"):
         to_column,
         properties,
         ctx,
+        **matched,
     )
 
 
@@ -258,65 +259,36 @@ def test_a_header_name_holding_a_comma_is_a_property_like_any_other(survey_sourc
 
 def test_matched_node_properties_are_not_checked_against_the_file(survey_source, ctx):
     """from_node_property / to_node_property name node properties, not columns."""
-    result = propose_relationship_construction(
-        "plots.csv",
-        "ON_SITE",
-        "Plot",
-        "plotID",
-        "Site",
-        "siteID",
-        ["canopy"],
-        ctx,
-        to_node_property="siteCode",
-    )
+    result = _rel(ctx, ["canopy"], to_node_property="siteCode")
     assert result["status"] == "success", result.get("error_message")
 
 
 # --- the one-column wording is kept where only one name is asked about --------
 
 
-def test_a_bad_key_with_no_properties_keeps_the_one_column_wording(survey_source, ctx):
-    assert _node(ctx, [], key="plotid")["error_message"] == _not_in("plotid")
-
-
-def test_a_bad_key_listed_as_its_only_property_keeps_the_one_column_wording(
-    survey_source, ctx
-):
-    assert _node(ctx, ["plotid"], key="plotid")["error_message"] == _not_in("plotid")
+@pytest.mark.parametrize(
+    "properties", [[], ["plotid"]], ids=["no-properties", "the-bad-key-itself"]
+)
+def test_a_bad_key_alone_keeps_the_one_column_wording(survey_source, ctx, properties):
+    assert _node(ctx, properties, key="plotid")["error_message"] == _not_in("plotid")
 
 
 # --- an unreadable property list is left to approval -------------------------
 
 
+@pytest.mark.parametrize("propose", [_node, _rel], ids=["node", "relationship"])
 @pytest.mark.parametrize(
     "properties, shown",
     [("canopy", "'canopy'"), (["canopy", None], "['canopy', None]")],
     ids=["one-string", "a-non-text-entry"],
 )
 def test_an_unreadable_property_list_is_not_checked_name_by_name(
-    survey_source, ctx, properties, shown
+    survey_source, ctx, properties, shown, propose
 ):
     """Read as names, 'canopy' would be checked letter by letter. The proposal goes
-    through, and approval refuses the list with its own message."""
-    result = _node(ctx, properties)
-    assert result["status"] == "success", result.get("error_message")
-    problems, _ = find_plan_problems(ctx.state)
-    assert any(
-        f"'properties' must be a list of property names, got {shown}" in problem
-        for problem in problems
-    ), problems
-
-
-@pytest.mark.parametrize(
-    "properties, shown",
-    [("canopy", "'canopy'"), (["canopy", None], "['canopy', None]")],
-    ids=["one-string", "a-non-text-entry"],
-)
-def test_an_unreadable_relationship_property_list_is_not_checked_name_by_name(
-    survey_source, ctx, properties, shown
-):
-    """The relationship tool's twin: its guard is a line of its own."""
-    result = _rel(ctx, properties)
+    through, and approval refuses the list with its own message. Each tool has its
+    own guard, so both are proposed."""
+    result = propose(ctx, properties)
     assert result["status"] == "success", result.get("error_message")
     problems, _ = find_plan_problems(ctx.state)
     assert any(
