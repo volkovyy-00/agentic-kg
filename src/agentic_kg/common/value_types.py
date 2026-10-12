@@ -1,10 +1,10 @@
 """Decide what a CSV string means, and convert it.
 
 Shared by the schema-proposal evidence tools (tools/file_tools.column_type_hint
-and column_type_hints) and by both loaders (tools/kg_construction_tools). Using
-one converter on both paths is deliberate: what the model is told a column
-supports and what the loader actually does to that column cannot then drift
-apart.
+and column_type_hints), by both loaders (tools/kg_construction_tools), and by the graph
+profile (common/graph_profile). Using one converter for every caller is deliberate: what the
+model is told a column supports and what the loader actually does to that column cannot
+then drift apart.
 
 Every typing rule lives here: what counts as blank, each type's conversion, the
 majority share, the fraction rule, and the mapping from shape to suggested type.
@@ -18,12 +18,10 @@ value.
 No ToolContext, no database, no I/O -- strings in, answers out. Same shape and
 the same reason as common/cypher_identifiers.py.
 
-The numeric character classes below deliberately duplicate
-common/graph_profile.py's _BARE_NUMERIC / _NUMERIC_LIKE rather than importing
-them. The profile is retrieval-side and out of scope for this change, and the
-ticket's dependency reasoning -- that a genuinely typed property takes the
-profile's type branch and never reaches its regex path -- holds only while that
-file stays untouched.
+The graph profile is a caller like the others: it decides whether a text property is numeric with
+coerce and is_bare_numeric, and restates no rule. CURRENCY_SYMBOLS and STRIP_FROM_NUMBERS are public
+because the profile builds its Cypher cast, NUMERIC_CAST, from them;
+tests/integration/test_numeric_cast_integration.py pins that cast to coerce.
 
 The temporal types build neo4j.time objects, never datetime.datetime and never
 through fromisoformat. A Python datetime stops at microseconds, so nine
@@ -70,7 +68,12 @@ UNCONVERTIBLE = "unconvertible"
 
 _BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
 
-_CURRENCY = r"[$€£¥₹]"
+# The currency symbols a number may carry. Public because the graph profile builds its Cypher cast
+# from this and STRIP_FROM_NUMBERS, so for every value this module converts the database gives
+# this module's number.
+CURRENCY_SYMBOLS = "$€£¥₹"
+
+_CURRENCY = f"[{re.escape(CURRENCY_SYMBOLS)}]"
 _DIGITS = r"(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?"
 # The sign may sit on either side of the currency symbol. Both orders are real:
 # "$-42.00" is what a bare float formatter emits, "-$42.00" is what Excel and
@@ -85,12 +88,13 @@ _NUMERIC_LIKE = re.compile(
 
 # Accounting notation for a negative: (42.00), ($42.00). Handled separately
 # because the minus sign is implied by the brackets rather than written, so it
-# survives neither the pattern above nor _STRIP_FROM_NUMBERS.
+# survives neither the pattern above nor _STRIP_TABLE.
 _PARENTHESISED_NEGATIVE = re.compile(rf"^\s*\(\s*{_CURRENCY}?\s*{_DIGITS}\s*\)\s*$")
 
 # Applied only after a numeric pattern has matched, so this cannot turn "1,2,3"
 # into 123 -- that string never reaches here.
-_STRIP_FROM_NUMBERS = str.maketrans("", "", "$€£¥₹,() ")
+STRIP_FROM_NUMBERS = CURRENCY_SYMBOLS + ",() "
+_STRIP_TABLE = str.maketrans("", "", STRIP_FROM_NUMBERS)
 
 _TRUE_VALUES = frozenset({"yes", "true", "y", "1"})
 _FALSE_VALUES = frozenset({"no", "false", "n", "0"})
@@ -146,6 +150,17 @@ def is_blank(value: Any) -> bool:
     return value is None or str(value).strip() == ""
 
 
+def is_bare_numeric(value: Any) -> bool:
+    """True for a plain numeral: an optional sign, digits, an optional fraction, no symbol.
+
+    Matched on str(value), unstripped; the pattern allows surrounding whitespace itself. The one statement
+    of "bare": ColumnTally's bare_numeric count and the graph profile's "yes" both ask it. It says nothing
+    about whether the value converts -- a 400-digit numeral is bare and coerce still refuses it -- so a
+    caller that needs both asks coerce first.
+    """
+    return _BARE_NUMERIC.match(str(value)) is not None
+
+
 def classify(values: Iterable[Any]) -> str:
     """Report the most specific shape a majority of non-blank values fit.
 
@@ -173,7 +188,7 @@ def _clean_number(text: str) -> Optional[str]:
     negated_by_brackets = bool(_PARENTHESISED_NEGATIVE.match(text))
     if not (negated_by_brackets or _NUMERIC_LIKE.match(text)):
         return None
-    cleaned = text.translate(_STRIP_FROM_NUMBERS)
+    cleaned = text.translate(_STRIP_TABLE)
     return f"-{cleaned}" if negated_by_brackets else cleaned
 
 
@@ -479,7 +494,7 @@ class ColumnTally:
         # pattern is a subset of the numeric one. Matched unstripped, as
         # classify always matched it; the pattern allows the surrounding
         # whitespace itself.
-        if _BARE_NUMERIC.match(str(reading.raw)) is not None:
+        if is_bare_numeric(reading.raw):
             self.bare_numeric += 1
             if not in_vocabulary:
                 self.number_outside_vocabulary_seen = True

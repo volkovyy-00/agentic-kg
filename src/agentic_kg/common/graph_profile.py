@@ -23,12 +23,19 @@ against schema.py will find that branch and wonder why it is unhandled.
 """
 
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 from .cypher_identifiers import quote
 from .neo4j_for_adk import get_graphdb
 from .tool_result import is_success
+from .value_types import (
+    CONVERTED,
+    FLOAT,
+    STRIP_FROM_NUMBERS,
+    coerce,
+    is_bare_numeric,
+    is_blank,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,39 +63,105 @@ MAX_PROFILED_PATTERNS = 25
 
 _NUMERIC_TYPES = {"INTEGER", "FLOAT"}
 
-# Spots values that *look* numeric while being stored as text -- which is where
-# silent lexicographic ordering comes from ('9' sorts after '30').
-#
-# Two patterns, not one, because the two answer different questions. Text that
-# is a bare numeral casts directly: toFloat('42.73') is 42.73. Text carrying a
-# currency symbol or thousands separator does NOT -- toFloat('$42.73') and
-# toFloat('1,234') both return null, silently, and an aggregation over nulls
-# reports a confident wrong number. Collapsing both into one "yes" told the
-# agent (prompt rule 6) that a plain cast was safe when it was not.
-#
-# The currency class is still explicit rather than "any non-digit". A wildcard
-# prefix matches ordinary identifier shapes -- 'a1', 'x9', 'Q3', '#5' all pass
-# -- and flagging an identifier column as numeric would tell the agent to cast
-# a key to a number.
-_BARE_NUMERIC = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
-_NUMERIC_LIKE = re.compile(
-    r"^\s*[$€£¥₹]?\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$"
-)
-
 
 def _numeric_like_state(values) -> str:
-    """Classify string values as directly castable, castable after cleaning, or not.
+    """Say whether the listed string values are numbers, by the loader's own rule.
 
-    Returns one of "yes" / "numeric_after_cleaning" / "no". Callers decide what
-    an absent or untrustworthy `values` means -- this only reads what it is given.
+    Returns "yes" (every non-blank value is a bare numeral), "numeric_after_cleaning" (every one converts,
+    and some carry a currency symbol, a thousands separator or accounting brackets) or "no". What converts
+    is coerce(v, FLOAT)'s answer and what is bare is is_bare_numeric's, so what the profile tells the agent
+    cannot drift from what the loader does; an earlier copy of the patterns here called '-$42.00' and
+    '(42.00)' text while the loader converted them.
+
+    It judges only the values it is handed. The library lists at most ten distinct values, each cut to 50
+    characters (neo4j_graphrag/schema.py), so on a "partial" property the verdict covers those ten, and
+    prompt rule 6 has the agent run NUMERIC_CAST_GAP_CHECK for the rest.
+
+    Blanks are ignored, after the text-only guard: an untyped property stores a blank cell as "", and one of
+    them must not cost a money column its verdict. A column of nothing but blanks has no number in it and
+    reads "no". Every non-blank value must convert, not a majority: rule 6 tells the agent to cast, and a
+    cast over a value the converter refuses can give a wrong number rather than null.
     """
     if not values or not all(isinstance(v, str) for v in values):
         return "no"
-    if all(_BARE_NUMERIC.match(v) for v in values):
+    present = [v for v in values if not is_blank(v)]
+    if not present:
+        return "no"
+    if not all(coerce(v, FLOAT)[1] == CONVERTED for v in present):
+        return "no"
+    if all(is_bare_numeric(v) for v in present):
         return "yes"
-    if all(_NUMERIC_LIKE.match(v) for v in values):
-        return "numeric_after_cleaning"
-    return "no"
+    return "numeric_after_cleaning"
+
+
+# Python whitespace that Neo4j's trim() leaves in place. coerce strips all 29 characters str.isspace()
+# accepts; trim() removes 25 of them. Measured on Neo4j 5.26 and on Aura 5.27, and pinned by
+# tests/integration/test_numeric_cast_integration.py. That test catches a Neo4j upgrade that changes
+# trim() when the integration suite is run, on the image it runs against; unit tests and CI do not.
+_NEO4J_TRIM_MISSES = "\x85\xa0\u2007\u202f"
+
+
+def _cypher_char(char: str) -> str:
+    """One character as a single-quoted Cypher string literal that is safe to print in a prompt.
+
+    A visible character, and the ASCII space, is written as itself. Any other character, whitespace or
+    not, is written as the six-character escape \\uXXXX, which Cypher decodes: a raw no-break space in
+    a prompt is invisible to a reader and can be normalised away on the way to the model.
+    """
+    if char in "'\\":
+        raise ValueError(f"{char!r} cannot be quoted into the cast's character list")
+    if char.isprintable():
+        return f"'{char}'"
+    return f"'\\u{ord(char):04X}'"
+
+
+def _numeric_cast() -> str:
+    symbols = [c for c in STRIP_FROM_NUMBERS if c != "("] + list(_NEO4J_TRIM_MISSES)
+    listed = ", ".join(_cypher_char(c) for c in symbols)
+    return (
+        "toFloat(trim(reduce(text = replace(v, '(', '-'), "
+        f"symbol IN [{listed}] | replace(text, symbol, ''))))"
+    )
+
+
+NUMERIC_CAST = _numeric_cast()
+"""The Cypher expression prompt rule 6 gives the agent to read a text property as a number.
+
+Written over a variable named v; the agent puts the property in its place. Built from value_types'
+STRIP_FROM_NUMBERS, so a symbol the converter learns reaches the prompt with no other edit.
+
+The contract: for every value coerce(v, FLOAT) converts, this gives coerce's number, and for a blank it
+gives null, which sum(), avg() and count() skip. Nothing is promised for a value coerce refuses:
+'-\\u00a042' becomes -42 and '1,23' becomes 123 here. That is harmless on a property whose listed values
+all convert, which is the only kind rule 6 sends the agent to cast.
+
+- '(' becomes '-'. On such a property a bracket can only be an accounting negative.
+- trim() runs after the characters are stripped, not before: in '$\\u1680-42' the symbol hides the
+  padding from trim() until it is gone. Trimming first got 675 of 3,533 converted values wrong.
+- The last four characters in the list are _NEO4J_TRIM_MISSES. A bare toFloat's whitespace handling
+  differs between Neo4j versions (5.26 nulls '\\u200342', Aura 5.27 reads 42), which is why the agent never
+  relies on it.
+
+Known exceptions, also in docs/spec.md: a value the profile did not list (a "partial" property) can be one
+coerce refuses, and NUMERIC_CAST_GAP_CHECK finds it only if it casts to null, NaN or an infinity
+('N/A', 'NaN', 'Infinity'); non-ASCII decimal digits
+convert in Python and cast to null here; a value longer than 50 characters was judged on its first 50.
+"""
+
+NUMERIC_CAST_GAP_CHECK = (
+    f"WHERE trim(v) <> '' AND NOT coalesce(abs({NUMERIC_CAST}) < toFloat('Infinity'), false) "
+    "RETURN count(*) AS uncast, collect(DISTINCT v)[..5] AS examples"
+)
+"""The check rule 6 has the agent run on a "partial" property before relying on NUMERIC_CAST.
+
+Follows the agent's own MATCH ... WITH x.property AS v. Counts the values that are not blank but do not
+cast to a finite number, and returns up to five different ones. That is null ('N/A') and also what
+toFloat reads although coerce refuses it: 'NaN' and 'Infinity', either of which turns a sum or a max
+into NaN or Infinity. The comparison with Infinity is false for NaN and for both infinities, and null for
+null, which coalesce turns into a count. A value that is only a no-break space is counted, because trim() leaves
+it; that false positive is harmless, since the agent looks and reports it. A value that casts to a wrong
+number ('1,23') is not found; see NUMERIC_CAST.
+"""
 
 
 def annotate_property(

@@ -196,6 +196,13 @@ property carries always-present tri-state annotations — completeness, uniquene
 The profile is itself budgeted to 25 entities and 25 patterns, and what is cut is **marked**
 `not_profiled` rather than omitted. It never raises; per-entity failures isolate to `profile_error`.
 
+`numeric_like` uses the loader's own rule (`value_types.coerce`, blanks ignored) over the values the profile
+lists — at most ten distinct values, each cut to 50 characters. Prompt rule 6 gives one generated cast,
+`NUMERIC_CAST`, for both numeric states, and on a `partial` property has the agent first count the values that
+cast cannot read as a number. Because `numeric_like` also sets `partitioned_by`'s `values_are`, a relationship
+property holding signed or bracketed amounts, or a blank cell, now reads as numbers, so the agent declares a
+partition interpretation before an aggregating query, the gap check included (`'none'` clears it).
+
 The subtlest thing it guards is **grain**: a relationship type spanning several `(start, end)` label
 pairs has pooled statistics that describe no actual pattern, so degree is keyed per triple and each
 `partitioned_by` entry carries a `distribution_covers` qualifier — `this_pattern` or
@@ -290,10 +297,11 @@ bundled furniture example must keep working throughout.
   `check_construction_plan_consistency` refuses to let be typed since they're matched as raw CSV text. A
   temporal type takes only its own ISO shape (`YYYY-MM-DD`, then optionally `T` or one space and a time with up
   to nine fractional digits, and `Z` or `±HH:MM` up to 18:00 for `datetime` only); any other value is counted
-  and cleared. §4's `numeric_like` annotation therefore still matters for undeclared columns
-  — and now duplicates logic: `graph_profile.py`'s own numeric-pattern regexes have diverged from
-  `value_types.py`'s (the construction path handles negative currency written either way round and
-  accounting-parenthesis negatives; the profile's copy does not), a gap #13 knowingly left unclosed.
+  and cleared. §4's `numeric_like` annotation therefore still matters for undeclared columns. It uses the loader's rule, with
+  three known exceptions: on a `partial` property a value the profile did not list can be one the loader refuses,
+  and rule 6's gap check finds it only if it casts to null, NaN or an infinity (`1,23` casts to 123);
+  non-ASCII decimal digits (`٤٢`, `４２`, `४२`) convert in Python and cast to null in Neo4j, silently on a `complete` property; and a value
+  longer than 50 characters is judged on its first 50.
 - Model configuration drifts from documentation: the models named in `CHANGELOG.md` 0.4.0
   exist only in an untracked `.env`. A fresh clone runs on the `gpt-4o`/`gpt-4o-mini` defaults in
   `.env.example` and `common/config.py`.

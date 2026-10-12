@@ -16,6 +16,7 @@ from agentic_kg.common.value_types import (
     BOOLEAN,
     BOOLEAN_LIKE,
     CONVERTED,
+    CURRENCY_SYMBOLS,
     DATE,
     DATE_LIKE,
     DATETIME,
@@ -25,12 +26,14 @@ from agentic_kg.common.value_types import (
     LOCALDATETIME,
     LOCALDATETIME_LIKE,
     NUMERIC_AFTER_CLEANING,
+    STRIP_FROM_NUMBERS,
     TEXT,
     UNCONVERTIBLE,
     ColumnTally,
     classify,
     coerce,
     has_fractional_part,
+    is_bare_numeric,
     is_blank,
     parse_temporal,
 )
@@ -595,3 +598,29 @@ def test_a_tally_parses_each_value_once(monkeypatch):
     monkeypatch.setattr(value_types, "_read", counting_read)
     ColumnTally.of(["2025-03-04", "42", "yes", "", None])
     assert calls == ["2025-03-04", "42", "yes"]
+
+
+@pytest.mark.parametrize("value", ["42", "-7", "+7", "  42  ", "0.5", "42.0", "\xa042"])
+def test_is_bare_numeric_accepts_a_plain_numeral(value):
+    assert is_bare_numeric(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["$42", "1,234", "(42)", "42.", ".5", "1e5", "abc", "", "4 2", "- 42", None],
+)
+def test_is_bare_numeric_refuses_anything_else(value):
+    assert not is_bare_numeric(value)
+
+
+def test_the_strip_set_is_the_currency_symbols_then_separators_brackets_and_space():
+    assert STRIP_FROM_NUMBERS == CURRENCY_SYMBOLS + ",() "
+
+
+@pytest.mark.parametrize("symbol", list(CURRENCY_SYMBOLS))
+def test_every_currency_symbol_converts_on_either_side_of_the_sign(symbol):
+    """The currency pattern is built from CURRENCY_SYMBOLS, so a symbol added there converts here."""
+    assert coerce(f"{symbol}5", FLOAT) == (5.0, CONVERTED)
+    assert coerce(f"-{symbol}5", FLOAT) == (-5.0, CONVERTED)
+    assert coerce(f"{symbol}-5", FLOAT) == (-5.0, CONVERTED)
+    assert coerce(f"({symbol}5)", FLOAT) == (-5.0, CONVERTED)
