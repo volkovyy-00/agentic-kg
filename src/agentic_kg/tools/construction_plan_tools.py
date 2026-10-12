@@ -256,15 +256,20 @@ def propose_node_construction(
     if collision is not None:
         return tool_error(collision)
 
-    # Exact header match, as the build does (KG-50).
-    column_error = check_columns_in_header(approved_file, [unique_column_name])
+    # Exact header match, as the build does (KG-50), for the key and every
+    # property in one read (KG-57): the build skips a property the file lacks
+    # without a word. An unreadable list is left to approval, which refuses it.
+    properties = declared_properties(node_construction_rule)
+    column_error = check_columns_in_header(
+        approved_file, [unique_column_name, *(properties or [])]
+    )
     if column_error is not None:
         return column_error
 
     # Then the key's own values, and the properties of a repeating key (KG-48).
     # After the names and the header, so a bad name never costs a data read.
     key_summary, key_error = summarize_node_key(
-        approved_file, unique_column_name, declared_properties(node_construction_rule)
+        approved_file, unique_column_name, properties
     )
     if key_error is not None:
         return key_error
@@ -496,9 +501,15 @@ def propose_relationship_construction(
     if collision is not None:
         return tool_error(collision)
 
-    # Exact header match, as the build does (KG-50), for both join columns at once.
+    # Exact header match, as the build does (KG-50), for both join columns and
+    # every property at once (KG-57): see propose_node_construction.
     column_error = check_columns_in_header(
-        approved_file, [from_node_column, to_node_column]
+        approved_file,
+        [
+            from_node_column,
+            to_node_column,
+            *(declared_properties(relationship_construction_rule) or []),
+        ],
     )
     if column_error is not None:
         return column_error

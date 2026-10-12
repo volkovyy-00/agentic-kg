@@ -210,7 +210,9 @@ def test_node_named_like_a_relationship_is_refused_and_the_relationship_stays(
 def test_a_refused_collision_costs_no_file_read(ctx, monkeypatch):
     """The collision is found from the plan alone, before the header and key reads."""
     checked = []
-    _only_these_columns_are_headers(monkeypatch, {"supplier_id", "product_id"}, checked)
+    _only_these_columns_are_headers(
+        monkeypatch, {"supplier_id", "product_id", "name"}, checked
+    )
     _propose_supplier_node(ctx)
     checked.clear()
 
