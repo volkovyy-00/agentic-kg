@@ -160,8 +160,10 @@ class _FakeContainer:
 def test_the_health_check_reports_a_database_that_stopped_or_ran_out_of_memory(
     state, reason
 ):
+    container = _FakeContainer(state)
+
     with pytest.raises(pytest.fail.Exception, match=reason):
-        check_container_health(_FakeContainer(state))
+        check_container_health(container)
 
 
 def test_the_health_check_passes_a_running_database():
