@@ -68,9 +68,7 @@ SUPPLIED_BY_RULE = {
 }
 
 
-def test_every_graph_tool_works_after_a_close_and_recover_cycle(
-    neo4j_graph_with_apoc, caplog
-):
+def test_every_graph_tool_works_after_a_close_and_recover_cycle(neo4j_graph, caplog):
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
     import agentic_kg.tools.kg_construction_tools as kg
@@ -83,8 +81,8 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
     assert kg.import_nodes(PART_RULE)["status"] == "success"
     assert kg.import_relationships(SUPPLIED_BY_RULE)["status"] == "success"
 
-    # The profile cache is module-level and outlives a container, so a stale
-    # entry from an earlier test could mask a broken profiling path.
+    # Cleared again after the loads, so the steps below compute the profile
+    # rather than read one the loads may have left in the cache.
     graph_profile.reset_cache()
 
     # Each step below opens with a break -- exactly what neo4j_is_ready does on
@@ -130,7 +128,7 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
         neo4j_for_adk.close_graphdb()
         assert kg.import_relationships(SUPPLIED_BY_RULE)["status"] == "success"
 
-        rels = neo4j_graph_with_apoc.send_query(
+        rels = neo4j_graph.send_query(
             "MATCH (:Part)-[r:SUPPLIED_BY]->(:Supplier) RETURN count(r) AS c"
         )
         assert rels["records"][0]["c"] > 0
@@ -141,9 +139,6 @@ def test_every_graph_tool_works_after_a_close_and_recover_cycle(
 
 
 def test_repeated_close_and_recover_cycles_keep_working(neo4j_graph, caplog):
-    """Uses the plain fixture, not the APOC one its sibling needs: this test
-    only runs `RETURN 1`, so paying for a plugin install would add container
-    boot time to every suite run for nothing."""
     import agentic_kg.common.neo4j_for_adk as neo4j_for_adk
     import agentic_kg.tools.cypher_tools as cypher_tools
 

@@ -77,8 +77,8 @@ def _records(result):
 
 
 @pytest.fixture
-def numbers_source(neo4j_graph_with_apoc, tmp_path, monkeypatch):
-    """Point SOURCE_URI at two CSVs. Depends on neo4j_graph_with_apoc so it runs after that fixture sets
+def numbers_source(neo4j_graph, tmp_path, monkeypatch):
+    """Point SOURCE_URI at two CSVs. Depends on neo4j_graph so it runs after that fixture sets
     SOURCE_URI to data/bom, and wins."""
     _write_csv(
         tmp_path / "ledger.csv",
@@ -95,7 +95,7 @@ def numbers_source(neo4j_graph_with_apoc, tmp_path, monkeypatch):
     )
     monkeypatch.setenv("SOURCE_URI", str(tmp_path))
     reset_settings()
-    yield neo4j_graph_with_apoc
+    yield neo4j_graph
     reset_settings()
 
 

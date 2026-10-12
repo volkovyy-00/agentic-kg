@@ -19,81 +19,54 @@ except Exception as e:  # pragma: no cover
     pytest.skip(f"Docker not available/running: {e}", allow_module_level=True)
 
 
-@pytest.fixture(scope="module")
-def graphdb_against_container():
-    from testcontainers.neo4j import Neo4jContainer
+@pytest.fixture
+def graphdb_against_container(neo4j_graph):
+    """The shared test database, holding the shape fixture below, and graph_profile.
 
+    Rebuilt before each test, on a database the shared fixture has just emptied: no test relies on
+    what an earlier one left, even within this file. The shared container carries APOC, which every
+    get_structured_schema path needs (CALL apoc.meta.data / apoc.meta.graph).
+    """
     from agentic_kg.common import graph_profile
-    from agentic_kg.common.neo4j_for_adk import Neo4jForADK
 
-    # APOC is mandatory, not optional. Every get_structured_schema path is
-    # APOC-only -- NODE_PROPERTIES_QUERY, REL_PROPERTIES_QUERY, REL_QUERY all
-    # open with CALL apoc.meta.data and SCHEMA_COUNTS_QUERY uses
-    # apoc.meta.graph (neo4j_graphrag/schema.py:30-69). Stock neo4j:5 ships no
-    # plugins, so without this every test in this file dies with
-    # Neo.ClientError.Procedure.ProcedureNotFound rather than skipping.
-    container = Neo4jContainer(image="neo4j:5").with_env("NEO4J_PLUGINS", '["apoc"]')
-    with container:
-        url = container.get_connection_url()
-        # testcontainers 4.12 has no get_auth(); username/password are set in
-        # __init__ (testcontainers/neo4j/__init__.py:51-52) and honour
-        # NEO4J_USER / NEO4J_PASSWORD, which a hardcoded fallback would ignore.
-        auth = (container.username, container.password)
+    db = neo4j_graph
+    # Degrees are deliberately UNEVEN. A fixture where every degree is 1
+    # cannot distinguish per-pattern keying from pooled keying, because
+    # both produce identical numbers -- it would look like a passing test
+    # while proving nothing.
+    #
+    # Ground truth this builds:
+    #   Alpha-[LINKS]->Beta          edges=3  start={a1:2, m1:1}  end={b1:2, b2:1}
+    #   Alpha-[LINKS]->Gamma         edges=1  start={a1:1}        end={g1:1}
+    #   Alpha-[LINKS]->Legal Entity  edges=1  start={m1:1}        end={le1:1}
+    #   Alpha-[FOLLOWS]->Alpha       edges=2  start={a1:1, a2:1}  end={a2:1, m1:1}
+    # LINKS totals 5 edges across three Alpha-rooted patterns, so a pooled
+    # implementation reports edges=5 where a correct one reports 3.
+    #
+    # Note m1 carries :Alpha AND :Archived, so the enriched schema also
+    # emits Archived-rooted patterns (Archived->Beta, Archived->Legal
+    # Entity, Alpha->Archived FOLLOWS). Seven patterns total, not four.
+    # That is correct -- a multi-label node genuinely participates in
+    # patterns under each label -- and it is why assertions below match on
+    # named patterns rather than on list length or position.
+    db.send_query("""
+        CREATE (a1:Alpha {code: 'a1', `order id`: 'x'})
+        CREATE (a2:Alpha {code: 'a2'})
+        CREATE (m:Alpha:Archived {code: 'm1'})
+        CREATE (b1:Beta {code: 'b1'})
+        CREATE (b2:Beta {code: 'b2'})
+        CREATE (g1:Gamma {code: 'g1'})
+        CREATE (le:`Legal Entity` {code: 'le1'})
+        CREATE (a1)-[:LINKS {kind: 'x'}]->(b1)
+        CREATE (a1)-[:LINKS {kind: 'x'}]->(b2)
+        CREATE (m)-[:LINKS {kind: 'y'}]->(b1)
+        CREATE (a1)-[:LINKS {kind: 'y'}]->(g1)
+        CREATE (m)-[:LINKS {kind: 'x'}]->(le)
+        CREATE (a1)-[:FOLLOWS]->(a2)
+        CREATE (a2)-[:FOLLOWS]->(m)
+    """)
 
-        from neo4j import GraphDatabase
-
-        driver = GraphDatabase.driver(url, auth=auth)
-
-        db = Neo4jForADK.__new__(Neo4jForADK)
-        db._driver = driver
-        db._neo4j_config = type("Cfg", (), {"database": "neo4j"})()
-        db.write_count = 0
-
-        original = graph_profile.graphdb
-        graph_profile.graphdb = db
-        graph_profile.reset_cache()
-
-        # Degrees are deliberately UNEVEN. A fixture where every degree is 1
-        # cannot distinguish per-pattern keying from pooled keying, because
-        # both produce identical numbers -- it would look like a passing test
-        # while proving nothing.
-        #
-        # Ground truth this builds:
-        #   Alpha-[LINKS]->Beta          edges=3  start={a1:2, m1:1}  end={b1:2, b2:1}
-        #   Alpha-[LINKS]->Gamma         edges=1  start={a1:1}        end={g1:1}
-        #   Alpha-[LINKS]->Legal Entity  edges=1  start={m1:1}        end={le1:1}
-        #   Alpha-[FOLLOWS]->Alpha       edges=2  start={a1:1, a2:1}  end={a2:1, m1:1}
-        # LINKS totals 5 edges across three Alpha-rooted patterns, so a pooled
-        # implementation reports edges=5 where a correct one reports 3.
-        #
-        # Note m1 carries :Alpha AND :Archived, so the enriched schema also
-        # emits Archived-rooted patterns (Archived->Beta, Archived->Legal
-        # Entity, Alpha->Archived FOLLOWS). Seven patterns total, not four.
-        # That is correct -- a multi-label node genuinely participates in
-        # patterns under each label -- and it is why assertions below match on
-        # named patterns rather than on list length or position.
-        db.send_query("""
-            CREATE (a1:Alpha {code: 'a1', `order id`: 'x'})
-            CREATE (a2:Alpha {code: 'a2'})
-            CREATE (m:Alpha:Archived {code: 'm1'})
-            CREATE (b1:Beta {code: 'b1'})
-            CREATE (b2:Beta {code: 'b2'})
-            CREATE (g1:Gamma {code: 'g1'})
-            CREATE (le:`Legal Entity` {code: 'le1'})
-            CREATE (a1)-[:LINKS {kind: 'x'}]->(b1)
-            CREATE (a1)-[:LINKS {kind: 'x'}]->(b2)
-            CREATE (m)-[:LINKS {kind: 'y'}]->(b1)
-            CREATE (a1)-[:LINKS {kind: 'y'}]->(g1)
-            CREATE (m)-[:LINKS {kind: 'x'}]->(le)
-            CREATE (a1)-[:FOLLOWS]->(a2)
-            CREATE (a2)-[:FOLLOWS]->(m)
-        """)
-
-        yield db, graph_profile
-
-        graph_profile.graphdb = original
-        graph_profile.reset_cache()
-        driver.close()
+    return db, graph_profile
 
 
 def _schema_for(db):
@@ -326,7 +299,9 @@ def test_pattern_cap_engages_and_marks_rather_than_drops(
         assert entry["pattern"]  # still identifiable, just unprofiled
 
 
-def test_one_failing_entity_degrades_only_that_entry(graphdb_against_container):
+def test_one_failing_entity_degrades_only_that_entry(
+    graphdb_against_container, monkeypatch
+):
     """Spec assertion: a failure profiling one entity leaves the rest intact.
 
     Against a real driver rather than a fake, because the unit-level version of
@@ -340,11 +315,9 @@ def test_one_failing_entity_degrades_only_that_entry(graphdb_against_container):
             return {"status": "error", "error_message": "simulated failure"}
         return original(query, parameters, max_rows)
 
-    db.send_read_query = flaky
-    try:
-        profile = graph_profile.build_profile(_schema_for(db))
-    finally:
-        db.send_read_query = original
+    # monkeypatch, not a bare assignment: db is the shared client every later test uses.
+    monkeypatch.setattr(db, "send_read_query", flaky)
+    profile = graph_profile.build_profile(_schema_for(db))
 
     assert profile["properties"]["Legal Entity"] == "profile_error"
     assert profile["properties"]["Alpha"] != "profile_error"
