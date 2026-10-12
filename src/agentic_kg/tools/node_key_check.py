@@ -69,9 +69,10 @@ def summarize_node_key(file_path: str, key: str, properties: Optional[List[str]]
     (`declared_properties`); the agreement check is then skipped and the key's own
     values are still judged.
 
-    A property the header lacks is skipped, not refused: the loader writes nothing
-    for it, so it cannot lose data. The key itself and a repeated name are not read
-    as properties.
+    A property the header lacks is skipped, not refused. Through the propose tools
+    it cannot arrive -- they refuse it from the header first (KG-57) -- so the skip
+    is a safety net, and the loader would write nothing for it anyway. The key
+    itself and a repeated name are not read as properties.
     """
     column, error = summarize_column(file_path, key)
     if error is not None:

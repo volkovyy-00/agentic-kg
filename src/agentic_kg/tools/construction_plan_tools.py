@@ -188,10 +188,11 @@ def propose_node_construction(
     as it is: choose another label. Proposing a node under a label another node
     already has still replaces that node.
 
-    The unique column must be exactly one of the approved file's header names,
-    letter for letter and in the same case. If it is not, the proposal is refused
-    and the error lists the file's headers: choose one of them rather than trying
-    another spelling.
+    The unique column, and every property, must each be exactly one of the
+    approved file's header names, letter for letter and in the same case. If any
+    is not, the proposal is refused and the error names each missing name and
+    lists the file's headers: choose from them rather than trying another
+    spelling.
 
     The unique column must have a value in every row. It may repeat across rows
     only if the rows sharing a value agree on every property you list for the node,
@@ -412,10 +413,12 @@ def propose_relationship_construction(
     choose another type. Proposing a relationship under a type another
     relationship already has still replaces that relationship.
 
-    Both join columns must be exactly header names of the approved file, letter
-    for letter and in the same case. If either is not, the proposal is refused and
-    the error names each missing column and lists the file's headers: choose from
-    that list rather than trying another spelling.
+    Both join columns, and every property, must be exactly header names of the
+    approved file, letter for letter and in the same case. If any is not, the
+    proposal is refused and the error names each missing column and lists the
+    file's headers: choose from that list rather than trying another spelling.
+    from_node_property and to_node_property name node properties, not columns of
+    this file, and are not checked against it.
 
     Args:
         approved_file: The approved file to propose a relationship construction for
