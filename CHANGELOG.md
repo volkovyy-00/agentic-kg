@@ -11,7 +11,7 @@ There is no `[Unreleased]` section.
 ## [0.12.3] - 2026-10-11
 
 ### Fixed
-- **The query agent reads amounts in text columns as the loader does (#NN, KG-32)**: the graph profile called a
+- **The query agent reads amounts in text columns as the loader does (#92, KG-32)**: the graph profile called a
   text column holding `-$42.00`, `(42.00)` or a single blank cell "not numeric", so the query agent compared
   amounts as text, and the cleaning it was told to do turned `(42.00)` into a value Neo4j silently left out of a
   sum. The profile now uses the loader's own rule, and the query agent is given one cast that produces the
