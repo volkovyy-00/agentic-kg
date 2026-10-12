@@ -208,10 +208,9 @@ class Neo4jForADK:
     # noted below never run it, so None is a state real instances are read in.
     _driver: Optional[Driver] = None
     _neo4j_config: Optional[Neo4jConfig] = None
-    # Class-level, not set in __init__: two test fixtures build instances that
-    # never run __init__ (a stubbed __init__ in tests/unit/test_neo4j_for_adk.py
-    # and Neo4jForADK.__new__ in tests/integration/test_graph_profile_shapes.py).
-    # A class default makes both read as open.
+    # Class-level, not set in __init__: tests/unit/test_neo4j_for_adk.py builds
+    # instances that never run __init__ (a stubbed __init__, and
+    # Neo4jForADK.__new__ in unset_db). A class default makes them read as open.
     _closed = False
     # Set when a rebuild happens, cleared by the first query that succeeds
     # afterwards. Does not expire: a heal seen only through get_driver stays
@@ -281,8 +280,8 @@ class Neo4jForADK:
         """Rebuild the driver if close() has run. No-op otherwise.
 
         Config is re-derived from settings rather than reusing
-        self._neo4j_config: tests/integration/conftest.py points NEO4J_DSN at a
-        test container and calls reset_settings() before closing, and reusing
+        self._neo4j_config: tests/integration/shared_database.py points NEO4J_DSN at
+        the test container and calls reset_settings() before closing, and reusing
         the captured config would silently reconnect to the old database. In
         production this is a no-op -- get_settings() is a cached singleton that
         production code never resets.

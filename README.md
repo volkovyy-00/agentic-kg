@@ -67,7 +67,7 @@ find src -path '*/.adk/session.db*' -type f -delete
 
 ```bash
 uv run pytest -q                # unit tests, fast, no external deps
-uv run pytest -q -m integration # integration tests, need Docker (spins up Neo4j via Testcontainers)
+uv run pytest -m integration -rs # integration tests, need Docker (one shared Neo4j via Testcontainers)
 ```
 
 If you use [colima](https://github.com/abiosoft/colima) instead of Docker Desktop, the integration run
@@ -77,6 +77,9 @@ needs two extra env vars first:
 export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
 export TESTCONTAINERS_RYUK_DISABLED=true
 ```
+
+With Ryuk disabled, a run you kill by hand can leave its one Neo4j container running; `docker ps` shows it
+and `docker rm -f <id>` removes it.
 
 ## Roadmap
 

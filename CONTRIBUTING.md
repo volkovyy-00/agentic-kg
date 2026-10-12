@@ -136,7 +136,7 @@ fill it in whenever the PR settles something that isn't obvious from the code.
 
 ```bash
 uv run pytest -q                 # unit tests — fast, no external deps; also runs in CI on every push/PR
-uv run pytest -q -m integration  # integration tests — need Docker (Testcontainers); skip cleanly without it
+uv run pytest -m integration -rs # integration tests — need Docker (Testcontainers); skip cleanly without it
 uv run ruff check .               # lint — run before every PR
 uv run ruff format --check .      # formatting check — run before every PR; drop --check to fix locally
 uv run pyright                    # static type check — run before every PR; must report 0 errors, CI fails otherwise
