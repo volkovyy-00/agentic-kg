@@ -347,6 +347,42 @@ def test_the_stop_check_reports_a_join_on_a_multi_valued_property(
     assert "more than one value per node" in delta["feedback"]
 
 
+def _match_an_end_off_its_key_in_its_own_file(plan):
+    """Reading is built from readings.csv, which TAKEN_AT reads, yet its end
+    finds the Reading by plot_id rather than its key, reading_id (KG-60)."""
+    plan["Reading"] = {
+        "construction_type": "node",
+        "source_file": "readings.csv",
+        "label": "Reading",
+        "unique_column_name": "reading_id",
+        "properties": ["plot_id"],
+    }
+    plan["TAKEN_AT"] = {
+        "construction_type": "relationship",
+        "relationship_type": "TAKEN_AT",
+        "source_file": "readings.csv",
+        "from_node_label": "Reading",
+        "from_node_column": "plot_id",
+        "to_node_label": "Plot",
+        "to_node_column": "plot_label",
+    }
+
+
+def test_the_stop_check_reports_an_end_matched_off_its_key_in_its_own_file(
+    stranding_plan_state,
+):
+    _match_an_end_off_its_key_in_its_own_file(
+        stranding_plan_state["proposed_construction_plan"]
+    )
+    stranding_plan_state["feedback"] = "valid"
+    events = _run(stranding_plan_state)
+
+    feedback = events[0].actions.state_delta["feedback"]
+    assert "TAKEN_AT: the from end matches 'Reading.plot_id'" in feedback
+    assert "approv" not in feedback.lower()
+    assert "ready" not in feedback.lower()
+
+
 def test_the_joined_property_wording_carries_no_approval_framing(
     stranding_plan_state,
 ):

@@ -1403,11 +1403,19 @@ def empty_source(monkeypatch):
 
 
 def _plan_joining_on_a_property_that_cannot_be_read():
-    """Assembly's source is never written, so the retained property it joins on
-    cannot be checked: the check must say so, not refuse."""
+    """Assembly's source is never written, so the retained property a product
+    row joins on cannot be checked: the check must say so, not refuse.
+
+    The relationship reads products.csv: read from assemblies.csv, Assembly's own
+    file, an end matched off its key is refused outright (KG-60)."""
     plan = _consistent_plan()
-    plan["ASSEMBLY_OF"]["to_node_label"] = "Assembly"
-    plan["ASSEMBLY_OF"]["to_node_column"] = "product_id"  # a property, not the key
+    plan["ASSEMBLY_OF"].update(
+        source_file="products.csv",
+        from_node_label="Product",
+        from_node_column="product_id",
+        to_node_label="Assembly",
+        to_node_column="product_id",  # a property, not the key
+    )
     return plan
 
 
@@ -2436,7 +2444,8 @@ def test_the_batch_key_list_names_the_matched_properties():
 
 def _item_plan(drop=(), **rel_overrides):
     """Item keyed by itemID; SUPERSEDED_BY reads supersededBy and matches it on
-    Item.itemID. `drop` removes relationship keys; overrides patch them."""
+    Item.itemID. `drop` removes relationship keys; overrides then patch them, so
+    an override of a dropped key is kept."""
     rel = {
         "construction_type": "relationship",
         "source_file": "items.csv",
@@ -2449,9 +2458,9 @@ def _item_plan(drop=(), **rel_overrides):
         "properties": [],
         "property_types": {},
     }
-    rel.update(rel_overrides)
     for key in drop:
         rel.pop(key, None)
+    rel.update(rel_overrides)
     return {
         "Item": {
             "construction_type": "node",
@@ -2501,7 +2510,11 @@ def test_identical_ends_on_the_key_are_refused(drop, overrides):
 
 
 def test_a_rule_differing_only_by_the_matched_property_is_accepted():
-    plan = _item_plan(to_node_column="itemID", to_node_property="title")
+    # Read from another file: from items.csv, Item's own, matching Item.title
+    # instead of its key is refused outright (KG-60).
+    plan = _item_plan(
+        to_node_column="itemID", to_node_property="title", source_file="links.csv"
+    )
     assert check_construction_plan_consistency(plan) == []
 
 

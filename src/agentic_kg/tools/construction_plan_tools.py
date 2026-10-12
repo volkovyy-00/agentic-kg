@@ -4,6 +4,7 @@ from typing import Any, Optional
 from google.adk.tools import ToolContext
 
 from agentic_kg.common.cypher_identifiers import InvalidIdentifier
+from agentic_kg.common.file_source import comparable_source_name
 from agentic_kg.common.neo4j_for_adk import get_graphdb
 from agentic_kg.common.session_state import SessionStateReader
 from agentic_kg.common.tool_result import tool_error, tool_success
@@ -634,10 +635,56 @@ def _can_join_on_key(end, other, key) -> bool:
     )
 
 
+def _sentence_case(text: str) -> str:
+    return f"{text[0].upper()}{text[1:]}"
+
+
+def _has_key(node_key) -> bool:
+    """A key there is something to name by: text, and not empty."""
+    return isinstance(node_key, str) and node_key != ""
+
+
+def _key_it_first(label) -> str:
+    """The fix when a node has no key: there is nothing else to name."""
+    return f"Key '{label}' by the column that identifies it first."
+
+
+def _another_column_advice(source_file, label, node_key, fields, also="") -> str:
+    """The fix when no change to the end's own fields would do: another column
+    of the file may hold the related node's key. `also` extends the sentence."""
+    return (
+        f"If another column of '{source_file}' holds the {node_key} of the "
+        f"related {label}, use that column on that end and set that end's "
+        f"{fields} to '{node_key}'{also}."
+    )
+
+
+def _same_source(relationship_file, node_file) -> bool:
+    """Both are text and name one file, spelled either way (comparable_source_name)."""
+    return (
+        isinstance(relationship_file, str)
+        and isinstance(node_file, str)
+        and comparable_source_name(relationship_file)
+        == comparable_source_name(node_file)
+    )
+
+
+def _readable_node_rule(end, nodes, unreadable):
+    """The node rule an end's label names, or None where the end cannot be
+    judged: a label or matched property that is not text, a missing rule, or an
+    unreadable one. Each of those is reported by another check already."""
+    label, prop = end.label, end.matched_property
+    if not isinstance(label, str) or not isinstance(prop, str):
+        return None
+    if label in unreadable:
+        return None
+    return nodes.get(label)
+
+
 def _either(options: list[str]) -> str:
     """'Either a, b, or c.', or 'A.' when one option is left."""
     if len(options) == 1:
-        return f"{options[0][0].upper()}{options[0][1:]}."
+        return f"{_sentence_case(options[0])}."
     last = options[-1]
     joint = ", or, " if last.startswith("if ") else ", or "
     return f"Either {', '.join(options[:-1])}{joint}{last}."
@@ -658,10 +705,8 @@ def _identical_ends(
     if not from_end.same_as(to_end):
         return None
     label, prop = from_end.label, from_end.matched_property
-    if not isinstance(label, str) or not isinstance(prop, str):
-        return None
-    node_rule = nodes.get(label)
-    if node_rule is None or label in unreadable:
+    node_rule = _readable_node_rule(from_end, nodes, unreadable)
+    if node_rule is None:
         return None
     node_key = node_rule.get("unique_column_name")
     if prop not in {node_key, *(node_rule.get("properties") or [])}:
@@ -673,13 +718,146 @@ def _identical_ends(
     )
     # As in check_endpoint: with no key there is nothing to name, so the fix
     # is keying the node first.
-    if not isinstance(node_key, str) or node_key == "":
-        return f"{problem} Key '{label}' by the column that identifies it first."
-    return (
-        f"{problem} If another column of '{source_file}' holds the {node_key} of "
-        f"the related {label}, use that column on that end and set that end's "
-        f"'from_node_property' or 'to_node_property' to '{node_key}'."
+    if not _has_key(node_key):
+        return f"{problem} {_key_it_first(label)}"
+    fields = "'from_node_property' or 'to_node_property'"
+    # In the node's own file the end left in place must match the key too, or
+    # following this advice is refused by _off_key_same_file_ends (KG-60).
+    also = (
+        f", and join the other end on '{node_key}'"
+        if prop != node_key and _same_source(source_file, node_rule.get("source_file"))
+        else ""
     )
+    advice = _another_column_advice(source_file, label, node_key, fields, also)
+    return f"{problem} {advice}"
+
+
+def _rekey_fix(end, other, node_rule, rel_key, joined_columns) -> str | None:
+    """'Key the node by the matched property', where that alone fixes the rule.
+
+    Not offered when another relationship joins the node on its current key:
+    rekeyed, that join would match off the key (refused, offering the rekey
+    back) or nothing at all. Not offered for a typed property: an identifier
+    must stay text, so the rekey would be refused in turn. When both ends are
+    on this node, the other
+    end must end up on the new key too: it already is when it matches the same
+    property, and it can be joined on it when it reads its own value's column.
+    A pointer through the old key (reportsTo holding employee IDs) could match
+    nothing once the node is keyed by something else, so no rekey is offered.
+    """
+    prop = end.matched_property
+    current_key = (end.label, node_rule.get("unique_column_name"))
+    if any(
+        joiner != rel_key
+        for joiner, _end, _other in joined_columns.get(current_key, [])
+    ):
+        return None
+    types = node_rule.get("property_types")
+    if isinstance(types, dict) and prop in types:
+        return None
+    if other.label != end.label or other.matched_property == prop:
+        return f"key '{end.label}' by '{prop}'"
+    if other.column == other.matched_property and _keeps_ends_apart(
+        other, end, column=prop, matched_property=prop
+    ):
+        return (
+            f"key '{end.label}' by '{prop}' and join the {other.side} end on "
+            f"'{prop}' too"
+        )
+    return None
+
+
+def _same_file_node_off_key(end, relationship_file, nodes, unreadable):
+    """The end's node rule when it is built from the relationship's file and the
+    end matches a property it carries other than its key; else None.
+
+    None too wherever another problem is already reported: a name that is not
+    text, a missing or unreadable node rule, a property the node does not carry.
+    """
+    if not isinstance(end.column, str):
+        return None
+    node_rule = _readable_node_rule(end, nodes, unreadable)
+    if node_rule is None:
+        return None
+    prop = end.matched_property
+    if not _same_source(relationship_file, node_rule.get("source_file")):
+        return None
+    if prop == node_rule.get("unique_column_name"):
+        return None
+    if prop not in (node_rule.get("properties") or []):
+        return None
+    return node_rule
+
+
+def _off_key_sentence(
+    end, other, node_rule, source_file, rel_key, joined_columns
+) -> str:
+    label, prop = end.label, end.matched_property
+    node_key = node_rule.get("unique_column_name")
+    lead = (
+        f"the {end.side} end matches '{label}.{prop}', but '{label}' is built "
+        f"from '{node_rule['source_file']}', the file this relationship reads"
+    )
+    if not _has_key(node_key):
+        return f"{lead}, and has no key to match on. {_key_it_first(label)}"
+    # As in check_endpoint: the column may hold the key's values under another
+    # name (supersededBy holding item IDs), so keeping it and matching the key
+    # is offered whichever column the end reads.
+    # The conditional fix goes last, where _either gives it its own clause.
+    fixes = []
+    if _can_join_on_key(end, other, node_key):
+        fixes.append(f"join the {end.side} end on '{node_key}'")
+    rekey = _rekey_fix(end, other, node_rule, rel_key, joined_columns)
+    if rekey is not None:
+        fixes.append(rekey)
+    if _keeps_ends_apart(end, other, matched_property=node_key):
+        fixes.append(
+            f"if '{end.column}' holds {label} '{node_key}' values, set "
+            f"'{end.side}_node_property' to '{node_key}'"
+        )
+    if fixes:
+        advice = _either(fixes)
+    else:
+        fields = f"'{end.side}_node_property'"
+        advice = _another_column_advice(source_file, label, node_key, fields)
+    return (
+        f"{lead}, so this end must match its key '{node_key}': any other "
+        f"property can be shared by several '{label}' nodes, linking each row "
+        f"to all of them. {advice}"
+    )
+
+
+def _off_key_same_file_ends(
+    key, from_end, to_end, source_file, nodes, unreadable, joined_columns
+) -> str | None:
+    """An end on a node built from the relationship's own file, matched off its key (KG-60).
+
+    A row of the node's own file names its node by the node's key. Any other
+    property may be shared by several of those nodes, so matching on it links
+    each row to all of them: traders' HANDLED_BY found the Order by employeeID
+    in orders.csv and matched 88912 times from 830 rows. A property unique in
+    the data is refused too -- the check is structural, and keying the node by
+    that property is the fix when it really is unique (node_key_check refuses
+    the rekey when it is not).
+
+    Only same-file ends: a relationship from another file may match a shared
+    property on purpose (one employee row linking all of its orders). Called
+    only when _identical_ends found nothing, so an identical pair gets that
+    refusal alone. One line per relationship, naming each end.
+    """
+    sentences = []
+    for end, other in ((from_end, to_end), (to_end, from_end)):
+        node_rule = _same_file_node_off_key(end, source_file, nodes, unreadable)
+        if node_rule is not None:
+            sentences.append(
+                _off_key_sentence(
+                    end, other, node_rule, source_file, key, joined_columns
+                )
+            )
+    if not sentences:
+        return None
+    rest = [_sentence_case(sentence) for sentence in sentences[1:]]
+    return " ".join([f"{key}: {sentences[0]}", *rest])
 
 
 def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
@@ -778,7 +956,7 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
         # both ends are already the same: they would stay the same. A node
         # rule with no key gets no key-based fix, which could only name 'None';
         # keying it is then the fix.
-        has_key = isinstance(unique_column, str) and unique_column != ""
+        has_key = _has_key(unique_column)
         rekey = [] if has_key and end.same_as(other) else [f"key '{label}' by '{prop}'"]
         match_on_key = has_key and _keeps_ends_apart(
             end, other, matched_property=unique_column
@@ -844,11 +1022,14 @@ def check_construction_plan_consistency(construction_plan: dict) -> list[str]:
                 )
                 continue
             check_endpoint(key, end, other)
-        identical = _identical_ends(
-            key, from_end, to_end, rule.get("source_file"), nodes, unreadable
+        source_file = rule.get("source_file")
+        pair_problem = _identical_ends(
+            key, from_end, to_end, source_file, nodes, unreadable
+        ) or _off_key_same_file_ends(
+            key, from_end, to_end, source_file, nodes, unreadable, joined_columns
         )
-        if identical is not None:
-            problems.append(identical)
+        if pair_problem:
+            problems.append(pair_problem)
 
     # Declared property types. Three rules, all refusing at approval time rather
     # than failing much later at import time.
