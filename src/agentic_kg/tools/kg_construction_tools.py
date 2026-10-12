@@ -169,8 +169,9 @@ def _missing_typed_columns_error(typed_properties, header, source_file, loaded_i
 
     Shared by both loaders rather than written twice: a misspelled TYPED
     property would clear that property on every row of the file, so the wording
-    has to stay the same on both paths. (A misspelled UNTYPED property stays as
-    silent as it is today -- that asymmetry is deliberate.)
+    has to stay the same on both paths. (The build stays silent on a misspelled
+    UNTYPED property -- that asymmetry is deliberate; since KG-57 the propose
+    tools refuse one before it reaches a plan.)
     """
     missing_typed = [name for name in typed_properties if name not in header]
     if not missing_typed:

@@ -269,8 +269,9 @@ def _missing_columns_error(
 def check_columns_in_header(file_path: str, columns: List[str]) -> Optional[dict]:
     """A tool_error unless every column is exactly a header of the CSV, else None.
 
-    The propose tools' check that a key or join column is one the build will
-    find (KG-50). It reads the header once, never a data row, and never raises:
+    The propose tools' check that a key or join column, or a property, is one
+    the build will find (KG-50, KG-57). It reads the header once, never a data
+    row, and never raises:
     a missing source, a failed existence check, a refused encoding or an empty
     file each come back as an error result. A column asked for twice is checked
     and named once.

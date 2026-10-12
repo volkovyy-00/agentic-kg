@@ -8,6 +8,15 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.12.5] - 2026-10-12
+
+### Fixed
+- **A proposed property the file does not have is refused (#95, KG-57)**: the schema agent could propose a node
+  or relationship property that is not a column of its file, such as `soyl` for `soil`, and it was accepted,
+  approved and built while the graph silently lacked it. Proposing now refuses it, naming every missing name
+  together with any wrong key or join column, and lists the file's real columns. A property must match a column
+  exactly, in the same case and with no extra spaces.
+
 ## [0.12.4] - 2026-10-12
 
 ### Fixed

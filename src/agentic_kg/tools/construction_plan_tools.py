@@ -168,7 +168,7 @@ def propose_node_construction(
     - source_file: the approved file to propose a node construction for
     - label: the proposed label of the node
     - unique_column_name: the name of the column that will be used to uniquely identify constructed nodes
-    - properties: A list of property names for the node, derived from column names in the approved file
+    - properties: A list of property names for the node, each exactly a column name of the approved file
     - property_types: An optional map of property name to declared type, one of
       "integer", "float", "boolean", "date", "datetime" or "localdatetime". A
       property absent from this map is stored as text. "date" is a day
@@ -188,10 +188,11 @@ def propose_node_construction(
     as it is: choose another label. Proposing a node under a label another node
     already has still replaces that node.
 
-    The unique column must be exactly one of the approved file's header names,
-    letter for letter and in the same case. If it is not, the proposal is refused
-    and the error lists the file's headers: choose one of them rather than trying
-    another spelling.
+    The unique column, and every property, must each be exactly one of the
+    approved file's header names, letter for letter and in the same case. If any
+    is not, the proposal is refused and the error names each missing name and
+    lists the file's headers: choose from them rather than trying another
+    spelling.
 
     The unique column must have a value in every row. It may repeat across rows
     only if the rows sharing a value agree on every property you list for the node,
@@ -256,15 +257,20 @@ def propose_node_construction(
     if collision is not None:
         return tool_error(collision)
 
-    # Exact header match, as the build does (KG-50).
-    column_error = check_columns_in_header(approved_file, [unique_column_name])
+    # Exact header match, as the build does (KG-50), for the key and every
+    # property in one read (KG-57): the build skips a property the file lacks
+    # without a word. An unreadable list is left to approval, which refuses it.
+    properties = declared_properties(node_construction_rule)
+    column_error = check_columns_in_header(
+        approved_file, [unique_column_name, *(properties or [])]
+    )
     if column_error is not None:
         return column_error
 
     # Then the key's own values, and the properties of a repeating key (KG-48).
     # After the names and the header, so a bad name never costs a data read.
     key_summary, key_error = summarize_node_key(
-        approved_file, unique_column_name, declared_properties(node_construction_rule)
+        approved_file, unique_column_name, properties
     )
     if key_error is not None:
         return key_error
@@ -407,10 +413,12 @@ def propose_relationship_construction(
     choose another type. Proposing a relationship under a type another
     relationship already has still replaces that relationship.
 
-    Both join columns must be exactly header names of the approved file, letter
-    for letter and in the same case. If either is not, the proposal is refused and
-    the error names each missing column and lists the file's headers: choose from
-    that list rather than trying another spelling.
+    Both join columns, and every property, must be exactly header names of the
+    approved file, letter for letter and in the same case. If any is not, the
+    proposal is refused and the error names each missing column and lists the
+    file's headers: choose from that list rather than trying another spelling.
+    from_node_property and to_node_property name node properties, not columns of
+    this file, and are not checked against it.
 
     Args:
         approved_file: The approved file to propose a relationship construction for
@@ -496,9 +504,15 @@ def propose_relationship_construction(
     if collision is not None:
         return tool_error(collision)
 
-    # Exact header match, as the build does (KG-50), for both join columns at once.
+    # Exact header match, as the build does (KG-50), for both join columns and
+    # every property at once (KG-57): see propose_node_construction.
     column_error = check_columns_in_header(
-        approved_file, [from_node_column, to_node_column]
+        approved_file,
+        [
+            from_node_column,
+            to_node_column,
+            *(declared_properties(relationship_construction_rule) or []),
+        ],
     )
     if column_error is not None:
         return column_error
