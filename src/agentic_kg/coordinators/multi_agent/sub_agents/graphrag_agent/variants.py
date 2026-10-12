@@ -259,8 +259,8 @@ variants = {
            """
         + NUMERIC_CAST_GAP_CHECK
         + """
-           If 'uncast' is above 0, say how many values the cast leaves out and
-           show the examples. 'no' means do not cast, and 'unknown' is
+           If 'uncast' is above 0, say how many values the cast cannot read as
+           a number and show the examples. 'no' means do not cast, and 'unknown' is
            something to disclose, never a 'yes'. Without a cast '9' sorts after
            '30'. INTEGER and FLOAT properties need no cast; 'numeric_like' does
            not apply to them. DATE, DATE_TIME and LOCAL_DATE_TIME properties need

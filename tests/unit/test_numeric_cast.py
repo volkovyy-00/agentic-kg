@@ -34,10 +34,10 @@ def test_the_cast_and_the_gap_check_carry_no_brace():
         assert "}" not in text
 
 
-def test_the_gap_check_counts_non_blank_values_the_cast_nulls():
+def test_the_gap_check_counts_non_blank_values_that_are_not_a_finite_number():
     assert NUMERIC_CAST_GAP_CHECK == (
-        f"WHERE trim(v) <> '' AND {NUMERIC_CAST} IS NULL "
-        "RETURN count(*) AS uncast, collect(v)[..5] AS examples"
+        f"WHERE trim(v) <> '' AND NOT coalesce(abs({NUMERIC_CAST}) < toFloat('Infinity'), false) "
+        "RETURN count(*) AS uncast, collect(DISTINCT v)[..5] AS examples"
     )
 
 

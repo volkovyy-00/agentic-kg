@@ -167,6 +167,18 @@ def test_the_gap_check_finds_a_non_number_the_profile_did_not_list(
     assert rows[0]["examples"] == ["N/A"]
 
 
+def test_the_gap_check_counts_nan_and_infinity_and_lists_distinct_examples(neo4j_graph):
+    """toFloat reads 'NaN' and 'Infinity', which coerce refuses, and either one spoils a sum."""
+    values = ["42", "NaN", "Infinity", "N/A", "N/A", "N/A", "N/A", "N/A", "TBD", ""]
+    rows = _records(
+        neo4j_graph.send_query(
+            "UNWIND $values AS v WITH v " + NUMERIC_CAST_GAP_CHECK, {"values": values}
+        )
+    )
+    assert rows[0]["uncast"] == 8
+    assert sorted(rows[0]["examples"]) == ["Infinity", "N/A", "NaN", "TBD"]
+
+
 def test_the_cast_gives_coerces_number_for_every_value_coerce_converts(neo4j_graph):
     values = generated_values()
     rows = _records(

@@ -143,18 +143,22 @@ all convert, which is the only kind rule 6 sends the agent to cast.
   relies on it.
 
 Known exceptions, also in docs/spec.md: a value the profile did not list (a "partial" property) can be one
-coerce refuses, and NUMERIC_CAST_GAP_CHECK finds it only if it casts to null; non-ASCII decimal digits
+coerce refuses, and NUMERIC_CAST_GAP_CHECK finds it only if it casts to null, NaN or an infinity
+('N/A', 'NaN', 'Infinity'); non-ASCII decimal digits
 convert in Python and cast to null here; a value longer than 50 characters was judged on its first 50.
 """
 
 NUMERIC_CAST_GAP_CHECK = (
-    f"WHERE trim(v) <> '' AND {NUMERIC_CAST} IS NULL "
-    "RETURN count(*) AS uncast, collect(v)[..5] AS examples"
+    f"WHERE trim(v) <> '' AND NOT coalesce(abs({NUMERIC_CAST}) < toFloat('Infinity'), false) "
+    "RETURN count(*) AS uncast, collect(DISTINCT v)[..5] AS examples"
 )
 """The check rule 6 has the agent run on a "partial" property before relying on NUMERIC_CAST.
 
-Follows the agent's own MATCH ... WITH x.property AS v. Counts the values that are not blank but cast
-to null, and returns up to five. A value that is only a no-break space is counted, because trim() leaves
+Follows the agent's own MATCH ... WITH x.property AS v. Counts the values that are not blank but do not
+cast to a finite number, and returns up to five different ones. That is null ('N/A') and also what
+toFloat reads although coerce refuses it: 'NaN' and 'Infinity', either of which turns a sum or a max
+into NaN or Infinity. The comparison with Infinity is false for NaN and for both infinities, and null for
+null, which coalesce turns into a count. A value that is only a no-break space is counted, because trim() leaves
 it; that false positive is harmless, since the agent looks and reports it. A value that casts to a wrong
 number ('1,23') is not found; see NUMERIC_CAST.
 """

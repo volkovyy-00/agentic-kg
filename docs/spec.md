@@ -199,7 +199,7 @@ The profile is itself budgeted to 25 entities and 25 patterns, and what is cut i
 `numeric_like` uses the loader's own rule (`value_types.coerce`, blanks ignored) over the values the profile
 lists — at most ten distinct values, each cut to 50 characters. Prompt rule 6 gives one generated cast,
 `NUMERIC_CAST`, for both numeric states, and on a `partial` property has the agent first count the values that
-cast would leave out. Because `numeric_like` also sets `partitioned_by`'s `values_are`, a relationship
+cast cannot read as a number. Because `numeric_like` also sets `partitioned_by`'s `values_are`, a relationship
 property holding signed or bracketed amounts, or a blank cell, now reads as numbers, so the agent declares a
 partition interpretation before an aggregating query, the gap check included (`'none'` clears it).
 
@@ -299,8 +299,8 @@ bundled furniture example must keep working throughout.
   to nine fractional digits, and `Z` or `±HH:MM` up to 18:00 for `datetime` only); any other value is counted
   and cleared. §4's `numeric_like` annotation therefore still matters for undeclared columns. It uses the loader's rule, with
   three known exceptions: on a `partial` property a value the profile did not list can be one the loader refuses,
-  and rule 6's gap check finds it only if it casts to null (`1,23` casts to 123); non-ASCII decimal digits
-  (`٤٢`, `４２`, `४२`) convert in Python and cast to null in Neo4j, silently on a `complete` property; and a value
+  and rule 6's gap check finds it only if it casts to null, NaN or an infinity (`1,23` casts to 123);
+  non-ASCII decimal digits (`٤٢`, `４２`, `४२`) convert in Python and cast to null in Neo4j, silently on a `complete` property; and a value
   longer than 50 characters is judged on its first 50.
 - Model configuration drifts from documentation: the models named in `CHANGELOG.md` 0.4.0
   exist only in an untracked `.env`. A fresh clone runs on the `gpt-4o`/`gpt-4o-mini` defaults in
