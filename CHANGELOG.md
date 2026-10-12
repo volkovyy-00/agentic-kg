@@ -8,6 +8,18 @@ Since 0.7.0 every changelog-worthy PR is its own release: it adds its own dated 
 each entry cites the PR and, where there is one, the Jira ticket (`KG-NN`, in Jira project KG).
 There is no `[Unreleased]` section.
 
+## [0.12.4] - 2026-10-12
+
+### Fixed
+- **A plan can no longer find a file's own node by a column many nodes share (#94, KG-60)**: approval accepted a
+  relationship that reads the file a node is built from but finds that node by another of its properties
+  instead of its key. Each row then linked to every node sharing the value: on the traders example,
+  `HANDLED_BY` found the Order by `employeeID` in `orders.csv` and matched 88,912 times from 830 rows. Approval
+  and the schema agent's own review now refuse such an end, even on a property that is unique in the data,
+  and say how to fix it: read the key's column, or, where no other relationship relies on the current key, key
+  the node by that property. A relationship read from a different file may still match a shared property. Two
+  spellings of one file, such as `./orders.csv` and `orders.csv`, count as the same file.
+
 ## [0.12.3] - 2026-10-11
 
 ### Fixed

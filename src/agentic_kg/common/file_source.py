@@ -12,6 +12,7 @@ place that knows the difference.
 
 import codecs
 import logging
+import posixpath
 from itertools import chain
 from pathlib import Path, PureWindowsPath
 from typing import Any, BinaryIO, NamedTuple, Optional, Tuple, cast
@@ -124,6 +125,29 @@ def _checked_relative(relative_path: str) -> str:
     # version would make a file that list_source_files() just reported
     # unopenable.
     return relative_path
+
+
+def comparable_source_name(relative_path: str) -> str:
+    """The name as posixpath.normpath tidies it, for comparing two names.
+
+    Plans store a file name exactly as the model typed it (_checked_relative
+    deliberately returns it unchanged), so "orders.csv" and "./orders.csv" can
+    both name one file in one plan. A check asking whether two rules read the
+    same file must compare this form, or a second spelling slips past it.
+
+    normpath drops "./" segments, doubled slashes and a trailing "/", and folds
+    "..", only for the comparison -- the plan keeps the name as typed. Folding
+    ".." cannot pair two real files, because a name with ".." never reaches one
+    (_checked_relative refuses it). Case and backslashes are kept: on a POSIX
+    source both are part of a name, so tidying them could make two different
+    files compare as one.
+
+    Pure string work, no filesystem: the plan checks that call this are
+    structural and must not need SOURCE_URI. Reachability's membership test
+    against the approved list still compares names as typed; suggest_files
+    (file_tools.py) strips a leading "./" for the same reason as this.
+    """
+    return posixpath.normpath(relative_path)
 
 
 def _full_path(root: str, relative_path: str) -> str:
