@@ -168,7 +168,7 @@ def propose_node_construction(
     - source_file: the approved file to propose a node construction for
     - label: the proposed label of the node
     - unique_column_name: the name of the column that will be used to uniquely identify constructed nodes
-    - properties: A list of property names for the node, derived from column names in the approved file
+    - properties: A list of property names for the node, each exactly a column name of the approved file
     - property_types: An optional map of property name to declared type, one of
       "integer", "float", "boolean", "date", "datetime" or "localdatetime". A
       property absent from this map is stored as text. "date" is a day
