@@ -20,7 +20,7 @@ dependencies = [
     # -> `reasoning_content` in the streaming Delta and requires openai>=2.8.0,
     # which understands GPT-5's reasoning stream events (old openai 1.54 parsed
     # them as unknown chunks, so CustomStreamWrapper never terminated -> hang).
-    "litellm>=1.83.9,<1.85",
+    "litellm>=1.83.9,<1.101",
     # Within our litellm window (>=1.83.9,<1.85): 1.83.x requires openai==2.24.0
     # exactly; 1.84.x requires >=2.20.0,<3. The >=2.24 floor is ours and fits both.
     "openai>=2.24,<3",
